@@ -154,29 +154,20 @@ def init():
             click.echo(f"  {repo}: cloning bare mirror...")
             ensure_repo(repo)
 
-    # Install launchd jobs on macOS
-    if platform.system() == "Darwin":
-        _install_launchd_jobs()
+    # Offer to install automation
+    from .automation import is_automation_installed, install_automation
+    status = is_automation_installed()
+    if not any(status.values()):
+        if click.confirm("Install automation (hourly git update, weekly image refresh)?",
+                         default=True):
+            installed = install_automation()
+            for item in installed:
+                click.echo(f"  Installed: {item}")
+    else:
+        click.echo("  Automation already installed.")
 
     click.echo()
     click.echo("Setup complete! Try: bubble new batteries --pr 1234")
-
-
-def _install_launchd_jobs():
-    """Install launchd plists for automated git update and image refresh."""
-    plist_dir = Path(__file__).parent.parent / "config"
-    launch_agents = Path.home() / "Library" / "LaunchAgents"
-    launch_agents.mkdir(parents=True, exist_ok=True)
-
-    for plist_name in ["com.lean-bubbles.git-update.plist",
-                       "com.lean-bubbles.image-refresh.plist"]:
-        src = plist_dir / plist_name
-        dst = launch_agents / plist_name
-        if src.exists() and not dst.exists():
-            shutil.copy2(src, dst)
-            subprocess.run(["launchctl", "load", str(dst)],
-                           capture_output=True)
-            click.echo(f"  Installed launchd job: {plist_name}")
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +699,54 @@ def network_remove(name):
     from .network import remove_allowlist
     remove_allowlist(runtime, name)
     click.echo(f"Network restrictions removed from '{name}'.")
+
+
+# ---------------------------------------------------------------------------
+# automation
+# ---------------------------------------------------------------------------
+
+@main.group("automation")
+def automation_group():
+    """Manage automated tasks (git update, image refresh)."""
+
+
+@automation_group.command("install")
+def automation_install():
+    """Install automation jobs (launchd on macOS, systemd on Linux)."""
+    from .automation import install_automation
+    installed = install_automation()
+    if installed:
+        for item in installed:
+            click.echo(f"  Installed: {item}")
+        click.echo("Automation installed.")
+    else:
+        click.echo("No automation installed (unsupported platform?).", err=True)
+
+
+@automation_group.command("remove")
+def automation_remove():
+    """Remove all automation jobs."""
+    from .automation import remove_automation
+    removed = remove_automation()
+    if removed:
+        for item in removed:
+            click.echo(f"  Removed: {item}")
+        click.echo("Automation removed.")
+    else:
+        click.echo("No automation jobs found to remove.")
+
+
+@automation_group.command("status")
+def automation_status():
+    """Show automation status."""
+    from .automation import is_automation_installed
+    status = is_automation_installed()
+    if not status:
+        click.echo("Automation not supported on this platform.")
+        return
+    for job, installed in status.items():
+        state = "installed" if installed else "not installed"
+        click.echo(f"  {job}: {state}")
 
 
 # ---------------------------------------------------------------------------
