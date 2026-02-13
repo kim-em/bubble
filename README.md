@@ -121,6 +121,11 @@ You can also use any `org/repo` directly: `bubble new leanprover-community/quote
 
 Config lives at `~/.lean-bubbles/config.toml`. Created automatically on `bubble init`.
 
+Set `LEAN_BUBBLES_DIR` to override the data directory (default: `~/.lean-bubbles`):
+```bash
+export LEAN_BUBBLES_DIR=/data/lean-bubbles
+```
+
 ```toml
 [runtime]
 backend = "incus"
