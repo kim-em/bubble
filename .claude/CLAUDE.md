@@ -12,7 +12,7 @@ This file helps Claude Code sessions understand the bubble codebase.
 bubble/
 ├── cli.py              # Click CLI with BubbleGroup (routes unknown args to `open` command)
 ├── config.py           # TOML config at ~/.bubble/config.toml
-├── target.py           # GitHub URL/shorthand parsing → Target dataclass
+├── target.py           # Target parsing: GitHub URLs, local paths, bare PR numbers
 ├── repo_registry.py    # Learned short name → owner/repo mappings (~/.bubble/repos.json)
 ├── naming.py           # Container name generation: <repo>-<source>-<id>
 ├── git_store.py        # Shared bare repo management at ~/.bubble/git/
@@ -37,7 +37,14 @@ bubble/
 ## Key Design Decisions
 
 ### URL-First Interface
-The primary command is `bubble <target>`. A custom `BubbleGroup(click.Group)` routes any unknown first argument to the implicit `open` command. Targets are parsed by `target.py` into a `Target(owner, repo, kind, ref)` dataclass. Short names are resolved via `RepoRegistry`, which learns mappings automatically on first use.
+The primary command is `bubble <target>`. A custom `BubbleGroup(click.Group)` routes any unknown first argument to the implicit `open` command. Targets are parsed by `target.py` into a `Target(owner, repo, kind, ref, local_path)` dataclass. Supported target forms:
+- GitHub URLs: `https://github.com/owner/repo/pull/123`
+- Shorthand: `owner/repo`, `mathlib4/pull/123`, `mathlib4`
+- Local paths: `.`, `./path`, `/absolute/path` (extracts owner/repo from git remote)
+- Bare PR numbers: `123` (uses current directory's repo)
+- `--path` flag for disambiguation: `bubble --path mydir`
+
+Short names are resolved via `RepoRegistry`, which learns mappings automatically on first use. Local paths use the local `.git` as the `--reference` source for fast cloning, and support unpushed branches by fetching refs from the mounted local repo.
 
 ### Language Hooks
 The `hooks/` package provides a pluggable system for language-specific behavior. Each `Hook` subclass implements `detect()` (check bare repo for language markers), `image_name()`, `post_clone()`, `vscode_extensions()`, and `network_domains()`. Hook detection runs against the host bare repo via `git show <ref>:<file>` — no container needed.

@@ -1,7 +1,9 @@
 """GitHub URL and target string parsing."""
 
 import re
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 from .repo_registry import RepoRegistry
 
@@ -19,6 +21,7 @@ class Target:
     kind: str  # "pr" | "branch" | "commit" | "repo"
     ref: str  # PR number, branch name, commit SHA, or ""
     original: str  # raw input string
+    local_path: str = ""  # set when target came from a local filesystem path
 
     @property
     def org_repo(self) -> str:
@@ -29,21 +32,136 @@ class Target:
         return self.repo.lower()
 
 
+def _parse_github_remote(url: str) -> tuple[str, str]:
+    """Extract (owner, repo) from a GitHub remote URL.
+
+    Handles:
+      https://github.com/owner/repo.git
+      https://github.com/owner/repo
+      git@github.com:owner/repo.git
+      git@github.com:owner/repo
+    """
+    # SSH format: git@github.com:owner/repo.git
+    m = re.match(r"git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group(1), m.group(2)
+
+    # HTTPS format: https://github.com/owner/repo.git
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group(1), m.group(2)
+
+    raise TargetParseError(
+        f"Remote URL is not a GitHub repository: {url}"
+    )
+
+
+def _git_repo_info(path: str) -> tuple[str, str, str]:
+    """Extract (owner, repo, repo_root) from a local git checkout.
+
+    Raises TargetParseError if not a git repo or no GitHub remote.
+    """
+    abs_path = str(Path(path).resolve())
+
+    # Check it's a git repo and find root
+    try:
+        result = subprocess.run(
+            ["git", "-C", abs_path, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        )
+        repo_root = result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        raise TargetParseError(f"{abs_path} is not a git repository.")
+
+    # Get remote URL
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_root, "remote", "get-url", "origin"],
+            capture_output=True, text=True, check=True,
+        )
+        remote_url = result.stdout.strip()
+    except subprocess.CalledProcessError:
+        raise TargetParseError(
+            "No remote 'origin' found. bubble needs a GitHub remote to clone from."
+        )
+
+    if not remote_url:
+        raise TargetParseError(
+            "No remote 'origin' found. bubble needs a GitHub remote to clone from."
+        )
+
+    owner, repo = _parse_github_remote(remote_url)
+    return owner, repo, repo_root
+
+
+def _parse_local_path(raw: str) -> Target:
+    """Parse a local filesystem path into a Target.
+
+    Verifies the path is a git repo with a GitHub remote, checks for
+    clean working tree and a checked-out branch. The branch does NOT
+    need to be pushed — local objects are shared via --reference.
+    """
+    path = Path(raw).resolve()
+    if not path.exists():
+        raise TargetParseError(f"Path does not exist: {raw}")
+
+    owner, repo, repo_root = _git_repo_info(str(path))
+
+    # Get current branch
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_root, "symbolic-ref", "--short", "HEAD"],
+            capture_output=True, text=True, check=True,
+        )
+        branch = result.stdout.strip()
+    except subprocess.CalledProcessError:
+        raise TargetParseError(
+            "HEAD is detached. Check out a branch first."
+        )
+
+    if not branch:
+        raise TargetParseError(
+            "HEAD is detached. Check out a branch first."
+        )
+
+    # Check for dirty working tree
+    result = subprocess.run(
+        ["git", "-C", repo_root, "status", "--porcelain"],
+        capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        raise TargetParseError(
+            "Working tree has uncommitted changes. Commit or stash them first."
+        )
+
+    return Target(
+        owner=owner, repo=repo, kind="branch", ref=branch,
+        original=raw, local_path=repo_root,
+    )
+
+
 def parse_target(raw: str, registry: RepoRegistry) -> Target:
     """Parse a target string into a Target.
 
     Handles these forms:
+      .                            (current directory)
+      ./path  ../path  /path       (local filesystem path)
+      123                          (PR number in current repo)
       https://github.com/owner/repo/pull/123
       github.com/owner/repo/pull/123
       owner/repo/pull/123
       owner/repo/tree/branch-name
       owner/repo/commit/abc123
       owner/repo
-      short_name/pull/123      (uses registry)
-      short_name               (uses registry)
+      short_name/pull/123          (uses registry)
+      short_name                   (uses registry)
     """
     s = raw.strip()
     original = s
+
+    # Local filesystem paths: start with . or /
+    if s.startswith(("/", ".", "..")):
+        return _parse_local_path(s)
 
     # Strip URL scheme
     s = re.sub(r"^https?://", "", s)
@@ -56,6 +174,19 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
 
     if not s:
         raise TargetParseError(f"Empty target: {raw!r}")
+
+    # Bare number: PR in current directory's repo
+    if s.isdigit():
+        try:
+            owner, repo, _ = _git_repo_info(".")
+            return Target(
+                owner=owner, repo=repo, kind="pr", ref=s, original=original,
+            )
+        except TargetParseError:
+            raise TargetParseError(
+                f"'{s}' looks like a PR number, but the current directory "
+                f"is not a git repository with a GitHub remote."
+            )
 
     parts = s.split("/")
 
@@ -139,9 +270,11 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
                 f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?"
             )
         raise TargetParseError(
-            f"Unknown repo '{short}'. Use the full owner/repo form first."
+            f"Unknown repo '{short}'. Use the full owner/repo form first. "
+            f"If this is a local path, use ./{short} or --path."
         )
 
     raise TargetParseError(
-        f"Cannot parse target: {raw!r}. Use a GitHub URL or owner/repo format."
+        f"Cannot parse target: {raw!r}. Use a GitHub URL or owner/repo format. "
+        f"For a local path, use ./{raw} or --path."
     )

@@ -29,6 +29,13 @@ bubble leanprover-community/mathlib4/commit/abc123
 # Default branch
 bubble leanprover-community/mathlib4
 
+# From a local git repo — opens the current branch in a bubble
+bubble .
+bubble ./path/to/repo
+
+# PR number shorthand (when in a cloned repo)
+bubble 123                   # opens PR #123 for the current repo
+
 # List your bubbles
 bubble list
 

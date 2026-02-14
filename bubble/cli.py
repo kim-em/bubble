@@ -403,8 +403,13 @@ def main():
 @click.option("--no-interactive", is_flag=True, help="Just create, don't attach")
 @click.option("--network/--no-network", default=True, help="Apply network allowlist")
 @click.option("--name", "custom_name", type=str, help="Custom container name")
-def open_cmd(target, ssh, no_interactive, network, custom_name):
-    """Open a bubble for a GitHub target (URL, org/repo, or shorthand)."""
+@click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
+def open_cmd(target, ssh, no_interactive, network, custom_name, force_path):
+    """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
+    # If --path flag, ensure target is treated as a local path
+    if force_path and not target.startswith(("/", ".", "..")):
+        target = "./" + target
+
     config = load_config()
     runtime = get_runtime(config)
 
@@ -445,19 +450,26 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
         _reattach(runtime, existing, ssh, no_interactive)
         return
 
-    # Step 5: Ensure dirs and bare repo
+    # Step 5: Ensure dirs and bare repo (or use local .git for local targets)
     ensure_dirs()
 
-    bare_path = ensure_repo(t.org_repo)
+    if t.local_path:
+        # Local target: use the local .git as reference source
+        local_git = Path(t.local_path) / ".git"
+        ref_path = local_git
+        ref_mount_name = f"{repo_short_name(t.org_repo)}.git"
+    else:
+        bare_path = ensure_repo(t.org_repo)
+        ref_path = bare_path
 
-    # Step 6: Fetch specific ref if needed
-    if t.kind == "pr":
-        click.echo(f"Fetching PR #{t.ref}...")
-        try:
-            fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
-        except Exception:
-            # May already be available from a full fetch
-            pass
+        # Step 6: Fetch specific ref if needed
+        if t.kind == "pr":
+            click.echo(f"Fetching PR #{t.ref}...")
+            try:
+                fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
+            except Exception:
+                # May already be available from a full fetch
+                pass
 
     # Step 7: Hook detection
     if t.kind == "pr":
@@ -469,7 +481,7 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
     else:
         hook_ref = "HEAD"
 
-    hook = select_hook(bare_path, hook_ref)
+    hook = select_hook(ref_path, hook_ref)
     if hook:
         click.echo(f"  Detected: {hook.name()}")
         image_name = hook.image_name()
@@ -505,14 +517,21 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
         except Exception:
             time.sleep(1)
 
-    # Mount bare repo
-    if bare_path.exists():
+    # Mount reference repo (bare mirror or local .git)
+    short = repo_short_name(t.org_repo)
+    if t.local_path:
+        mount_name = ref_mount_name
+        mount_source = str(ref_path)
+    else:
+        mount_name = ref_path.name
+        mount_source = str(ref_path)
+
+    if Path(mount_source).exists():
         runtime.add_disk(
-            name, "shared-git", str(bare_path), f"/shared/git/{bare_path.name}", readonly=True
+            name, "shared-git", mount_source, f"/shared/git/{mount_name}", readonly=True
         )
 
     # Clone repo inside container
-    short = repo_short_name(t.org_repo)
     url = github_url(t.org_repo)
     click.echo(f"Cloning {t.org_repo} (using shared objects)...")
     runtime.exec(
@@ -522,7 +541,7 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
             "-",
             "user",
             "-c",
-            f"git clone --reference /shared/git/{bare_path.name} {url} /home/user/{short}",
+            f"git clone --reference /shared/git/{mount_name} {url} /home/user/{short}",
         ],
     )
 
@@ -547,16 +566,33 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
         click.echo(f"Checking out branch '{t.ref}'...")
         checkout_branch = t.ref
         q_branch = shlex.quote(t.ref)
-        runtime.exec(
-            name,
-            [
-                "su",
-                "-",
-                "user",
-                "-c",
-                f"cd /home/user/{short} && git checkout {q_branch}",
-            ],
-        )
+        try:
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "user",
+                    "-c",
+                    f"cd /home/user/{short} && git checkout {q_branch}",
+                ],
+            )
+        except RuntimeError:
+            if t.local_path:
+                # Branch not on remote — fetch it from the mounted local repo
+                runtime.exec(
+                    name,
+                    [
+                        "su",
+                        "-",
+                        "user",
+                        "-c",
+                        f"cd /home/user/{short} && git fetch /shared/git/{mount_name}"
+                        f" {q_branch}:{q_branch} && git checkout {q_branch}",
+                    ],
+                )
+            else:
+                raise
     elif t.kind == "commit":
         click.echo(f"Checking out commit {t.ref[:12]}...")
         q_commit = shlex.quote(t.ref)
