@@ -25,7 +25,7 @@ class LeanHook(Hook):
             return False
 
     def image_name(self) -> str:
-        return "bubble-lean"
+        return "lean"
 
     def vscode_extensions(self) -> list[str]:
         return ["leanprover.lean4"]

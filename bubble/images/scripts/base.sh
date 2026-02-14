@@ -31,4 +31,4 @@ chown user:user /shared/git
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
-echo "bubble-base setup complete."
+echo "Base image setup complete."

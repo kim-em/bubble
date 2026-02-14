@@ -26,7 +26,7 @@ class Hook(ABC):
 
     @abstractmethod
     def image_name(self) -> str:
-        """Return the base image name to use, e.g. 'bubble-lean'."""
+        """Return the base image name to use, e.g. 'lean'."""
 
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
         """Optional: run after the repo is cloned inside the container."""

@@ -97,6 +97,18 @@ def _install_incus_debian():
     subprocess.run(["sudo", "apt-get", "update"], check=True)
     subprocess.run(["sudo", "apt-get", "install", "-y", "incus"], check=True)
 
+    _post_install_incus()
+
+
+def _install_incus_snap():
+    """Install Incus via snap."""
+    click.echo("Installing Incus via snap...")
+    subprocess.run(["sudo", "snap", "install", "incus", "--channel=latest/stable"], check=True)
+    _post_install_incus()
+
+
+def _post_install_incus():
+    """Common post-install steps for Incus on Linux."""
     # Initialize with minimal defaults
     click.echo("Initializing Incus...")
     subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
@@ -157,19 +169,40 @@ def _ensure_dependencies():
                 click.echo()
                 click.echo("  Then run: sudo nixos-rebuild switch")
                 sys.exit(1)
-            elif _is_debian_based():
+            else:
                 click.echo("Incus is required but not installed.")
-                if click.confirm(
-                    "  Install via the Zabbly repository? (requires sudo)", default=True
-                ):
-                    _install_incus_debian()
+                has_snap = _is_command_available("snap")
+                has_apt = _is_debian_based()
+
+                if has_apt and has_snap:
+                    choice = click.prompt(
+                        "  Install via [1] Zabbly apt repository or [2] snap?",
+                        type=click.Choice(["1", "2"]),
+                        default="1",
+                    )
+                    if choice == "1":
+                        _install_incus_debian()
+                    else:
+                        _install_incus_snap()
+                elif has_apt:
+                    if click.confirm(
+                        "  Install via the Zabbly repository? (requires sudo)", default=True
+                    ):
+                        _install_incus_debian()
+                    else:
+                        click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
+                        sys.exit(1)
+                elif has_snap:
+                    if click.confirm(
+                        "  Install via snap? (requires sudo)", default=True
+                    ):
+                        _install_incus_snap()
+                    else:
+                        click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
+                        sys.exit(1)
                 else:
                     click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
                     sys.exit(1)
-            else:
-                click.echo("Incus is required but not installed.")
-                click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
-                sys.exit(1)
 
 
 def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
@@ -441,7 +474,7 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
         click.echo(f"  Detected: {hook.name()}")
         image_name = hook.image_name()
     else:
-        image_name = "bubble-base"
+        image_name = "base"
 
     # Step 8: Ensure image exists
     if not runtime.image_exists(image_name):
@@ -696,7 +729,7 @@ def images_list():
         )
         images = json.loads(output.stdout)
         if not images:
-            click.echo("No images. Run: bubble images build bubble-base")
+            click.echo("No images. Run: bubble images build base")
             return
         click.echo(f"{'ALIAS':<25} {'SIZE':<12} {'CREATED':<20}")
         click.echo("-" * 57)
@@ -710,9 +743,9 @@ def images_list():
 
 
 @images_group.command("build")
-@click.argument("image_name", default="bubble-base")
+@click.argument("image_name", default="base")
 def images_build(image_name):
-    """Build a base image (bubble-base, bubble-lean)."""
+    """Build an image (base, lean)."""
     config = load_config()
     runtime = get_runtime(config)
 

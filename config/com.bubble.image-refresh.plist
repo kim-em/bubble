@@ -10,7 +10,7 @@
         <string>-c</string>
         <string>
             if command -v bubble &amp;&gt; /dev/null; then
-                bubble images build bubble-base 2&gt;&amp;1 | logger -t bubble-images
+                bubble images build base 2&gt;&amp;1 | logger -t bubble-images
             fi
         </string>
     </array>

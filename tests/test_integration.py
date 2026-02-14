@@ -2,7 +2,7 @@
 
 These tests require:
 - Incus installed and available
-- bubble-base image built (run: bubble images build bubble-base)
+- base image built (run: bubble images build base)
 
 Mark: @pytest.mark.integration
 Skip locally with: pytest -m "not integration"
@@ -33,17 +33,17 @@ def runtime():
 
 
 @pytest.fixture(scope="session")
-def _check_bubble_base(runtime):
-    """Skip all integration tests if bubble-base image isn't built."""
-    if not runtime.image_exists("bubble-base"):
-        pytest.skip("bubble-base image not built")
+def _check_base_image(runtime):
+    """Skip all integration tests if base image isn't built."""
+    if not runtime.image_exists("base"):
+        pytest.skip("base image not built")
 
 
 @pytest.fixture
-def container(runtime, _check_bubble_base):
-    """Launch a fresh container from bubble-base, delete on teardown."""
+def container(runtime, _check_base_image):
+    """Launch a fresh container from base, delete on teardown."""
     name = f"ci-test-{uuid.uuid4().hex[:8]}"
-    runtime.launch(name, "bubble-base")
+    runtime.launch(name, "base")
     # Wait for container to be ready
     for _ in range(15):
         try:
@@ -272,11 +272,11 @@ class TestSSHConfiguration:
 
 
 class TestContainerLifecycle:
-    def test_launch_exec_delete(self, runtime, _check_bubble_base):
+    def test_launch_exec_delete(self, runtime, _check_base_image):
         """Can launch a container, execute commands, and delete it."""
         name = f"ci-test-lifecycle-{uuid.uuid4().hex[:8]}"
         try:
-            runtime.launch(name, "bubble-base")
+            runtime.launch(name, "base")
             output = runtime.exec(name, ["echo", "hello"])
             assert "hello" in output
         finally:

@@ -25,7 +25,7 @@ def register_bubble(
     branch: str = "",
     commit: str = "",
     pr: int = 0,
-    base_image: str = "bubble-base",
+    base_image: str = "base",
 ):
     """Record a bubble's creation in the registry."""
     registry = _load_registry()

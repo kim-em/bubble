@@ -57,7 +57,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 **Shared git objects**: A bare mirror of each repo is maintained on the host. Containers clone via `git --reference`, sharing the immutable object store. This means creating a new bubble for a mathlib PR downloads only the few new commits, not the entire 1.5GB repo.
 
-**Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the `bubble-lean` image comes pre-loaded with recent stable and RC toolchains.
+**Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the `lean` image comes pre-loaded with recent stable and RC toolchains.
 
 **Network allowlisting**: Containers can only reach allowed domains (GitHub by default, plus language-specific domains like `releases.lean-lang.org` for Lean). IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked. Configurable in `~/.bubble/config.toml`.
 
@@ -84,10 +84,10 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 | Image | Contents |
 |-------|----------|
-| `bubble-base` | Ubuntu 24.04, git, openssh-server, build-essential |
-| `bubble-lean` | bubble-base + elan + latest stable/RC toolchains |
+| `base` | Ubuntu 24.04, git, openssh-server, build-essential |
+| `lean` | base + elan + latest stable/RC toolchains |
 
-Build images with `bubble images build bubble-base` or `bubble images build bubble-lean`.
+Build images with `bubble images build base` or `bubble images build lean`.
 
 ## Configuration
 

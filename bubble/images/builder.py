@@ -10,8 +10,8 @@ SCRIPTS_DIR = Path(__file__).parent / "scripts"
 # Image hierarchy: name -> {"script": "...", "parent": "..."}
 # Parent can be another image name (built recursively) or an Incus remote image.
 IMAGES = {
-    "bubble-base": {"script": "base.sh", "parent": "images:ubuntu/24.04"},
-    "bubble-lean": {"script": "lean.sh", "parent": "bubble-base"},
+    "base": {"script": "base.sh", "parent": "images:ubuntu/24.04"},
+    "lean": {"script": "lean.sh", "parent": "base"},
 }
 
 

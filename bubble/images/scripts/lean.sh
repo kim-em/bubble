@@ -61,4 +61,4 @@ done
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
-echo "bubble-lean setup complete."
+echo "Lean image setup complete."

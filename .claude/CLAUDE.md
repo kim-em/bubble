@@ -22,7 +22,7 @@ bubble/
 ├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
 ├── hooks/
 │   ├── __init__.py     # Hook ABC, discover_hooks(), select_hook()
-│   └── lean.py         # LeanHook: detects lean-toolchain, uses bubble-lean image
+│   └── lean.py         # LeanHook: detects lean-toolchain, uses lean image
 ├── runtime/
 │   ├── base.py         # Abstract ContainerRuntime interface
 │   ├── incus.py        # IncusRuntime: shells out to `incus` CLI
@@ -31,7 +31,7 @@ bubble/
 │   ├── builder.py      # Image build via IMAGES registry dict (recursive parent building)
 │   └── scripts/
 │       ├── base.sh     # Ubuntu 24.04 + git + ssh + build-essential (user: "user")
-│       └── lean.sh     # elan + latest stable/RC toolchains (derives from bubble-base)
+│       └── lean.sh     # elan + latest stable/RC toolchains (derives from base)
 ```
 
 ## Key Design Decisions
@@ -49,7 +49,7 @@ The `hooks/` package provides a pluggable system for language-specific behavior.
 The core performance optimization. Host maintains bare mirror repos (`git clone --bare`). Containers clone with `git clone --reference /shared/git/repo.git url` — git alternates share immutable objects. Each container has fully independent refs/branches/working tree. `update_all_repos()` discovers repos from the `~/.bubble/git/*.git` directory listing.
 
 ### Image Registry
-Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. Currently: `bubble-base` (from Ubuntu 24.04) and `bubble-lean` (from bubble-base).
+Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. Currently: `base` (from Ubuntu 24.04) and `lean` (from base).
 
 ### Colima on macOS
 Incus requires Linux. On macOS, Colima runs a lightweight Linux VM with Apple's Virtualization.Framework (`--vm-type vz`). The `ensure_colima()` function starts it if needed.

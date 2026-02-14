@@ -14,7 +14,7 @@ class MockRuntime(ContainerRuntime):
         self.calls = []
         self.exec_responses: dict[str, str] = {}
         self._containers: dict[str, ContainerInfo] = {}
-        self._images: set[str] = {"bubble-base"}
+        self._images: set[str] = {"base"}
 
     def is_available(self) -> bool:
         self.calls.append(("is_available",))
@@ -138,11 +138,11 @@ def _incus_is_available() -> bool:
         return False
 
 
-def _bubble_base_image_exists() -> bool:
-    """Check if the bubble-base image exists."""
+def _base_image_exists() -> bool:
+    """Check if the base image exists."""
     try:
         result = subprocess.run(
-            ["incus", "image", "show", "bubble-base"],
+            ["incus", "image", "show", "base"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -157,7 +157,7 @@ requires_incus = pytest.mark.skipif(
     not _incus_is_available(),
     reason="Incus not available",
 )
-requires_bubble_base = pytest.mark.skipif(
-    not _incus_is_available() or not _bubble_base_image_exists(),
-    reason="Incus not available or bubble-base image not built",
+requires_base_image = pytest.mark.skipif(
+    not _incus_is_available() or not _base_image_exists(),
+    reason="Incus not available or base image not built",
 )

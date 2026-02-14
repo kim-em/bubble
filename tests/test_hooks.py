@@ -78,7 +78,7 @@ class TestLeanHook:
 
     def test_image_name(self):
         hook = LeanHook()
-        assert hook.image_name() == "bubble-lean"
+        assert hook.image_name() == "lean"
 
     def test_vscode_extensions(self):
         hook = LeanHook()
