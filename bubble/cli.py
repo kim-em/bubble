@@ -38,6 +38,84 @@ def _is_command_available(cmd: str) -> bool:
         return False
 
 
+def _is_nixos() -> bool:
+    """Check if we're running on NixOS."""
+    return Path("/etc/nixos").is_dir() or Path("/etc/NIXOS").exists()
+
+
+def _is_debian_based() -> bool:
+    """Check if we're on a Debian/Ubuntu system with apt."""
+    return _is_command_available("apt-get") and Path("/etc/os-release").exists()
+
+
+def _install_incus_debian():
+    """Install Incus on Debian/Ubuntu via the Zabbly repository."""
+    click.echo("Installing Incus from the Zabbly repository...")
+
+    # Add GPG key
+    subprocess.run(
+        ["sudo", "mkdir", "-p", "/etc/apt/keyrings/"],
+        check=True,
+    )
+    key_data = subprocess.run(
+        ["curl", "-fsSL", "https://pkgs.zabbly.com/key.asc"],
+        capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["sudo", "tee", "/etc/apt/keyrings/zabbly.asc"],
+        input=key_data.stdout, capture_output=True, check=True,
+    )
+
+    # Determine codename and architecture
+    os_release = {}
+    for line in Path("/etc/os-release").read_text().splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            os_release[k] = v.strip('"')
+    codename = os_release.get("VERSION_CODENAME", "jammy")
+    arch = subprocess.run(
+        ["dpkg", "--print-architecture"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    # Add repository
+    sources_content = (
+        f"Enabled: yes\n"
+        f"Types: deb\n"
+        f"URIs: https://pkgs.zabbly.com/incus/stable\n"
+        f"Suites: {codename}\n"
+        f"Components: main\n"
+        f"Architectures: {arch}\n"
+        f"Signed-By: /etc/apt/keyrings/zabbly.asc\n"
+    )
+    subprocess.run(
+        ["sudo", "tee", "/etc/apt/sources.list.d/zabbly-incus-stable.sources"],
+        input=sources_content.encode(), capture_output=True, check=True,
+    )
+
+    # Install
+    subprocess.run(["sudo", "apt-get", "update"], check=True)
+    subprocess.run(["sudo", "apt-get", "install", "-y", "incus"], check=True)
+
+    # Initialize with minimal defaults
+    click.echo("Initializing Incus...")
+    subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
+
+    # Add current user to incus-admin group
+    import getpass
+
+    username = getpass.getuser()
+    click.echo(f"Adding {username} to the incus-admin group...")
+    subprocess.run(["sudo", "usermod", "-aG", "incus-admin", username], check=True)
+
+    click.echo()
+    click.echo("Incus installed successfully.")
+    click.echo("NOTE: You need to log out and back in for group membership to take effect.")
+    click.echo("  Or run: newgrp incus-admin")
+    click.echo("  Then re-run your bubble command.")
+    sys.exit(0)
+
+
 def _ensure_dependencies():
     """Check for required dependencies and offer to install them interactively."""
     system = platform.system()
@@ -69,9 +147,29 @@ def _ensure_dependencies():
 
     elif system == "Linux":
         if not _is_command_available("incus"):
-            click.echo("Incus is required but not installed.")
-            click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
-            sys.exit(1)
+            if _is_nixos():
+                click.echo("Incus is required but not installed.")
+                click.echo("  Add to your NixOS configuration:")
+                click.echo()
+                click.echo("    virtualisation.incus.enable = true;")
+                click.echo("    networking.nftables.enable = true;")
+                click.echo('    users.users.YOUR_USER.extraGroups = ["incus-admin"];')
+                click.echo()
+                click.echo("  Then run: sudo nixos-rebuild switch")
+                sys.exit(1)
+            elif _is_debian_based():
+                click.echo("Incus is required but not installed.")
+                if click.confirm(
+                    "  Install via the Zabbly repository? (requires sudo)", default=True
+                ):
+                    _install_incus_debian()
+                else:
+                    click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
+                    sys.exit(1)
+            else:
+                click.echo("Incus is required but not installed.")
+                click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
+                sys.exit(1)
 
 
 def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
