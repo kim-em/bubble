@@ -95,7 +95,7 @@ The `user` account has no sudo and a locked password. Network allowlisting is ap
 
 ## Automation
 
-On macOS, `bubble automation install` installs launchd jobs:
+Automation is installed automatically on first bubble creation. On macOS, launchd jobs:
 - `com.bubble.git-update` — hourly git store refresh
 - `com.bubble.image-refresh` — weekly base image rebuild
 

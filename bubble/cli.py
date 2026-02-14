@@ -29,17 +29,9 @@ from .vscode import (
 )
 
 
-def get_runtime(config: dict) -> ContainerRuntime:
-    """Get the configured container runtime."""
-    backend = config["runtime"]["backend"]
-    if backend == "incus":
-        return IncusRuntime()
-    raise ValueError(f"Unknown runtime backend: {backend}")
-
-
-def ensure_platform(config: dict):
-    """Ensure the platform is ready (Colima on macOS, native on Linux)."""
-    if platform.system() == "Darwin":
+def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
+    """Get the configured container runtime. Ensures platform is ready by default."""
+    if ensure_ready and platform.system() == "Darwin":
         from .runtime.colima import ensure_colima
 
         rt = config["runtime"]
@@ -49,6 +41,10 @@ def ensure_platform(config: dict):
             disk=rt.get("colima_disk", 60),
             vm_type=rt.get("colima_vm_type", "vz"),
         )
+    backend = config["runtime"]["backend"]
+    if backend == "incus":
+        return IncusRuntime()
+    raise ValueError(f"Unknown runtime backend: {backend}")
 
 
 def _find_container(runtime: ContainerRuntime, name: str):
@@ -145,6 +141,20 @@ def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
         )
     except Exception:
         return "/home/user"
+
+
+def _maybe_install_automation():
+    """Install automation jobs on first use if not already present."""
+    from .automation import install_automation, is_automation_installed
+
+    try:
+        status = is_automation_installed()
+        if status and not any(status.values()):
+            installed = install_automation()
+            if installed:
+                click.echo("  Automation installed (hourly git update, weekly image refresh).")
+    except Exception:
+        pass
 
 
 def _find_existing_container(runtime: ContainerRuntime, target_str: str,
@@ -255,8 +265,7 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
         _reattach(runtime, existing, ssh, no_interactive)
         return
 
-    # Step 5: Ensure platform and bare repo
-    ensure_platform(config)
+    # Step 5: Ensure dirs and bare repo
     ensure_dirs()
 
     bare_path = ensure_repo(t.org_repo)
@@ -422,6 +431,9 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
         base_image=image_name,
     )
 
+    # Install automation on first bubble creation if not already installed
+    _maybe_install_automation()
+
     click.echo(f"Bubble '{name}' created successfully.")
     click.echo(f"  SSH: ssh bubble-{name}")
 
@@ -515,54 +527,6 @@ def destroy(name, force):
 
 
 # ---------------------------------------------------------------------------
-# init
-# ---------------------------------------------------------------------------
-
-
-@main.command()
-def init():
-    """First-time setup: configure runtime, build base image."""
-    config = load_config()
-    ensure_dirs()
-
-    # Platform setup
-    click.echo("Setting up container runtime...")
-    ensure_platform(config)
-
-    runtime = get_runtime(config)
-    if not runtime.is_available():
-        click.echo("Error: Incus is not available. Ensure Colima is running.", err=True)
-        sys.exit(1)
-    click.echo("  Runtime ready.")
-
-    # Build bubble-base image if needed
-    if not runtime.image_exists("bubble-base"):
-        click.echo("Building bubble-base image...")
-        from .images.builder import build_image
-
-        build_image(runtime, "bubble-base")
-    else:
-        click.echo("  bubble-base image already exists.")
-
-    # Offer to install automation
-    from .automation import install_automation, is_automation_installed
-
-    status = is_automation_installed()
-    if not any(status.values()):
-        if click.confirm(
-            "Install automation (hourly git update, weekly image refresh)?", default=True
-        ):
-            installed = install_automation()
-            for item in installed:
-                click.echo(f"  Installed: {item}")
-    else:
-        click.echo("  Automation already installed.")
-
-    click.echo()
-    click.echo("Setup complete! Try: bubble owner/repo")
-
-
-# ---------------------------------------------------------------------------
 # images
 # ---------------------------------------------------------------------------
 
@@ -584,7 +548,7 @@ def images_list():
         )
         images = json.loads(output.stdout)
         if not images:
-            click.echo("No images. Run: bubble init")
+            click.echo("No images. Run: bubble images build bubble-base")
             return
         click.echo(f"{'ALIAS':<25} {'SIZE':<12} {'CREATED':<20}")
         click.echo("-" * 57)
@@ -602,7 +566,6 @@ def images_list():
 def images_build(image_name):
     """Build a base image (bubble-base, bubble-lean)."""
     config = load_config()
-    ensure_platform(config)
     runtime = get_runtime(config)
 
     from .images.builder import build_image

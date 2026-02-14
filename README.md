@@ -14,10 +14,8 @@ Containerized development environments powered by [Incus](https://linuxcontainer
 ```bash
 pip install bubble
 
-# First-time setup (installs Colima on macOS, builds base image)
-bubble init
-
 # Open a bubble for a GitHub PR — just paste the URL
+# (first run will set up Colima on macOS and build the base image automatically)
 bubble https://github.com/leanprover-community/mathlib4/pull/35219
 
 # Shorter forms work too
@@ -74,7 +72,6 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | Command | Description |
 |---------|-------------|
 | `bubble <target>` | Open (or create) a bubble for a GitHub URL/repo |
-| `bubble init` | First-time setup |
 | `bubble list` | List all bubbles |
 | `bubble pause <name>` | Freeze a bubble |
 | `bubble destroy <name>` | Delete a bubble permanently |
@@ -94,7 +91,7 @@ Build images with `bubble images build bubble-base` or `bubble images build bubb
 
 ## Configuration
 
-Config lives at `~/.bubble/config.toml`. Created automatically on `bubble init`.
+Config lives at `~/.bubble/config.toml`. Created automatically on first use.
 
 Set `BUBBLE_HOME` to override the data directory (default: `~/.bubble`):
 ```bash
