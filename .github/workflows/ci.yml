@@ -62,6 +62,10 @@ jobs:
           sudo incus admin init --minimal
           # Allow non-root access (CI-only, ephemeral VM)
           sudo chmod 666 /var/lib/incus/unix.socket
+          # Ensure NAT is enabled for container internet access
+          sudo incus network set incusbr0 ipv4.nat true
+          # Verify network is ready
+          incus network show incusbr0
 
       - name: Install lean-bubbles
         run: pip install -e ".[dev]"
