@@ -295,10 +295,20 @@ class TestParseLocalPath:
         with pytest.raises(TargetParseError, match="does not exist"):
             _parse_local_path(str(tmp_path / "nonexistent"))
 
-    def test_dirty_working_tree(self, tmp_path):
-        repo = _make_git_repo(tmp_path, dirty=True)
+    def test_dirty_staged_changes(self, tmp_path):
+        """Modified/staged files are rejected."""
+        repo = _make_git_repo(tmp_path)
+        # Modify a tracked file
+        (repo / "README.md").write_text("# Modified\n")
         with pytest.raises(TargetParseError, match="uncommitted changes"):
             _parse_local_path(str(repo))
+
+    def test_untracked_files_ok(self, tmp_path):
+        """Untracked files are allowed — only tracked modifications matter."""
+        repo = _make_git_repo(tmp_path)
+        (repo / "untracked.txt").write_text("not committed\n")
+        t = _parse_local_path(str(repo))
+        assert t.owner == "testowner"
 
     def test_no_remote(self, tmp_path):
         repo = tmp_path / "norepo"

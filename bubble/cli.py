@@ -454,9 +454,15 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path):
     ensure_dirs()
 
     if t.local_path:
-        # Local target: use the local .git as reference source
-        local_git = Path(t.local_path) / ".git"
-        ref_path = local_git
+        # Local target: resolve actual git dir (handles worktrees where .git is a file)
+        try:
+            git_dir_result = subprocess.run(
+                ["git", "-C", t.local_path, "rev-parse", "--absolute-git-dir"],
+                capture_output=True, text=True, check=True,
+            )
+            ref_path = Path(git_dir_result.stdout.strip())
+        except subprocess.CalledProcessError:
+            ref_path = Path(t.local_path) / ".git"
         ref_mount_name = f"{repo_short_name(t.org_repo)}.git"
     else:
         bare_path = ensure_repo(t.org_repo)
