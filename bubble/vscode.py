@@ -9,6 +9,14 @@ from pathlib import Path
 # Valid bubble name pattern (alphanumeric + hyphens, starts with letter)
 _BUBBLE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
+# Domains VSCode Remote SSH needs to function (marketplace for extensions)
+VSCODE_NETWORK_DOMAINS = [
+    "marketplace.visualstudio.com",
+    "*.gallery.vsassets.io",
+    "update.code.visualstudio.com",
+    "*.vo.msecnd.net",
+]
+
 SSH_CONFIG_DIR = Path.home() / ".ssh" / "config.d"
 SSH_CONFIG_FILE = SSH_CONFIG_DIR / "bubble"
 SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"

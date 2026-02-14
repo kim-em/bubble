@@ -300,6 +300,12 @@ def _apply_network(
 ):
     """Apply network allowlist to a container if configured."""
     domains = list(config.get("network", {}).get("allowlist", []))
+    # Always include VSCode infrastructure domains — bubble is a VSCode-first tool
+    from .vscode import VSCODE_NETWORK_DOMAINS
+
+    for d in VSCODE_NETWORK_DOMAINS:
+        if d not in domains:
+            domains.append(d)
     if extra_domains:
         for d in extra_domains:
             if d not in domains:
