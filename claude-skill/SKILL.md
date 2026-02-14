@@ -100,6 +100,18 @@ bubble network apply mathlib4-pr-12345
 bubble network remove mathlib4-pr-12345
 ```
 
+### Automation
+```bash
+# Install periodic jobs (hourly git update, weekly image refresh)
+bubble automation install
+
+# Check automation status
+bubble automation status
+
+# Remove automation jobs
+bubble automation remove
+```
+
 ### Maintenance
 ```bash
 # First-time setup

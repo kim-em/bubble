@@ -20,6 +20,7 @@ lean_bubbles/
 ├── wrap.py             # `bubble wrap .` — move local working dir into a bubble
 ├── network.py          # Network allowlisting via iptables inside containers
 ├── vscode.py           # SSH config generation + `code --remote` launching
+├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
 ├── runtime/
 │   ├── base.py         # Abstract ContainerRuntime interface
 │   ├── incus.py        # IncusRuntime: shells out to `incus` CLI

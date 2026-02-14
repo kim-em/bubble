@@ -87,6 +87,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble images list\|build` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
+| `bubble automation install\|remove\|status` | Manage periodic jobs (git update, image refresh) |
 
 ## Base Images
 
