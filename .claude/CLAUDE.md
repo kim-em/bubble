@@ -20,6 +20,7 @@ bubble/
 ├── network.py          # Network allowlisting via iptables inside containers
 ├── vscode.py           # SSH config generation + `code --remote` launching
 ├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
+├── relay.py            # Bubble-in-bubble relay daemon (Unix socket, validation, rate limiting)
 ├── hooks/
 │   ├── __init__.py     # Hook ABC, discover_hooks(), select_hook()
 │   └── lean.py         # LeanHook: detects lean-toolchain, uses lean image
@@ -107,3 +108,22 @@ Automation is installed automatically on first bubble creation. On macOS, launch
 - `com.bubble.image-refresh` — weekly base image rebuild
 
 On Linux, equivalent systemd user timers are installed.
+
+## Bubble-in-Bubble Relay
+
+The relay allows running `bubble` from inside a container. Architecture:
+
+```
+Container                              Host
+────────                              ────
+/usr/local/bin/bubble (stub)          bubble relay daemon
+  → /bubble/relay.sock (Incus proxy)  ← ~/.bubble/relay.sock
+  sends {"target": "..."}              validates, rate-limits, logs
+  reads {"status": "ok", ...}          calls bubble open
+```
+
+- Opt-in via `bubble relay enable` (installs daemon, sets config)
+- Security: known repos only (`~/.bubble/git/` must exist), no local paths, rate limited (3/min, 10/10min, 20/hr per container), all requests logged
+- Container identifies itself via `/bubble/container-id` file
+- Relay daemon runs as launchd (macOS) or systemd (Linux) service
+- Code: `bubble/relay.py` (daemon + validation), `bubble/images/scripts/base.sh` (stub + client)

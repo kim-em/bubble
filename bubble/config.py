@@ -35,6 +35,9 @@ DEFAULT_CONFIG = {
             "*.githubusercontent.com",
         ],
     },
+    "relay": {
+        "enabled": False,
+    },
 }
 
 

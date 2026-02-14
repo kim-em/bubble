@@ -99,3 +99,8 @@ def ensure_repo(org_repo: str) -> Path:
     if not path.exists():
         init_bare_repo(org_repo)
     return path
+
+
+def repo_is_known(org_repo: str) -> bool:
+    """Check if a bare repo exists in the git store."""
+    return bare_repo_path(org_repo).exists()

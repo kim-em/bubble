@@ -86,6 +86,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
 | `bubble automation install\|remove\|status` | Manage periodic jobs |
+| `bubble relay enable\|disable\|status` | Manage bubble-in-bubble relay |
 
 ## Images
 
@@ -118,6 +119,21 @@ allowlist = [
   "*.githubusercontent.com",
 ]
 ```
+
+## Bubble-in-Bubble
+
+You can run `bubble` from inside a container to open another bubble on the host. This is useful when reviewing a related PR while working on a feature branch.
+
+```bash
+# On the host: enable the relay (one-time setup)
+bubble relay enable
+
+# Inside a container: open another bubble
+bubble leanprover/lean4/pull/456
+bubble mathlib4
+```
+
+The relay only allows opening repos already cloned in `~/.bubble/git/` — it cannot trigger cloning of new repos. Requests are rate-limited (3/min, 10/10min, 20/hour per container), logged to `~/.bubble/relay.log`, and local paths are rejected. Existing bubbles need to be recreated after enabling the relay to get the relay socket.
 
 ## Security
 

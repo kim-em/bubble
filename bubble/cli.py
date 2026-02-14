@@ -12,7 +12,7 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .config import ensure_dirs, load_config, repo_short_name
+from .config import DATA_DIR, ensure_dirs, load_config, save_config, repo_short_name
 from .git_store import bare_repo_path, ensure_repo, fetch_ref, github_url, update_all_repos
 from .hooks import select_hook
 from .lifecycle import _load_registry, register_bubble, unregister_bubble
@@ -404,7 +404,9 @@ def main():
 @click.option("--network/--no-network", default=True, help="Apply network allowlist")
 @click.option("--name", "custom_name", type=str, help="Custom container name")
 @click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
-def open_cmd(target, ssh, no_interactive, network, custom_name, force_path):
+@click.option("--no-clone", is_flag=True, hidden=True,
+              help="Fail if bare repo doesn't exist (used by relay)")
+def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_clone):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     # If --path flag, ensure target is treated as a local path
     if force_path and not target.startswith(("/", ".", "..")):
@@ -465,7 +467,16 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path):
             ref_path = Path(t.local_path) / ".git"
         ref_mount_name = f"{repo_short_name(t.org_repo)}.git"
     else:
-        bare_path = ensure_repo(t.org_repo)
+        if no_clone:
+            # Relay mode: fail if repo doesn't exist instead of cloning
+            bare_path = bare_repo_path(t.org_repo)
+            if not bare_path.exists():
+                click.echo(
+                    f"Repo '{t.org_repo}' is not available in the git store.", err=True
+                )
+                sys.exit(1)
+        else:
+            bare_path = ensure_repo(t.org_repo)
         ref_path = bare_path
 
         # Step 6: Fetch specific ref if needed
@@ -536,6 +547,25 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path):
         runtime.add_disk(
             name, "shared-git", mount_source, f"/shared/git/{mount_name}", readonly=True
         )
+
+    # Add relay proxy device if enabled
+    relay_enabled = config.get("relay", {}).get("enabled", False)
+    if relay_enabled:
+        relay_sock = str(DATA_DIR / "relay.sock")
+        if Path(relay_sock).exists():
+            runtime.add_device(
+                name, "bubble-relay", "proxy",
+                connect=f"unix:{relay_sock}",
+                listen="unix:/bubble/relay.sock",
+                bind="container",
+                uid="1000",
+                gid="1000",
+            )
+            # Generate auth token and inject into container
+            from .relay import generate_relay_token
+            token = generate_relay_token(name)
+            runtime.exec(name, ["bash", "-c", f"echo {shlex.quote(token)} > /bubble/relay-token"
+                                               " && chmod 600 /bubble/relay-token"])
 
     # Clone repo inside container
     url = github_url(t.org_repo)
@@ -910,6 +940,105 @@ def automation_status():
     for job, installed in status.items():
         state = "installed" if installed else "not installed"
         click.echo(f"  {job}: {state}")
+
+
+# ---------------------------------------------------------------------------
+# relay
+# ---------------------------------------------------------------------------
+
+
+@main.group("relay")
+def relay_group():
+    """Manage the bubble-in-bubble relay."""
+
+
+@relay_group.command("enable")
+def relay_enable():
+    """Enable bubble-in-bubble relay.
+
+    This allows containers to request creation of new bubbles on the host.
+    Only repos already cloned in ~/.bubble/git/ can be opened via relay.
+    All relay requests are rate-limited and logged.
+    """
+    click.echo("Enabling bubble-in-bubble relay.")
+    click.echo()
+    click.echo("This opens a controlled channel from containers to the host.")
+    click.echo("Mitigations: known repos only, rate limiting, request logging.")
+    click.echo()
+
+    config = load_config()
+    config.setdefault("relay", {})["enabled"] = True
+    save_config(config)
+
+    # Install and start the relay daemon
+    from .automation import install_relay_daemon
+
+    try:
+        result = install_relay_daemon()
+        if result:
+            click.echo(f"  Installed: {result}")
+    except Exception as e:
+        click.echo(f"  Warning: could not install daemon: {e}")
+        click.echo("  You can start it manually with: bubble relay daemon")
+
+    click.echo()
+    click.echo("Relay enabled. New bubbles will include the relay socket.")
+    click.echo("Existing bubbles need to be recreated to get relay access.")
+
+
+@relay_group.command("disable")
+def relay_disable():
+    """Disable bubble-in-bubble relay."""
+    config = load_config()
+    config.setdefault("relay", {})["enabled"] = False
+    save_config(config)
+
+    from .automation import remove_relay_daemon
+
+    try:
+        result = remove_relay_daemon()
+        if result:
+            click.echo(f"  Removed: {result}")
+    except Exception:
+        pass
+
+    # Remove socket
+    from .relay import RELAY_SOCK
+    RELAY_SOCK.unlink(missing_ok=True)
+
+    click.echo("Relay disabled.")
+
+
+@relay_group.command("status")
+def relay_status():
+    """Show relay status."""
+    config = load_config()
+    enabled = config.get("relay", {}).get("enabled", False)
+    click.echo(f"  Relay: {'enabled' if enabled else 'disabled'}")
+
+    from .relay import RELAY_SOCK
+    click.echo(f"  Socket: {'exists' if RELAY_SOCK.exists() else 'not found'}")
+
+    from .relay import RELAY_LOG
+    if RELAY_LOG.exists():
+        # Show last 5 log entries
+        lines = RELAY_LOG.read_text().strip().splitlines()
+        if lines:
+            click.echo(f"  Log ({len(lines)} entries, last 5):")
+            for line in lines[-5:]:
+                click.echo(f"    {line}")
+        else:
+            click.echo("  Log: empty")
+    else:
+        click.echo("  Log: no requests yet")
+
+
+@relay_group.command("daemon")
+def relay_daemon_cmd():
+    """Run the relay daemon (used by launchd/systemd)."""
+    from .relay import run_daemon
+
+    run_daemon()
 
 
 if __name__ == "__main__":

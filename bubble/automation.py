@@ -17,6 +17,7 @@ LAUNCHD_LABELS = {
     "git-update": "com.bubble.git-update",
     "image-refresh": "com.bubble.image-refresh",
 }
+RELAY_LABEL = "com.bubble.relay-daemon"
 
 
 def install_automation() -> list[str]:
@@ -227,3 +228,105 @@ def _check_systemd() -> dict[str, bool]:
         timer_path = SYSTEMD_DIR / timer_name
         result[job_name] = timer_path.exists()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Relay daemon (separate lifecycle from main automation)
+# ---------------------------------------------------------------------------
+
+
+def install_relay_daemon() -> str:
+    """Install and start the relay daemon. Returns description of what was installed."""
+    system = platform.system()
+    if system == "Darwin":
+        return _install_relay_launchd()
+    elif system == "Linux":
+        return _install_relay_systemd()
+    return ""
+
+
+def remove_relay_daemon() -> str:
+    """Stop and remove the relay daemon. Returns description of what was removed."""
+    system = platform.system()
+    if system == "Darwin":
+        return _remove_relay_launchd()
+    elif system == "Linux":
+        return _remove_relay_systemd()
+    return ""
+
+
+def _install_relay_launchd() -> str:
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True, exist_ok=True)
+
+    plist_name = f"{RELAY_LABEL}.plist"
+    src = PLIST_DIR / plist_name
+    dst = launch_agents / plist_name
+
+    if dst.exists():
+        subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
+
+    if src.exists():
+        shutil.copy2(src, dst)
+        subprocess.run(["launchctl", "load", str(dst)], capture_output=True)
+        return f"launchd: {RELAY_LABEL}"
+
+    return ""
+
+
+def _remove_relay_launchd() -> str:
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    plist_name = f"{RELAY_LABEL}.plist"
+    dst = launch_agents / plist_name
+
+    if dst.exists():
+        subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
+        dst.unlink()
+        return f"launchd: {RELAY_LABEL}"
+
+    return ""
+
+
+def _install_relay_systemd() -> str:
+    SYSTEMD_DIR.mkdir(parents=True, exist_ok=True)
+    bubble = _bubble_path()
+
+    service = SYSTEMD_DIR / "bubble-relay.service"
+    service.write_text(
+        textwrap.dedent(f"""\
+        [Unit]
+        Description=bubble relay daemon
+
+        [Service]
+        Type=simple
+        ExecStart={bubble} relay daemon
+        Restart=always
+        RestartSec=5
+
+        [Install]
+        WantedBy=default.target
+    """)
+    )
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    subprocess.run(
+        ["systemctl", "--user", "enable", "--now", "bubble-relay.service"],
+        capture_output=True,
+    )
+
+    return "systemd: bubble-relay.service"
+
+
+def _remove_relay_systemd() -> str:
+    service = SYSTEMD_DIR / "bubble-relay.service"
+
+    if service.exists():
+        subprocess.run(
+            ["systemctl", "--user", "disable", "--now", "bubble-relay.service"],
+            capture_output=True,
+        )
+        service.unlink()
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        return "systemd: bubble-relay.service"
+
+    return ""
