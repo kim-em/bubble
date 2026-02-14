@@ -2,7 +2,7 @@
 
 import pytest
 
-from lean_bubbles.vscode import _BUBBLE_NAME_RE, add_ssh_config, remove_ssh_config
+from bubble.vscode import _BUBBLE_NAME_RE, add_ssh_config, remove_ssh_config
 
 
 class TestBubbleNameValidation:
@@ -41,7 +41,7 @@ class TestAddSshConfig:
     def test_writes_proxy_command(self, tmp_ssh_dir):
         # Prevent _ensure_include_directive from modifying real ~/.ssh/config
         add_ssh_config.__wrapped__ = None  # not wrapped, just call it
-        ssh_file = tmp_ssh_dir / "lean-bubbles"
+        ssh_file = tmp_ssh_dir / "bubble"
         add_ssh_config("test-bubble")
         content = ssh_file.read_text()
         assert "Host bubble-test-bubble" in content
@@ -55,7 +55,7 @@ class TestAddSshConfig:
 
 class TestRemoveSshConfig:
     def test_removes_correct_entry(self, tmp_ssh_dir):
-        ssh_file = tmp_ssh_dir / "lean-bubbles"
+        ssh_file = tmp_ssh_dir / "bubble"
         # Write two entries
         add_ssh_config("keep-this")
         add_ssh_config("remove-this")
@@ -70,7 +70,7 @@ class TestRemoveSshConfig:
         assert "remove-this" not in content_after
 
     def test_noop_for_nonexistent(self, tmp_ssh_dir):
-        ssh_file = tmp_ssh_dir / "lean-bubbles"
+        ssh_file = tmp_ssh_dir / "bubble"
         add_ssh_config("existing")
         content_before = ssh_file.read_text()
         remove_ssh_config("nonexistent")

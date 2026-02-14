@@ -2,7 +2,7 @@
 
 import pytest
 
-from lean_bubbles.config import _deep_merge, repo_short_name, resolve_repo
+from bubble.config import _deep_merge, repo_short_name, resolve_repo
 
 
 def test_resolve_repo_mathlib():
@@ -64,7 +64,7 @@ def test_deep_merge_override_replaces_non_dict():
 
 
 def test_load_config_creates_default(tmp_data_dir):
-    from lean_bubbles.config import load_config
+    from bubble.config import load_config
 
     config = load_config()
     assert config["runtime"]["backend"] == "incus"
@@ -72,7 +72,7 @@ def test_load_config_creates_default(tmp_data_dir):
 
 
 def test_save_load_roundtrip(tmp_data_dir):
-    from lean_bubbles.config import load_config, save_config
+    from bubble.config import load_config, save_config
 
     config = load_config()
     config["runtime"]["colima_cpu"] = 42

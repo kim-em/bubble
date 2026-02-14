@@ -4,7 +4,7 @@ Manages a shared cache of .olean files keyed by repo + toolchain version.
 Containers mount this read-only and can populate it after building.
 
 Note: Lake is planning native shared cache support. When available,
-lean-bubbles should integrate with it instead of this custom solution.
+bubble should integrate with it instead of this custom solution.
 """
 
 import shlex

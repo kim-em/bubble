@@ -1,4 +1,4 @@
-"""Configuration management for lean-bubbles."""
+"""Configuration management for bubble."""
 
 import os
 import sys
@@ -11,8 +11,8 @@ else:
 
 import tomli_w
 
-# Override with LEAN_BUBBLES_HOME environment variable
-DATA_DIR = Path(os.environ.get("LEAN_BUBBLES_HOME", Path.home() / ".lean-bubbles"))
+# Override with BUBBLE_HOME environment variable
+DATA_DIR = Path(os.environ.get("BUBBLE_HOME", Path.home() / ".bubble"))
 CONFIG_FILE = DATA_DIR / "config.toml"
 REGISTRY_FILE = DATA_DIR / "registry.json"
 GIT_DIR = DATA_DIR / "git"

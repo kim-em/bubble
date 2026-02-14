@@ -17,8 +17,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check lean_bubbles/ tests/
-      - run: ruff format --check lean_bubbles/ tests/
+      - run: ruff check bubble/ tests/
+      - run: ruff format --check bubble/ tests/
 
   test:
     runs-on: ubuntu-latest
@@ -68,7 +68,7 @@ jobs:
           sudo iptables -A FORWARD -i incusbr0 -j ACCEPT
           sudo iptables -A FORWARD -o incusbr0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-      - name: Install lean-bubbles
+      - name: Install bubble
         run: pip install -e ".[dev]"
 
       - name: Build lean-base image

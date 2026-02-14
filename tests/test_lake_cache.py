@@ -5,7 +5,7 @@ import tarfile
 
 import pytest
 
-from lean_bubbles.lake_cache import _safe_extract_tar, cache_key, cache_path
+from bubble.lake_cache import _safe_extract_tar, cache_key, cache_path
 
 
 def _make_tar(tmp_path, members):

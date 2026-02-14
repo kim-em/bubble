@@ -1,5 +1,5 @@
 ---
-name: lean-bubbles
+name: bubble
 description: Create and manage containerized Lean development environments using the `bubble` CLI.
 triggers:
   - bubble
@@ -10,7 +10,7 @@ triggers:
   - lean environment
 ---
 
-# lean-bubbles Skill
+# bubble Skill
 
 Use the `bubble` CLI to create and manage containerized Lean development environments.
 
@@ -136,7 +136,7 @@ bubble git update
 - Bubbles use shared git objects, so creating a new one is fast (~seconds) even for large repos
 - Each bubble has SSH access: `ssh bubble-<name>`
 - VSCode connects via Remote SSH automatically
-- Run `bubble init` if you haven't set up lean-bubbles yet
+- Run `bubble init` if you haven't set up bubble yet
 - Network allowlisting is applied by default — containers can only reach allowed domains
 - Use `bubble archive` when done — it saves state and frees disk
 - Use `bubble resume` to pick up where you left off

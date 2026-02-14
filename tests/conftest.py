@@ -1,10 +1,10 @@
-"""Shared test fixtures for lean-bubbles."""
+"""Shared test fixtures for bubble."""
 
 import subprocess
 
 import pytest
 
-from lean_bubbles.runtime.base import ContainerInfo, ContainerRuntime
+from bubble.runtime.base import ContainerInfo, ContainerRuntime
 
 
 class MockRuntime(ContainerRuntime):
@@ -81,13 +81,13 @@ def mock_runtime():
 
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
-    """Redirect all lean-bubbles data dirs to a temp directory."""
-    import lean_bubbles.config as config
-    import lean_bubbles.git_store as git_store
-    import lean_bubbles.lake_cache as lake_cache
-    import lean_bubbles.lifecycle as lifecycle
+    """Redirect all bubble data dirs to a temp directory."""
+    import bubble.config as config
+    import bubble.git_store as git_store
+    import bubble.lake_cache as lake_cache
+    import bubble.lifecycle as lifecycle
 
-    data_dir = tmp_path / "lean-bubbles"
+    data_dir = tmp_path / "bubble"
     data_dir.mkdir()
     git_dir = data_dir / "git"
     git_dir.mkdir()
@@ -114,11 +114,11 @@ def tmp_data_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def tmp_ssh_dir(tmp_path, monkeypatch):
     """Redirect SSH config paths to a temp directory."""
-    import lean_bubbles.vscode as vscode
+    import bubble.vscode as vscode
 
     ssh_dir = tmp_path / ".ssh" / "config.d"
     ssh_dir.mkdir(parents=True)
-    ssh_file = ssh_dir / "lean-bubbles"
+    ssh_file = ssh_dir / "bubble"
 
     monkeypatch.setattr(vscode, "SSH_CONFIG_DIR", ssh_dir)
     monkeypatch.setattr(vscode, "SSH_CONFIG_FILE", ssh_file)

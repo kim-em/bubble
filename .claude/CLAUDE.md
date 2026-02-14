@@ -1,20 +1,20 @@
-# lean-bubbles Architecture Guide
+# bubble Architecture Guide
 
-This file helps Claude Code sessions understand the lean-bubbles codebase.
+This file helps Claude Code sessions understand the bubble codebase.
 
 ## What This Project Is
 
-`lean-bubbles` (CLI: `bubble`) provides containerized Lean 4 development environments via Incus containers. Users create isolated "bubbles" for working on Lean/Mathlib PRs, with VSCode Remote SSH as the primary interface.
+`bubble` provides containerized Lean 4 development environments via Incus containers. Users create isolated "bubbles" for working on Lean/Mathlib PRs, with VSCode Remote SSH as the primary interface.
 
 ## Package Structure
 
 ```
-lean_bubbles/
+bubble/
 ├── cli.py              # Click CLI. All commands defined here. Entry point: main()
-├── config.py           # TOML config at ~/.lean-bubbles/config.toml
+├── config.py           # TOML config at ~/.bubble/config.toml
 │                       # Also defines KNOWN_REPOS for short name resolution
 ├── naming.py           # Container name generation: <repo>-<source>-<id>
-├── git_store.py        # Shared bare repo management at ~/.lean-bubbles/git/
+├── git_store.py        # Shared bare repo management at ~/.bubble/git/
 ├── lake_cache.py       # Shared .lake cache volume, keyed by repo+toolchain
 ├── lifecycle.py        # Archive/reconstitute, registry tracking
 ├── wrap.py             # `bubble wrap .` — move local working dir into a bubble
@@ -46,7 +46,7 @@ The core performance optimization. Host maintains bare mirror repos (`git clone 
 Incus requires Linux. On macOS, Colima runs a lightweight Linux VM with Apple's Virtualization.Framework (`--vm-type vz`). The `ensure_colima()` function starts it if needed.
 
 ### SSH via ProxyCommand
-Each container runs sshd. Rather than port forwarding (which doesn't work well through Colima on macOS), we use `ProxyCommand incus exec <name> -- su - lean -c "nc localhost 22"`. SSH config entries are auto-generated in `~/.ssh/config.d/lean-bubbles`.
+Each container runs sshd. Rather than port forwarding (which doesn't work well through Colima on macOS), we use `ProxyCommand incus exec <name> -- su - lean -c "nc localhost 22"`. SSH config entries are auto-generated in `~/.ssh/config.d/bubble`.
 
 ### Container Naming
 Names are `<repo>-<source>-<id>` (e.g., `mathlib4-pr-12345`). Numeric suffix for collisions. Full reconstruction state lives in the registry and PR metadata, not the name.
@@ -58,7 +58,7 @@ created → running ⇄ paused → archived → (reconstituted → running)
              └→ destroyed
 ```
 
-Archive checks git sync state (uncommitted changes, unpushed commits), saves metadata to `~/.lean-bubbles/registry.json`, then destroys the container. Reconstitute recreates from base image + saved state.
+Archive checks git sync state (uncommitted changes, unpushed commits), saves metadata to `~/.bubble/registry.json`, then destroys the container. Reconstitute recreates from base image + saved state.
 
 ### Network Allowlisting
 Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Configurable domain list in config.toml.
@@ -81,14 +81,14 @@ The `lean` user has no sudo and a locked password. Network allowlisting is appli
 
 ## Data Locations
 
-- `~/.lean-bubbles/config.toml` — user settings
-- `~/.lean-bubbles/git/` — bare repo mirrors
-- `~/.lean-bubbles/lake-cache/` — shared .lake caches (keyed by repo+toolchain)
-- `~/.lean-bubbles/registry.json` — bubble state tracking (active + archived)
-- `~/.ssh/config.d/lean-bubbles` — auto-managed SSH config
+- `~/.bubble/config.toml` — user settings
+- `~/.bubble/git/` — bare repo mirrors
+- `~/.bubble/lake-cache/` — shared .lake caches (keyed by repo+toolchain)
+- `~/.bubble/registry.json` — bubble state tracking (active + archived)
+- `~/.ssh/config.d/bubble` — auto-managed SSH config
 
 ## Automation
 
 On macOS, `bubble init` installs launchd jobs:
-- `com.lean-bubbles.git-update` — hourly git store refresh
-- `com.lean-bubbles.image-refresh` — weekly base image rebuild
+- `com.bubble.git-update` — hourly git store refresh
+- `com.bubble.image-refresh` — weekly base image rebuild

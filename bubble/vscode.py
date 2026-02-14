@@ -10,7 +10,7 @@ from pathlib import Path
 _BUBBLE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
 SSH_CONFIG_DIR = Path.home() / ".ssh" / "config.d"
-SSH_CONFIG_FILE = SSH_CONFIG_DIR / "lean-bubbles"
+SSH_CONFIG_FILE = SSH_CONFIG_DIR / "bubble"
 SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"
 
 # Port range for SSH forwarding (one per bubble)

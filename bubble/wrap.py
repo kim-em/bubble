@@ -107,7 +107,7 @@ def wrap_directory(
                 "stash",
                 "push",
                 "-m",
-                f"lean-bubbles: wrapped into {name}",
+                f"bubble: wrapped into {name}",
             ],
             capture_output=True,
             text=True,

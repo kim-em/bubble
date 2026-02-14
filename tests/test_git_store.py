@@ -1,6 +1,6 @@
 """Tests for shared git store path/URL generation."""
 
-from lean_bubbles.git_store import bare_repo_path, github_url
+from bubble.git_store import bare_repo_path, github_url
 
 
 def test_bare_repo_path_lean4(tmp_data_dir):

@@ -12,8 +12,8 @@ import uuid
 
 import pytest
 
-from lean_bubbles.network import apply_allowlist, check_allowlist_active, remove_allowlist
-from lean_bubbles.runtime.incus import IncusRuntime
+from bubble.network import apply_allowlist, check_allowlist_active, remove_allowlist
+from bubble.runtime.incus import IncusRuntime
 
 pytestmark = pytest.mark.integration
 

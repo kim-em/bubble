@@ -2,7 +2,7 @@
 
 import pytest
 
-from lean_bubbles.network import _DOMAIN_RE, _build_allowlist_script, apply_allowlist
+from bubble.network import _DOMAIN_RE, _build_allowlist_script, apply_allowlist
 
 
 class TestBuildAllowlistScript:

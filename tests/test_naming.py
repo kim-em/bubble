@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from lean_bubbles.naming import deduplicate_name, generate_name
+from bubble.naming import deduplicate_name, generate_name
 
 
 def test_generate_name_pr():

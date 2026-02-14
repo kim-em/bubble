@@ -1,4 +1,4 @@
-"""CLI entry point for lean-bubbles."""
+"""CLI entry point for bubble."""
 
 import json
 import platform
@@ -152,7 +152,7 @@ def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
 @click.group()
 @click.version_option(__version__)
 def main():
-    """lean-bubbles: Containerized Lean development environments."""
+    """bubble: Containerized Lean development environments."""
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +699,7 @@ def network_apply(name):
 
     domains = config.get("network", {}).get("allowlist", [])
     if not domains:
-        click.echo("No domains in allowlist. Edit ~/.lean-bubbles/config.toml", err=True)
+        click.echo("No domains in allowlist. Edit ~/.bubble/config.toml", err=True)
         sys.exit(1)
 
     from .network import apply_allowlist

@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lean-bubbles"
+name = "bubble"
 version = "0.1.0"
 description = "Containerized Lean development environments"
 readme = "README.md"
@@ -16,13 +16,13 @@ dependencies = [
 ]
 
 [project.scripts]
-bubble = "lean_bubbles.cli:main"
+bubble = "bubble.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
 
 [tool.setuptools.packages.find]
-include = ["lean_bubbles*"]
+include = ["bubble*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

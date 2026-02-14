@@ -1,4 +1,4 @@
-# lean-bubbles
+# bubble
 
 Containerized development environments for Lean 4 and Mathlib, powered by [Incus](https://linuxcontainers.org/incus/).
 
@@ -12,7 +12,7 @@ Containerized development environments for Lean 4 and Mathlib, powered by [Incus
 ## Quick Start
 
 ```bash
-pip install lean-bubbles
+pip install bubble
 
 # First-time setup (installs Colima on macOS, builds base image, clones shared repos)
 bubble init
@@ -62,7 +62,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 **Shared build caches**: `.lake` caches are shared across containers with matching toolchains, avoiding redundant `lake exe cache get` downloads.
 
-**Network allowlisting**: Containers can only reach allowed domains (GitHub, Lean releases). IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked. Configurable in `~/.lean-bubbles/config.toml`.
+**Network allowlisting**: Containers can only reach allowed domains (GitHub, Lean releases). IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked. Configurable in `~/.bubble/config.toml`.
 
 ## Requirements
 
@@ -116,11 +116,11 @@ You can also use any `org/repo` directly: `bubble new leanprover-community/quote
 
 ## Configuration
 
-Config lives at `~/.lean-bubbles/config.toml`. Created automatically on `bubble init`.
+Config lives at `~/.bubble/config.toml`. Created automatically on `bubble init`.
 
-Set `LEAN_BUBBLES_HOME` to override the data directory (default: `~/.lean-bubbles`):
+Set `BUBBLE_HOME` to override the data directory (default: `~/.bubble`):
 ```bash
-export LEAN_BUBBLES_HOME=/data/lean-bubbles
+export BUBBLE_HOME=/data/bubble
 ```
 
 ```toml

@@ -14,8 +14,8 @@ from pathlib import Path
 
 PLIST_DIR = Path(__file__).parent.parent / "config"
 LAUNCHD_LABELS = {
-    "git-update": "com.lean-bubbles.git-update",
-    "image-refresh": "com.lean-bubbles.image-refresh",
+    "git-update": "com.bubble.git-update",
+    "image-refresh": "com.bubble.image-refresh",
 }
 
 
@@ -124,13 +124,13 @@ def _install_systemd() -> list[str]:
     bubble = _bubble_path()
 
     # Git update: hourly
-    git_service = SYSTEMD_DIR / "lean-bubbles-git-update.service"
-    git_timer = SYSTEMD_DIR / "lean-bubbles-git-update.timer"
+    git_service = SYSTEMD_DIR / "bubble-git-update.service"
+    git_timer = SYSTEMD_DIR / "bubble-git-update.timer"
 
     git_service.write_text(
         textwrap.dedent(f"""\
         [Unit]
-        Description=lean-bubbles git store update
+        Description=bubble git store update
 
         [Service]
         Type=oneshot
@@ -141,7 +141,7 @@ def _install_systemd() -> list[str]:
     git_timer.write_text(
         textwrap.dedent("""\
         [Unit]
-        Description=Hourly lean-bubbles git store update
+        Description=Hourly bubble git store update
 
         [Timer]
         OnCalendar=hourly
@@ -151,16 +151,16 @@ def _install_systemd() -> list[str]:
         WantedBy=timers.target
     """)
     )
-    installed.append("systemd: lean-bubbles-git-update.timer")
+    installed.append("systemd: bubble-git-update.timer")
 
     # Image refresh: weekly (Sunday 3am)
-    img_service = SYSTEMD_DIR / "lean-bubbles-image-refresh.service"
-    img_timer = SYSTEMD_DIR / "lean-bubbles-image-refresh.timer"
+    img_service = SYSTEMD_DIR / "bubble-image-refresh.service"
+    img_timer = SYSTEMD_DIR / "bubble-image-refresh.timer"
 
     img_service.write_text(
         textwrap.dedent(f"""\
         [Unit]
-        Description=lean-bubbles base image refresh
+        Description=bubble base image refresh
 
         [Service]
         Type=oneshot
@@ -171,7 +171,7 @@ def _install_systemd() -> list[str]:
     img_timer.write_text(
         textwrap.dedent("""\
         [Unit]
-        Description=Weekly lean-bubbles base image refresh
+        Description=Weekly bubble base image refresh
 
         [Timer]
         OnCalendar=Sun *-*-* 03:00:00
@@ -181,16 +181,16 @@ def _install_systemd() -> list[str]:
         WantedBy=timers.target
     """)
     )
-    installed.append("systemd: lean-bubbles-image-refresh.timer")
+    installed.append("systemd: bubble-image-refresh.timer")
 
     # Reload and enable
     subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
     subprocess.run(
-        ["systemctl", "--user", "enable", "--now", "lean-bubbles-git-update.timer"],
+        ["systemctl", "--user", "enable", "--now", "bubble-git-update.timer"],
         capture_output=True,
     )
     subprocess.run(
-        ["systemctl", "--user", "enable", "--now", "lean-bubbles-image-refresh.timer"],
+        ["systemctl", "--user", "enable", "--now", "bubble-image-refresh.timer"],
         capture_output=True,
     )
 
@@ -200,7 +200,7 @@ def _install_systemd() -> list[str]:
 def _remove_systemd() -> list[str]:
     removed = []
 
-    for name in ["lean-bubbles-git-update", "lean-bubbles-image-refresh"]:
+    for name in ["bubble-git-update", "bubble-image-refresh"]:
         timer = SYSTEMD_DIR / f"{name}.timer"
         service = SYSTEMD_DIR / f"{name}.service"
 
@@ -221,8 +221,8 @@ def _remove_systemd() -> list[str]:
 def _check_systemd() -> dict[str, bool]:
     result = {}
     for job_name, timer_name in [
-        ("git-update", "lean-bubbles-git-update.timer"),
-        ("image-refresh", "lean-bubbles-image-refresh.timer"),
+        ("git-update", "bubble-git-update.timer"),
+        ("image-refresh", "bubble-image-refresh.timer"),
     ]:
         timer_path = SYSTEMD_DIR / timer_name
         result[job_name] = timer_path.exists()

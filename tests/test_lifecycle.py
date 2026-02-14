@@ -2,7 +2,7 @@
 
 import json
 
-from lean_bubbles.lifecycle import (
+from bubble.lifecycle import (
     archive_bubble,
     check_git_synced,
     get_bubble_info,
@@ -26,7 +26,7 @@ class TestRegistry:
     def test_registry_is_valid_json(self, tmp_data_dir):
         register_bubble("b1", "org/repo1")
         register_bubble("b2", "org/repo2")
-        import lean_bubbles.config as config
+        import bubble.config as config
 
         content = config.REGISTRY_FILE.read_text()
         data = json.loads(content)
