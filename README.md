@@ -150,4 +150,4 @@ The relay only allows opening repos already cloned in `~/.bubble/git/` — it ca
 
 ## License
 
-MIT
+Apache 2.0 — see [LICENSE](LICENSE).

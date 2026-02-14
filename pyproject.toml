@@ -7,7 +7,7 @@ name = "bubble"
 version = "0.2.0"
 description = "Containerized development environments"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.0",
