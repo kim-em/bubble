@@ -12,7 +12,9 @@ Containerized development environments powered by [Incus](https://linuxcontainer
 ## Quick Start
 
 ```bash
-pip install bubble
+# Install (use pipx or uv to avoid PEP 668 issues with system Python)
+pipx install bubble        # or: uv tool install bubble
+# For development:         uv pip install -e '.[dev]'
 
 # Open a bubble for a GitHub PR — just paste the URL
 # (first run will set up Colima on macOS and build the base image automatically)
