@@ -55,6 +55,7 @@ def is_automation_installed() -> dict[str, bool]:
 # macOS: launchd
 # ---------------------------------------------------------------------------
 
+
 def _install_launchd() -> list[str]:
     launch_agents = Path.home() / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True, exist_ok=True)
@@ -67,13 +68,11 @@ def _install_launchd() -> list[str]:
 
         if dst.exists():
             # Unload first to update
-            subprocess.run(["launchctl", "unload", str(dst)],
-                           capture_output=True)
+            subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
 
         if src.exists():
             shutil.copy2(src, dst)
-            subprocess.run(["launchctl", "load", str(dst)],
-                           capture_output=True)
+            subprocess.run(["launchctl", "load", str(dst)], capture_output=True)
             installed.append(f"launchd: {label}")
 
     return installed
@@ -88,8 +87,7 @@ def _remove_launchd() -> list[str]:
         dst = launch_agents / plist_name
 
         if dst.exists():
-            subprocess.run(["launchctl", "unload", str(dst)],
-                           capture_output=True)
+            subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
             dst.unlink()
             removed.append(f"launchd: {label}")
 
@@ -129,16 +127,19 @@ def _install_systemd() -> list[str]:
     git_service = SYSTEMD_DIR / "lean-bubbles-git-update.service"
     git_timer = SYSTEMD_DIR / "lean-bubbles-git-update.timer"
 
-    git_service.write_text(textwrap.dedent(f"""\
+    git_service.write_text(
+        textwrap.dedent(f"""\
         [Unit]
         Description=lean-bubbles git store update
 
         [Service]
         Type=oneshot
         ExecStart={bubble} git update
-    """))
+    """)
+    )
 
-    git_timer.write_text(textwrap.dedent("""\
+    git_timer.write_text(
+        textwrap.dedent("""\
         [Unit]
         Description=Hourly lean-bubbles git store update
 
@@ -148,23 +149,27 @@ def _install_systemd() -> list[str]:
 
         [Install]
         WantedBy=timers.target
-    """))
+    """)
+    )
     installed.append("systemd: lean-bubbles-git-update.timer")
 
     # Image refresh: weekly (Sunday 3am)
     img_service = SYSTEMD_DIR / "lean-bubbles-image-refresh.service"
     img_timer = SYSTEMD_DIR / "lean-bubbles-image-refresh.timer"
 
-    img_service.write_text(textwrap.dedent(f"""\
+    img_service.write_text(
+        textwrap.dedent(f"""\
         [Unit]
         Description=lean-bubbles base image refresh
 
         [Service]
         Type=oneshot
         ExecStart={bubble} images build lean-base
-    """))
+    """)
+    )
 
-    img_timer.write_text(textwrap.dedent("""\
+    img_timer.write_text(
+        textwrap.dedent("""\
         [Unit]
         Description=Weekly lean-bubbles base image refresh
 
@@ -174,15 +179,20 @@ def _install_systemd() -> list[str]:
 
         [Install]
         WantedBy=timers.target
-    """))
+    """)
+    )
     installed.append("systemd: lean-bubbles-image-refresh.timer")
 
     # Reload and enable
     subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    subprocess.run(["systemctl", "--user", "enable", "--now",
-                     "lean-bubbles-git-update.timer"], capture_output=True)
-    subprocess.run(["systemctl", "--user", "enable", "--now",
-                     "lean-bubbles-image-refresh.timer"], capture_output=True)
+    subprocess.run(
+        ["systemctl", "--user", "enable", "--now", "lean-bubbles-git-update.timer"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["systemctl", "--user", "enable", "--now", "lean-bubbles-image-refresh.timer"],
+        capture_output=True,
+    )
 
     return installed
 
@@ -195,8 +205,9 @@ def _remove_systemd() -> list[str]:
         service = SYSTEMD_DIR / f"{name}.service"
 
         if timer.exists():
-            subprocess.run(["systemctl", "--user", "disable", "--now",
-                             f"{name}.timer"], capture_output=True)
+            subprocess.run(
+                ["systemctl", "--user", "disable", "--now", f"{name}.timer"], capture_output=True
+            )
             timer.unlink()
             removed.append(f"systemd: {name}.timer")
 

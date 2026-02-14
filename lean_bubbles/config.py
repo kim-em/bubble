@@ -17,7 +17,6 @@ CONFIG_FILE = DATA_DIR / "config.toml"
 REGISTRY_FILE = DATA_DIR / "registry.json"
 GIT_DIR = DATA_DIR / "git"
 LAKE_CACHE_DIR = DATA_DIR / "lake-cache"
-SESSIONS_DIR = DATA_DIR / "sessions"
 
 DEFAULT_CONFIG = {
     "runtime": {
@@ -44,16 +43,7 @@ DEFAULT_CONFIG = {
             "*.githubusercontent.com",
             "objects.githubusercontent.com",
             "releases.lean-lang.org",
-            "leanprover.zulipchat.com",
-            "lean-fro.zulipchat.com",
-            "api.anthropic.com",
-            "statsig.anthropic.com",
-            "registry.npmjs.org",
         ],
-    },
-    "extensions": {
-        "claude": {"enabled": False, "unset_api_key": True},
-        "zulip": {"enabled": False},
     },
 }
 
@@ -74,7 +64,7 @@ KNOWN_REPOS = {
 
 def ensure_dirs():
     """Create data directories if they don't exist."""
-    for d in [DATA_DIR, GIT_DIR, LAKE_CACHE_DIR, SESSIONS_DIR]:
+    for d in [DATA_DIR, GIT_DIR, LAKE_CACHE_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
 

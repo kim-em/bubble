@@ -63,9 +63,6 @@ bubble attach mathlib4-pr-12345
 # Shell access
 bubble shell mathlib4-pr-12345
 
-# Start/resume Claude Code inside a bubble
-bubble claude mathlib4-pr-12345
-
 # List all bubbles
 bubble list
 bubble list --archived       # Include archived bubbles
@@ -80,9 +77,8 @@ bubble pause mathlib4-pr-12345
 # Archive (save state, destroy container)
 bubble archive mathlib4-pr-12345
 
-# Resume from archive or PR URL
+# Resume from local archive
 bubble resume mathlib4-pr-12345
-bubble resume https://github.com/leanprover-community/mathlib4/pull/12345
 
 # Destroy permanently
 bubble destroy mathlib4-pr-12345
@@ -131,5 +127,4 @@ bubble git update
 - Run `bubble init` if you haven't set up lean-bubbles yet
 - Network allowlisting is applied by default — containers can only reach allowed domains
 - Use `bubble archive` when done — it saves state and frees disk
-- Use `bubble resume` to pick up where you left off, even on a different machine
-- Claude Code sessions are preserved across archive/resume cycles (when extensions.claude.enabled = true)
+- Use `bubble resume` to pick up where you left off

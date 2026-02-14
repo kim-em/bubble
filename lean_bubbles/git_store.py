@@ -30,14 +30,20 @@ def init_bare_repo(org_repo: str) -> Path:
     )
     # Configure to fetch all refs (including PRs)
     subprocess.run(
-        ["git", "-C", str(path), "config", "remote.origin.fetch",
-         "+refs/heads/*:refs/heads/*"],
+        ["git", "-C", str(path), "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
         check=True,
     )
     # Also fetch PR refs so we can checkout PRs
     subprocess.run(
-        ["git", "-C", str(path), "config", "--add", "remote.origin.fetch",
-         "+refs/pull/*/head:refs/pull/*/head"],
+        [
+            "git",
+            "-C",
+            str(path),
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/pull/*/head:refs/pull/*/head",
+        ],
         check=True,
     )
     return path

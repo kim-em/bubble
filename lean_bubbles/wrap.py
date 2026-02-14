@@ -1,9 +1,10 @@
 """Move or copy a local working directory into a bubble."""
 
+import shlex
 import subprocess
 from pathlib import Path
 
-from .config import load_config, repo_short_name, resolve_repo
+from .config import repo_short_name
 from .naming import deduplicate_name, generate_name
 from .runtime.base import ContainerRuntime
 
@@ -20,7 +21,9 @@ def detect_repo_info(directory: Path) -> dict:
     def git(*args):
         result = subprocess.run(
             ["git", "-C", str(directory)] + list(args),
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return result.stdout.strip()
 
@@ -35,7 +38,7 @@ def detect_repo_info(directory: Path) -> dict:
     org_repo = remote_url
     for prefix in ["https://github.com/", "git@github.com:"]:
         if org_repo.startswith(prefix):
-            org_repo = org_repo[len(prefix):]
+            org_repo = org_repo[len(prefix) :]
             break
     org_repo = org_repo.rstrip("/").removesuffix(".git")
 
@@ -56,9 +59,14 @@ def detect_repo_info(directory: Path) -> dict:
     }
 
 
-def wrap_directory(runtime: ContainerRuntime, directory: Path, config: dict,
-                   pr: int = 0, copy_mode: bool = False,
-                   custom_name: str = "") -> str:
+def wrap_directory(
+    runtime: ContainerRuntime,
+    directory: Path,
+    config: dict,
+    pr: int = 0,
+    copy_mode: bool = False,
+    custom_name: str = "",
+) -> str:
     """Move or copy a local working directory into a bubble.
 
     Args:
@@ -92,9 +100,18 @@ def wrap_directory(runtime: ContainerRuntime, directory: Path, config: dict,
     stash_ref = None
     if not copy_mode and info["has_changes"]:
         result = subprocess.run(
-            ["git", "-C", str(directory), "stash", "push", "-m",
-             f"lean-bubbles: wrapped into {name}"],
-            capture_output=True, text=True, check=True,
+            [
+                "git",
+                "-C",
+                str(directory),
+                "stash",
+                "push",
+                "-m",
+                f"lean-bubbles: wrapped into {name}",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         if "No local changes" not in result.stdout:
             stash_ref = "stash@{0}"
@@ -102,6 +119,7 @@ def wrap_directory(runtime: ContainerRuntime, directory: Path, config: dict,
     # Ensure base image exists
     if not runtime.image_exists("lean-base"):
         from .images.builder import build_lean_base
+
         build_lean_base(runtime)
 
     # Launch container
@@ -109,6 +127,7 @@ def wrap_directory(runtime: ContainerRuntime, directory: Path, config: dict,
 
     # Wait for readiness
     import time
+
     for _ in range(30):
         try:
             runtime.exec(name, ["true"])
@@ -120,68 +139,98 @@ def wrap_directory(runtime: ContainerRuntime, directory: Path, config: dict,
         except Exception:
             time.sleep(1)
 
-    # Mount shared git store
-    from .config import GIT_DIR
-    if GIT_DIR.exists():
-        runtime.add_disk(name, "shared-git", str(GIT_DIR), "/shared/git", readonly=True)
+    # Mount only the needed bare repo (not the entire git store)
+    from .git_store import ensure_repo, github_url
+
+    bare_path = ensure_repo(org_repo)
+    if bare_path.exists():
+        runtime.add_disk(
+            name, "shared-git", str(bare_path), f"/shared/git/{bare_path.name}", readonly=True
+        )
 
     # Clone repo inside container
-    from .git_store import bare_repo_path, ensure_repo, github_url
-    bare_path = ensure_repo(org_repo)
     url = github_url(org_repo)
-    runtime.exec(name, [
-        "su", "-", "lean", "-c",
-        f"git clone --reference /shared/git/{bare_path.name} {url} /home/lean/{short}",
-    ])
+    runtime.exec(
+        name,
+        [
+            "su",
+            "-",
+            "lean",
+            "-c",
+            f"git clone --reference /shared/git/{bare_path.name} {url} /home/lean/{short}",
+        ],
+    )
 
     # Checkout the same branch and commit
     if branch:
+        q_branch = shlex.quote(branch)
+        q_commit = shlex.quote(commit)
         try:
-            runtime.exec(name, [
-                "su", "-", "lean", "-c",
-                f"cd /home/lean/{short} && git checkout {branch}",
-            ])
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "lean",
+                    "-c",
+                    f"cd /home/lean/{short} && git checkout {q_branch}",
+                ],
+            )
         except Exception:
             # If branch doesn't exist on remote, create it at the commit
-            runtime.exec(name, [
-                "su", "-", "lean", "-c",
-                f"cd /home/lean/{short} && git checkout -b {branch} {commit}",
-            ])
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "lean",
+                    "-c",
+                    f"cd /home/lean/{short} && git checkout -b {q_branch} {q_commit}",
+                ],
+            )
 
     # If there were stashed changes, create a patch and apply it in the container
     if stash_ref or (copy_mode and info["has_changes"]):
         try:
             # Generate a diff of the working tree changes
             diff_result = subprocess.run(
-                ["git", "-C", str(directory), "diff"] +
-                (["stash@{0}^", "stash@{0}"] if stash_ref else []),
-                capture_output=True, text=True,
+                ["git", "-C", str(directory), "diff"]
+                + (["stash@{0}^", "stash@{0}"] if stash_ref else []),
+                capture_output=True,
+                text=True,
             )
             if diff_result.stdout.strip():
                 # Push the diff into the container and apply
                 import tempfile
+
                 with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
                     f.write(diff_result.stdout)
                     patch_path = f.name
 
                 subprocess.run(
-                    ["incus", "file", "push", patch_path,
-                     f"{name}/tmp/wrap.patch"],
-                    check=True, capture_output=True,
+                    ["incus", "file", "push", patch_path, f"{name}/tmp/wrap.patch"],
+                    check=True,
+                    capture_output=True,
                 )
                 Path(patch_path).unlink()
 
-                runtime.exec(name, [
-                    "su", "-", "lean", "-c",
-                    f"cd /home/lean/{short} && git apply /tmp/wrap.patch && rm /tmp/wrap.patch",
-                ])
+                runtime.exec(
+                    name,
+                    [
+                        "su",
+                        "-",
+                        "lean",
+                        "-c",
+                        f"cd /home/lean/{short} && git apply /tmp/wrap.patch && rm /tmp/wrap.patch",
+                    ],
+                )
         except Exception as e:
             print(f"Warning: could not transfer uncommitted changes: {e}")
 
     # Start SSH
     runtime.exec(name, ["bash", "-c", "service ssh start || /usr/sbin/sshd"])
 
-    # Copy SSH keys
+    # Copy SSH keys (via file push to avoid shell injection)
     ssh_dir = Path.home() / ".ssh"
     pub_keys = []
     for key_file in ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]:
@@ -189,14 +238,40 @@ def wrap_directory(runtime: ContainerRuntime, directory: Path, config: dict,
         if key_path.exists():
             pub_keys.append(key_path.read_text().strip())
     if pub_keys:
-        keys_str = "\\n".join(pub_keys)
-        runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '{keys_str}' > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys",
-        ])
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".keys", delete=False) as f:
+            f.write("\n".join(pub_keys) + "\n")
+            tmp_keys = f.name
+        try:
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "lean",
+                    "-c",
+                    "mkdir -p ~/.ssh && chmod 700 ~/.ssh",
+                ],
+            )
+            subprocess.run(
+                ["incus", "file", "push", tmp_keys, f"{name}/home/lean/.ssh/authorized_keys"],
+                check=True,
+                capture_output=True,
+            )
+            runtime.exec(
+                name,
+                [
+                    "bash",
+                    "-c",
+                    "chown lean:lean /home/lean/.ssh/authorized_keys"
+                    " && chmod 600 /home/lean/.ssh/authorized_keys",
+                ],
+            )
+        finally:
+            Path(tmp_keys).unlink(missing_ok=True)
 
     # Register in lifecycle
     from .lifecycle import register_bubble
+
     register_bubble(name, org_repo, branch=branch, commit=commit, pr=pr)
 
     return name

@@ -2,11 +2,16 @@
 
 import json
 import platform
+import re
 import subprocess
 from pathlib import Path
 
+# Valid bubble name pattern (alphanumeric + hyphens, starts with letter)
+_BUBBLE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
 SSH_CONFIG_DIR = Path.home() / ".ssh" / "config.d"
 SSH_CONFIG_FILE = SSH_CONFIG_DIR / "lean-bubbles"
+SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"
 
 # Port range for SSH forwarding (one per bubble)
 SSH_PORT_BASE = 22100
@@ -40,6 +45,8 @@ def add_ssh_config(bubble_name: str, port: int = 0, user: str = "lean"):
 
     Uses `incus exec` as ProxyCommand to avoid port forwarding issues on macOS.
     """
+    if not _BUBBLE_NAME_RE.match(bubble_name):
+        raise ValueError(f"Invalid bubble name for SSH config: {bubble_name!r}")
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     entry = f"""
@@ -79,7 +86,7 @@ def remove_ssh_config(bubble_name: str):
 
 def _ensure_include_directive():
     """Ensure ~/.ssh/config includes our config.d directory."""
-    ssh_config = Path.home() / ".ssh" / "config"
+    ssh_config = SSH_MAIN_CONFIG
     include_line = f"Include {SSH_CONFIG_DIR}/*"
 
     if ssh_config.exists():

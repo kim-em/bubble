@@ -1,7 +1,7 @@
 """macOS Colima management for running Incus."""
 
-import subprocess
 import json
+import subprocess
 
 
 def is_colima_installed() -> bool:
@@ -14,9 +14,7 @@ def is_colima_installed() -> bool:
 
 def is_colima_running() -> bool:
     try:
-        result = subprocess.run(
-            ["colima", "status"], capture_output=True, text=True, check=False
-        )
+        result = subprocess.run(["colima", "status"], capture_output=True, text=True, check=False)
         return result.returncode == 0
     except FileNotFoundError:
         return False
@@ -54,9 +52,7 @@ def stop_colima():
 def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
     """Ensure Colima is running with correct settings. Restart if needed."""
     if not is_colima_installed():
-        raise RuntimeError(
-            "Colima is not installed. Run: brew install colima incus"
-        )
+        raise RuntimeError("Colima is not installed. Run: brew install colima incus")
 
     if is_colima_running():
         # Check if config matches

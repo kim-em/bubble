@@ -1,12 +1,12 @@
 """Container lifecycle management: archive, reconstitute, registry tracking."""
 
 import json
+import shlex
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
-from .config import GIT_DIR, REGISTRY_FILE, SESSIONS_DIR, repo_short_name
-from .git_store import bare_repo_path, ensure_repo, github_url
+from .config import REGISTRY_FILE, repo_short_name
+from .git_store import ensure_repo, github_url
 from .runtime.base import ContainerRuntime
 
 
@@ -23,8 +23,14 @@ def _save_registry(registry: dict):
     REGISTRY_FILE.write_text(json.dumps(registry, indent=2) + "\n")
 
 
-def register_bubble(name: str, org_repo: str, branch: str = "", commit: str = "",
-                     pr: int = 0, base_image: str = "lean-base"):
+def register_bubble(
+    name: str,
+    org_repo: str,
+    branch: str = "",
+    commit: str = "",
+    pr: int = 0,
+    base_image: str = "lean-base",
+):
     """Record a bubble's creation in the registry."""
     registry = _load_registry()
     registry["bubbles"][name] = {
@@ -51,19 +57,32 @@ def check_git_synced(runtime: ContainerRuntime, name: str, project_dir: str) -> 
     Returns (is_synced, reason_if_not).
     """
     try:
+        q_dir = shlex.quote(project_dir)
         # Check for uncommitted changes
-        status = runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"cd {project_dir} && git status --porcelain",
-        ])
+        status = runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "lean",
+                "-c",
+                f"cd {q_dir} && git status --porcelain",
+            ],
+        )
         if status.strip():
             return False, f"Uncommitted changes:\n{status.strip()}"
 
         # Check for unpushed commits on all local branches
-        unpushed = runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"cd {project_dir} && git log --branches --not --remotes --oneline",
-        ])
+        unpushed = runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "lean",
+                "-c",
+                f"cd {q_dir} && git log --branches --not --remotes --oneline",
+            ],
+        )
         if unpushed.strip():
             return False, f"Unpushed commits:\n{unpushed.strip()}"
 
@@ -72,9 +91,8 @@ def check_git_synced(runtime: ContainerRuntime, name: str, project_dir: str) -> 
         return False, f"Error checking git state: {e}"
 
 
-def archive_bubble(runtime: ContainerRuntime, name: str,
-                    project_dir: str | None = None) -> dict:
-    """Archive a bubble: save state metadata, extract Claude sessions, destroy container.
+def archive_bubble(runtime: ContainerRuntime, name: str, project_dir: str | None = None) -> dict:
+    """Archive a bubble: save state metadata, destroy container.
 
     Returns the archived state dict.
     """
@@ -86,56 +104,48 @@ def archive_bubble(runtime: ContainerRuntime, name: str,
         project_dir = f"/home/lean/{short}" if short else "/home/lean"
 
     # Gather current git state
+    q_dir = shlex.quote(project_dir)
     try:
-        branch = runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"cd {project_dir} && git branch --show-current",
-        ]).strip()
+        branch = runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "lean",
+                "-c",
+                f"cd {q_dir} && git branch --show-current",
+            ],
+        ).strip()
     except Exception:
         branch = info.get("branch", "")
 
     try:
-        commit = runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"cd {project_dir} && git rev-parse HEAD",
-        ]).strip()
+        commit = runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "lean",
+                "-c",
+                f"cd {q_dir} && git rev-parse HEAD",
+            ],
+        ).strip()
     except Exception:
         commit = info.get("commit", "")
 
     try:
-        toolchain = runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"cat {project_dir}/lean-toolchain",
-        ]).strip()
+        toolchain = runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "lean",
+                "-c",
+                f"cat {q_dir}/lean-toolchain",
+            ],
+        ).strip()
     except Exception:
         toolchain = ""
-
-    # Extract Claude Code session files if they exist
-    session_dir = SESSIONS_DIR / name
-    try:
-        # Check for Claude .jsonl files
-        claude_files = runtime.exec(name, [
-            "bash", "-c",
-            "find /home/lean/.claude -name '*.jsonl' -o -name 'sessions-index.json' 2>/dev/null || true",
-        ]).strip()
-
-        if claude_files:
-            session_dir.mkdir(parents=True, exist_ok=True)
-            for filepath in claude_files.splitlines():
-                filepath = filepath.strip()
-                if filepath:
-                    filename = Path(filepath).name
-                    try:
-                        import subprocess
-                        subprocess.run(
-                            ["incus", "file", "pull", f"{name}{filepath}",
-                             str(session_dir / filename)],
-                            check=True, capture_output=True,
-                        )
-                    except Exception:
-                        pass
-    except Exception:
-        pass
 
     # Build archived state
     archived_state = {
@@ -148,7 +158,6 @@ def archive_bubble(runtime: ContainerRuntime, name: str,
         "created_at": info.get("created_at", ""),
         "archived_at": datetime.now(timezone.utc).isoformat(),
         "state": "archived",
-        "has_claude_session": session_dir.exists() and any(session_dir.iterdir()),
     }
 
     # Update registry
@@ -161,8 +170,7 @@ def archive_bubble(runtime: ContainerRuntime, name: str,
     return archived_state
 
 
-def reconstitute_bubble(runtime: ContainerRuntime, name: str,
-                         state: dict | None = None) -> str:
+def reconstitute_bubble(runtime: ContainerRuntime, name: str, state: dict | None = None) -> str:
     """Reconstitute an archived bubble from saved state.
 
     Returns the new container name (may differ if original name is taken).
@@ -183,6 +191,7 @@ def reconstitute_bubble(runtime: ContainerRuntime, name: str,
     if not runtime.image_exists(base_image):
         if not runtime.image_exists("lean-base"):
             from .images.builder import build_lean_base
+
             build_lean_base(runtime)
         base_image = "lean-base"
 
@@ -201,69 +210,87 @@ def reconstitute_bubble(runtime: ContainerRuntime, name: str,
         except Exception:
             time.sleep(1)
 
-    # Mount shared git store
-    if GIT_DIR.exists():
-        runtime.add_disk(name, "shared-git", str(GIT_DIR), "/shared/git", readonly=True)
+    # Mount only the needed bare repo (not the entire git store)
+    bare_path = ensure_repo(org_repo)
+    if bare_path.exists():
+        runtime.add_disk(
+            name, "shared-git", str(bare_path), f"/shared/git/{bare_path.name}", readonly=True
+        )
 
     # Clone repo
-    bare_path = ensure_repo(org_repo)
     url = github_url(org_repo)
-    runtime.exec(name, [
-        "su", "-", "lean", "-c",
-        f"git clone --reference /shared/git/{bare_path.name} {url} /home/lean/{short}",
-    ])
+    runtime.exec(
+        name,
+        [
+            "su",
+            "-",
+            "lean",
+            "-c",
+            f"git clone --reference /shared/git/{bare_path.name} {url} /home/lean/{short}",
+        ],
+    )
 
     # Checkout branch and verify commit
     if branch:
+        q_branch = shlex.quote(branch)
         try:
-            runtime.exec(name, [
-                "su", "-", "lean", "-c",
-                f"cd /home/lean/{short} && git checkout {branch}",
-            ])
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "lean",
+                    "-c",
+                    f"cd /home/lean/{short} && git checkout {q_branch}",
+                ],
+            )
         except Exception:
             # Branch might not exist on remote, try fetching PR
             pr = state.get("pr", 0)
             if pr:
-                runtime.exec(name, [
-                    "su", "-", "lean", "-c",
-                    f"cd /home/lean/{short} && git fetch origin pull/{pr}/head:{branch} && git checkout {branch}",
-                ])
+                runtime.exec(
+                    name,
+                    [
+                        "su",
+                        "-",
+                        "lean",
+                        "-c",
+                        f"cd /home/lean/{short}"
+                        f" && git fetch origin pull/{pr}/head:{q_branch}"
+                        f" && git checkout {q_branch}",
+                    ],
+                )
 
     if commit:
+        q_commit = shlex.quote(commit)
         # Verify commit is reachable
         try:
-            runtime.exec(name, [
-                "su", "-", "lean", "-c",
-                f"cd /home/lean/{short} && git merge-base --is-ancestor {commit} HEAD",
-            ])
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "lean",
+                    "-c",
+                    f"cd /home/lean/{short} && git merge-base --is-ancestor {q_commit} HEAD",
+                ],
+            )
         except Exception:
             print(f"Warning: commit {commit[:12]} is not an ancestor of current HEAD")
             # Reset to the exact commit anyway
             try:
-                runtime.exec(name, [
-                    "su", "-", "lean", "-c",
-                    f"cd /home/lean/{short} && git checkout {commit}",
-                ])
+                runtime.exec(
+                    name,
+                    [
+                        "su",
+                        "-",
+                        "lean",
+                        "-c",
+                        f"cd /home/lean/{short} && git checkout {q_commit}",
+                    ],
+                )
             except Exception:
                 print(f"Warning: could not checkout commit {commit[:12]}")
-
-    # Restore Claude Code sessions if available
-    session_dir = SESSIONS_DIR / name
-    if session_dir.exists() and any(session_dir.iterdir()):
-        try:
-            runtime.exec(name, [
-                "su", "-", "lean", "-c",
-                "mkdir -p ~/.claude",
-            ])
-            import subprocess
-            for f in session_dir.iterdir():
-                subprocess.run(
-                    ["incus", "file", "push", str(f),
-                     f"{name}/home/lean/.claude/{f.name}"],
-                    check=True, capture_output=True,
-                )
-        except Exception as e:
-            print(f"Warning: could not restore Claude sessions: {e}")
 
     # Start SSH
     runtime.exec(name, ["bash", "-c", "service ssh start || /usr/sbin/sshd"])

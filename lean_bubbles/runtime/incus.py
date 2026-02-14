@@ -2,7 +2,6 @@
 
 import json
 import subprocess
-from typing import Optional
 
 from .base import ContainerInfo, ContainerRuntime
 
@@ -119,9 +118,7 @@ class IncusRuntime(ContainerRuntime):
             args.append(f"{k}={v}")
         self._run(args)
 
-    def add_disk(
-        self, name: str, device_name: str, source: str, path: str, readonly: bool = False
-    ):
+    def add_disk(self, name: str, device_name: str, source: str, path: str, readonly: bool = False):
         props = {"source": source, "path": path}
         if readonly:
             props["readonly"] = "true"

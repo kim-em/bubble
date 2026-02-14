@@ -3,40 +3,50 @@
 Restricts container network access to only allowed domains.
 Uses iptables rules inside the container since Incus network ACLs
 may not be available in all configurations (e.g., through Colima).
+
+Security notes:
+- Rules are applied by incus exec (as root), not by the lean user
+- The lean user has no sudo, so cannot modify iptables rules
+- IPv6 is blocked entirely via ip6tables
+- DNS is restricted to the container's configured resolver only
+- Outbound SSH is NOT allowed (VSCode uses incus exec ProxyCommand)
 """
 
-import subprocess
+import re
 
 from .runtime.base import ContainerRuntime
+
+# Valid domain pattern for allowlist entries
+_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9.*-]+$")
 
 
 def apply_allowlist(runtime: ContainerRuntime, container: str, domains: list[str]):
     """Apply network allowlist to a container using iptables.
 
     Resolves domain names to IPs and creates iptables rules that only
-    allow outbound connections to those IPs. DNS (port 53) is always allowed.
+    allow outbound connections to those IPs.
     """
-    # Install iptables if not present
-    try:
-        runtime.exec(container, ["which", "iptables"])
-    except Exception:
-        runtime.exec(container, [
-            "bash", "-c",
-            "apt-get update -qq && apt-get install -y -qq iptables < /dev/null",
-        ])
+    # Validate domains to prevent shell injection
+    for domain in domains:
+        if not _DOMAIN_RE.match(domain):
+            raise ValueError(f"Invalid domain in allowlist: {domain!r}")
 
     # Build the allowlist script
-    # We resolve domains and allow their IPs, plus always allow DNS and localhost
     script = _build_allowlist_script(domains)
     runtime.exec(container, ["bash", "-c", script])
 
 
 def remove_allowlist(runtime: ContainerRuntime, container: str):
     """Remove network restrictions from a container."""
-    runtime.exec(container, [
-        "bash", "-c",
-        "iptables -F OUTPUT 2>/dev/null; iptables -P OUTPUT ACCEPT 2>/dev/null; true",
-    ])
+    runtime.exec(
+        container,
+        [
+            "bash",
+            "-c",
+            "iptables -F OUTPUT 2>/dev/null; iptables -P OUTPUT ACCEPT 2>/dev/null; "
+            "ip6tables -F OUTPUT 2>/dev/null; ip6tables -P OUTPUT ACCEPT 2>/dev/null; true",
+        ],
+    )
 
 
 def _build_allowlist_script(domains: list[str]) -> str:
@@ -45,6 +55,12 @@ def _build_allowlist_script(domains: list[str]) -> str:
         "#!/bin/bash",
         "set -e",
         "",
+        "# --- IPv6: block entirely ---",
+        "ip6tables -F OUTPUT 2>/dev/null || true",
+        "ip6tables -A OUTPUT -o lo -j ACCEPT",
+        "ip6tables -P OUTPUT DROP",
+        "",
+        "# --- IPv4 ---",
         "# Flush existing OUTPUT rules",
         "iptables -F OUTPUT 2>/dev/null || true",
         "",
@@ -54,31 +70,35 @@ def _build_allowlist_script(domains: list[str]) -> str:
         "# Allow established connections",
         "iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT",
         "",
-        "# Allow DNS (needed to resolve allowed domains)",
-        "iptables -A OUTPUT -p udp --dport 53 -j ACCEPT",
-        "iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT",
+        "# Allow DNS only to container's configured resolver",
+        "RESOLVER=$(grep -m1 nameserver /etc/resolv.conf | awk '{print $2}')",
+        'if [ -n "$RESOLVER" ]; then',
+        "  iptables -A OUTPUT -d $RESOLVER -p udp --dport 53 -j ACCEPT",
+        "  iptables -A OUTPUT -d $RESOLVER -p tcp --dport 53 -j ACCEPT",
+        "fi",
         "",
-        "# Allow SSH (for VSCode Remote SSH)",
-        "iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT",
-        "iptables -A OUTPUT -p tcp --sport 22 -j ACCEPT",
-        "",
-        "# Resolve and allow each domain",
+        "# Resolve and allow each domain (IPv4 only)",
     ]
 
     for domain in domains:
-        # Handle wildcard domains (*.example.com → just resolve example.com)
+        # Handle wildcard domains (*.example.com -> resolve example.com)
         resolve_domain = domain.lstrip("*.")
-        lines.append(f"for ip in $(getent ahosts {resolve_domain} 2>/dev/null | awk '{{print $1}}' | sort -u); do")
-        lines.append(f"  iptables -A OUTPUT -d $ip -j ACCEPT")
+        lines.append(
+            f"for ip in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
+            f"| awk '{{print $1}}' | sort -u); do"
+        )
+        lines.append("  iptables -A OUTPUT -d $ip -j ACCEPT")
         lines.append("done")
 
-    lines.extend([
-        "",
-        "# Default: drop everything else",
-        "iptables -P OUTPUT DROP",
-        "",
-        "echo 'Network allowlist applied.'",
-    ])
+    lines.extend(
+        [
+            "",
+            "# Default: drop everything else",
+            "iptables -P OUTPUT DROP",
+            "",
+            "echo 'Network allowlist applied.'",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -86,10 +106,14 @@ def _build_allowlist_script(domains: list[str]) -> str:
 def check_allowlist_active(runtime: ContainerRuntime, container: str) -> bool:
     """Check if network allowlisting is active on a container."""
     try:
-        output = runtime.exec(container, [
-            "bash", "-c",
-            "iptables -L OUTPUT -n 2>/dev/null | grep -c DROP || echo 0",
-        ])
+        output = runtime.exec(
+            container,
+            [
+                "bash",
+                "-c",
+                "iptables -L OUTPUT -n 2>/dev/null | grep -c DROP || echo 0",
+            ],
+        )
         return int(output.strip()) > 0
     except Exception:
         return False

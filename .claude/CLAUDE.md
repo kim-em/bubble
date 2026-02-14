@@ -18,7 +18,6 @@ lean_bubbles/
 ├── lake_cache.py       # Shared .lake cache volume, keyed by repo+toolchain
 ├── lifecycle.py        # Archive/reconstitute, registry tracking
 ├── wrap.py             # `bubble wrap .` — move local working dir into a bubble
-├── pr_metadata.py      # PR description HTML comment injection/parsing via `gh`
 ├── network.py          # Network allowlisting via iptables inside containers
 ├── vscode.py           # SSH config generation + `code --remote` launching
 ├── runtime/
@@ -32,9 +31,6 @@ lean_bubbles/
 │       ├── lean-mathlib.sh
 │       ├── lean-batteries.sh
 │       └── lean-lean4.sh
-└── extensions/         # Optional features
-    ├── claude.py       # .jsonl extraction/injection, session persistence
-    └── zulip.py        # Sandboxed Zulip access (read as user, write as AI)
 ```
 
 ## Key Design Decisions
@@ -61,17 +57,13 @@ created → running ⇄ paused → archived → (reconstituted → running)
              └→ destroyed
 ```
 
-Archive checks git sync state (uncommitted changes, unpushed commits), extracts Claude sessions, saves metadata to `~/.lean-bubbles/registry.json`, then destroys the container. Reconstitute recreates from base image + saved state.
+Archive checks git sync state (uncommitted changes, unpushed commits), saves metadata to `~/.lean-bubbles/registry.json`, then destroys the container. Reconstitute recreates from base image + saved state.
 
 ### Network Allowlisting
-Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. DNS is always allowed. Configurable domain list in config.toml.
+Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Configurable domain list in config.toml.
 
-### PR Metadata
-Session state is stored as an invisible HTML comment in PR descriptions:
-```html
-<!-- lean-bubbles: {"session_id":"...","branch":"...","commit":"..."} -->
-```
-This allows `bubble resume <PR-URL>` to reconstitute a session on any machine.
+### Security Model
+The `lean` user has no sudo and a locked password. Network allowlisting is applied on all container creation paths (new, resume, wrap). SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Tar extraction from containers uses safe validation. Each container mounts only its specific bare repo, not the entire git store.
 
 ## How to Add a New Command
 
@@ -92,7 +84,6 @@ This allows `bubble resume <PR-URL>` to reconstitute a session on any machine.
 - `~/.lean-bubbles/git/` — bare repo mirrors
 - `~/.lean-bubbles/lake-cache/` — shared .lake caches (keyed by repo+toolchain)
 - `~/.lean-bubbles/registry.json` — bubble state tracking (active + archived)
-- `~/.lean-bubbles/sessions/` — archived Claude .jsonl files
 - `~/.ssh/config.d/lean-bubbles` — auto-managed SSH config
 
 ## Automation

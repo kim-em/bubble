@@ -3,21 +3,22 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-# Install system packages
+# Install system packages (including iptables for network allowlisting)
 apt-get update -qq
 apt-get install -y -qq \
     git curl build-essential openssh-server \
-    ca-certificates sudo netcat-openbsd < /dev/null
+    ca-certificates netcat-openbsd iptables < /dev/null
 
-# Create lean user
+# Create lean user (no sudo, no password)
 useradd -m -s /bin/bash lean
-echo "lean ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/lean
+passwd -l lean
 
-# Configure SSH
+# Configure SSH (key-based auth only)
 mkdir -p /run/sshd
-sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-# Set a known password for initial SSH access (user should add keys)
-echo "lean:lean" | chpasswd
+sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/#PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
 
 # Enable SSH to start on boot
 systemctl enable ssh 2>/dev/null || true

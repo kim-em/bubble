@@ -2,9 +2,10 @@
 
 import json
 import platform
-import shutil
+import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -12,7 +13,6 @@ import click
 
 from . import __version__
 from .config import (
-    GIT_DIR,
     ensure_dirs,
     load_config,
     repo_short_name,
@@ -84,21 +84,62 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
         if key_path.exists():
             pub_keys.append(key_path.read_text().strip())
     if pub_keys:
-        keys_str = "\\n".join(pub_keys)
-        runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '{keys_str}' > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys",
-        ])
+        # Write keys to temp file and push via incus file push (avoids shell injection)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".keys", delete=False) as f:
+            f.write("\n".join(pub_keys) + "\n")
+            tmp_keys = f.name
+        try:
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "lean",
+                    "-c",
+                    "mkdir -p ~/.ssh && chmod 700 ~/.ssh",
+                ],
+            )
+            subprocess.run(
+                ["incus", "file", "push", tmp_keys, f"{name}/home/lean/.ssh/authorized_keys"],
+                check=True,
+                capture_output=True,
+            )
+            runtime.exec(
+                name,
+                [
+                    "bash",
+                    "-c",
+                    "chown lean:lean /home/lean/.ssh/authorized_keys"
+                    " && chmod 600 /home/lean/.ssh/authorized_keys",
+                ],
+            )
+        finally:
+            Path(tmp_keys).unlink(missing_ok=True)
 
     add_ssh_config(name)
+
+
+def _apply_network(runtime: ContainerRuntime, name: str, config: dict):
+    """Apply network allowlist to a container if configured."""
+    domains = config.get("network", {}).get("allowlist", [])
+    if domains:
+        try:
+            from .network import apply_allowlist
+
+            apply_allowlist(runtime, name, domains)
+            click.echo("  Network allowlist applied.")
+        except Exception as e:
+            click.echo(f"  Warning: could not apply network allowlist: {e}")
 
 
 def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
     """Detect the project directory inside a container."""
     try:
-        return runtime.exec(name, [
-            "bash", "-c", "ls -d /home/lean/*/ 2>/dev/null | head -1"
-        ]).strip().rstrip("/")
+        return (
+            runtime.exec(name, ["bash", "-c", "ls -d /home/lean/*/ 2>/dev/null | head -1"])
+            .strip()
+            .rstrip("/")
+        )
     except Exception:
         return "/home/lean"
 
@@ -106,6 +147,7 @@ def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 @click.group()
 @click.version_option(__version__)
@@ -116,6 +158,7 @@ def main():
 # ---------------------------------------------------------------------------
 # init
 # ---------------------------------------------------------------------------
+
 
 @main.command()
 def init():
@@ -140,6 +183,7 @@ def init():
     if not runtime.image_exists("lean-base"):
         click.echo("Building lean-base image...")
         from .images.builder import build_lean_base
+
         build_lean_base(runtime)
     else:
         click.echo("  lean-base image already exists.")
@@ -155,11 +199,13 @@ def init():
             ensure_repo(repo)
 
     # Offer to install automation
-    from .automation import is_automation_installed, install_automation
+    from .automation import install_automation, is_automation_installed
+
     status = is_automation_installed()
     if not any(status.values()):
-        if click.confirm("Install automation (hourly git update, weekly image refresh)?",
-                         default=True):
+        if click.confirm(
+            "Install automation (hourly git update, weekly image refresh)?", default=True
+        ):
             installed = install_automation()
             for item in installed:
                 click.echo(f"  Installed: {item}")
@@ -173,6 +219,7 @@ def init():
 # ---------------------------------------------------------------------------
 # new
 # ---------------------------------------------------------------------------
+
 
 @main.command("new")
 @click.argument("repo")
@@ -210,6 +257,7 @@ def new_bubble(repo, pr, branch, name, no_attach, network):
     if not runtime.image_exists("lean-base"):
         click.echo("Building lean-base image first...")
         from .images.builder import build_lean_base
+
         build_lean_base(runtime)
 
     # Launch container
@@ -227,52 +275,69 @@ def new_bubble(repo, pr, branch, name, no_attach, network):
         except Exception:
             time.sleep(1)
 
-    # Mount shared git store
-    if GIT_DIR.exists():
-        runtime.add_disk(name, "shared-git", str(GIT_DIR), "/shared/git", readonly=True)
-
-    # Ensure bare repo exists for this project
+    # Mount only the needed bare repo (not the entire git store)
     bare_path = ensure_repo(org_repo)
+    if bare_path.exists():
+        runtime.add_disk(
+            name, "shared-git", str(bare_path), f"/shared/git/{bare_path.name}", readonly=True
+        )
 
     # Clone the repo inside the container using --reference
     url = github_url(org_repo)
     click.echo(f"Cloning {org_repo} (using shared objects)...")
-    runtime.exec(name, [
-        "su", "-", "lean", "-c",
-        f"git clone --reference /shared/git/{bare_path.name} {url} /home/lean/{short}",
-    ])
+    runtime.exec(
+        name,
+        [
+            "su",
+            "-",
+            "lean",
+            "-c",
+            f"git clone --reference /shared/git/{bare_path.name} {url} /home/lean/{short}",
+        ],
+    )
 
     # Checkout PR or branch
     checkout_branch = ""
     if pr:
         click.echo(f"Checking out PR #{pr}...")
         checkout_branch = f"pr-{pr}"
-        runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"cd /home/lean/{short} && git fetch origin pull/{pr}/head:pr-{pr} && git checkout pr-{pr}",
-        ])
+        q_branch = shlex.quote(checkout_branch)
+        runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "lean",
+                "-c",
+                f"cd /home/lean/{short} && git fetch origin pull/{pr}/head:{q_branch}"
+                f" && git checkout {q_branch}",
+            ],
+        )
     elif branch:
         click.echo(f"Checking out branch '{branch}'...")
         checkout_branch = branch
-        runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"cd /home/lean/{short} && git checkout {branch}",
-        ])
+        q_branch = shlex.quote(branch)
+        runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "lean",
+                "-c",
+                f"cd /home/lean/{short} && git checkout {q_branch}",
+            ],
+        )
 
     # Inject .lake cache if available
     from .lake_cache import inject_cache_into_container
+
     project_dir = f"/home/lean/{short}"
     if inject_cache_into_container(runtime, name, project_dir, short):
         click.echo("  Injected cached .lake artifacts.")
 
     # Apply network allowlist
-    if network and config.get("network", {}).get("allowlist"):
-        try:
-            from .network import apply_allowlist
-            apply_allowlist(runtime, name, config["network"]["allowlist"])
-            click.echo("  Network allowlist applied.")
-        except Exception as e:
-            click.echo(f"  Warning: could not apply network allowlist: {e}")
+    if network:
+        _apply_network(runtime, name, config)
 
     # Set up SSH access
     click.echo("Setting up SSH access...")
@@ -280,12 +345,19 @@ def new_bubble(repo, pr, branch, name, no_attach, network):
 
     # Register in lifecycle
     from .lifecycle import register_bubble
+
     commit = ""
     try:
-        commit = runtime.exec(name, [
-            "su", "-", "lean", "-c",
-            f"cd /home/lean/{short} && git rev-parse HEAD",
-        ]).strip()
+        commit = runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "lean",
+                "-c",
+                f"cd /home/lean/{short} && git rev-parse HEAD",
+            ],
+        ).strip()
     except Exception:
         pass
     register_bubble(name, org_repo, branch=checkout_branch, commit=commit, pr=pr or 0)
@@ -303,6 +375,7 @@ def new_bubble(repo, pr, branch, name, no_attach, network):
 # list
 # ---------------------------------------------------------------------------
 
+
 @main.command("list")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.option("--archived", is_flag=True, help="Include archived bubbles")
@@ -315,6 +388,7 @@ def list_bubbles(as_json, archived):
 
     # Merge with archived info from registry
     from .lifecycle import _load_registry
+
     registry = _load_registry()
     archived_bubbles = []
     if archived:
@@ -351,6 +425,7 @@ def list_bubbles(as_json, archived):
 # attach / shell
 # ---------------------------------------------------------------------------
 
+
 @main.command()
 @click.argument("name")
 def attach(name):
@@ -377,6 +452,7 @@ def shell(name):
 # ---------------------------------------------------------------------------
 # pause / destroy
 # ---------------------------------------------------------------------------
+
 
 @main.command()
 @click.argument("name")
@@ -408,10 +484,13 @@ def destroy(name, force):
 # wrap
 # ---------------------------------------------------------------------------
 
+
 @main.command("wrap")
 @click.argument("directory", default=".", type=click.Path(exists=True))
 @click.option("--pr", type=int, help="Associate with a PR number")
-@click.option("--copy", "copy_mode", is_flag=True, help="Copy instead of move (leave local unchanged)")
+@click.option(
+    "--copy", "copy_mode", is_flag=True, help="Copy instead of move (leave local unchanged)"
+)
 @click.option("--name", type=str, help="Custom container name")
 @click.option("--no-attach", is_flag=True, help="Don't open VSCode after wrapping")
 def wrap_cmd(directory, pr, copy_mode, name, no_attach):
@@ -433,10 +512,15 @@ def wrap_cmd(directory, pr, copy_mode, name, no_attach):
             click.echo("  (will stash uncommitted changes locally)")
 
     bubble_name = wrap_directory(
-        runtime, directory, config,
-        pr=pr or 0, copy_mode=copy_mode, custom_name=name or "",
+        runtime,
+        directory,
+        config,
+        pr=pr or 0,
+        copy_mode=copy_mode,
+        custom_name=name or "",
     )
 
+    _apply_network(runtime, bubble_name, config)
     add_ssh_config(bubble_name)
     click.echo(f"Bubble '{bubble_name}' created from local directory.")
     click.echo(f"  SSH: ssh bubble-{bubble_name}")
@@ -451,6 +535,7 @@ def wrap_cmd(directory, pr, copy_mode, name, no_attach):
 # archive / resume
 # ---------------------------------------------------------------------------
 
+
 @main.command()
 @click.argument("name")
 @click.option("--force", is_flag=True, help="Archive even if git is not fully synced")
@@ -463,7 +548,8 @@ def archive(name, force):
     project_dir = _detect_project_dir(runtime, name)
 
     # Check git sync state
-    from .lifecycle import check_git_synced, archive_bubble
+    from .lifecycle import archive_bubble, check_git_synced
+
     synced, reason = check_git_synced(runtime, name, project_dir)
     if not synced and not force:
         click.echo(f"Cannot archive: {reason}", err=True)
@@ -471,14 +557,6 @@ def archive(name, force):
         sys.exit(1)
     elif not synced:
         click.echo(f"Warning: {reason}")
-
-    # Extract Claude sessions before archiving
-    ext_config = config.get("extensions", {}).get("claude", {})
-    if ext_config.get("enabled"):
-        from .extensions.claude import extract_sessions
-        session_dir = extract_sessions(runtime, name, name)
-        if session_dir:
-            click.echo(f"  Claude sessions saved to {session_dir}")
 
     state = archive_bubble(runtime, name, project_dir)
     remove_ssh_config(name)
@@ -491,54 +569,24 @@ def archive(name, force):
 
 
 @main.command()
-@click.argument("name_or_url")
+@click.argument("name")
 @click.option("--no-attach", is_flag=True, help="Don't open VSCode after resuming")
-def resume(name_or_url, no_attach):
-    """Resume an archived bubble or reconstitute from a PR URL."""
+def resume(name, no_attach):
+    """Resume an archived bubble from the local registry."""
     config = load_config()
     ensure_platform(config)
     runtime = get_runtime(config)
 
-    state = None
-    name = name_or_url
+    # Look up from local registry
+    from .lifecycle import get_bubble_info
 
-    # Check if it's a PR URL
-    if name_or_url.startswith("http") or "#" in name_or_url:
-        from .pr_metadata import extract_metadata, parse_pr_url
-        try:
-            org_repo, pr_num = parse_pr_url(name_or_url)
-            click.echo(f"Looking up PR metadata for {org_repo}#{pr_num}...")
-            state = extract_metadata(name_or_url)
-            if not state:
-                click.echo("No lean-bubbles metadata found in PR description.", err=True)
-                click.echo("Creating fresh bubble from PR instead...")
-                # Fall back to creating a new bubble
-                short = repo_short_name(org_repo)
-                name = generate_name(short, "pr", str(pr_num))
-                state = {
-                    "org_repo": org_repo,
-                    "pr": pr_num,
-                    "branch": f"pr-{pr_num}",
-                    "base_image": "lean-base",
-                }
-            else:
-                name = generate_name(
-                    repo_short_name(state.get("org_repo", "")),
-                    "pr", str(state.get("pr", pr_num)),
-                )
-        except ValueError as e:
-            click.echo(f"Error parsing URL: {e}", err=True)
-            sys.exit(1)
-    else:
-        # Look up from local registry
-        from .lifecycle import get_bubble_info
-        state = get_bubble_info(name)
-        if not state:
-            click.echo(f"No archived bubble '{name}' found.", err=True)
-            sys.exit(1)
-        if state.get("state") != "archived":
-            click.echo(f"Bubble '{name}' is not archived (state: {state.get('state')}).", err=True)
-            sys.exit(1)
+    state = get_bubble_info(name)
+    if not state:
+        click.echo(f"No archived bubble '{name}' found.", err=True)
+        sys.exit(1)
+    if state.get("state") != "archived":
+        click.echo(f"Bubble '{name}' is not archived (state: {state.get('state')}).", err=True)
+        sys.exit(1)
 
     # Deduplicate name
     existing = {c.name for c in runtime.list_containers()}
@@ -546,15 +594,10 @@ def resume(name_or_url, no_attach):
 
     click.echo(f"Reconstituting bubble '{name}'...")
     from .lifecycle import reconstitute_bubble
+
     reconstitute_bubble(runtime, name, state)
 
-    # Inject Claude sessions
-    ext_config = config.get("extensions", {}).get("claude", {})
-    if ext_config.get("enabled"):
-        from .extensions.claude import inject_sessions
-        if inject_sessions(runtime, name, name):
-            click.echo("  Claude sessions restored.")
-
+    _apply_network(runtime, name, config)
     _setup_ssh(runtime, name)
 
     short = repo_short_name(state.get("org_repo", ""))
@@ -567,38 +610,9 @@ def resume(name_or_url, no_attach):
 
 
 # ---------------------------------------------------------------------------
-# claude
-# ---------------------------------------------------------------------------
-
-@main.command()
-@click.argument("name")
-def claude(name):
-    """Start or resume Claude Code inside a bubble."""
-    config = load_config()
-    runtime = get_runtime(config)
-    _ensure_running(runtime, name)
-
-    project_dir = _detect_project_dir(runtime, name)
-    ext_config = config.get("extensions", {}).get("claude", {})
-
-    # Check if there's a saved session to resume
-    from .extensions.claude import find_session_id, start_claude_in_container
-    session_id = find_session_id(name)
-    if session_id:
-        click.echo(f"Resuming Claude session {session_id[:12]}...")
-    else:
-        click.echo("Starting new Claude session...")
-
-    start_claude_in_container(
-        runtime, name, project_dir,
-        session_id=session_id,
-        unset_api_key=ext_config.get("unset_api_key", True),
-    )
-
-
-# ---------------------------------------------------------------------------
 # images
 # ---------------------------------------------------------------------------
+
 
 @main.group("images")
 def images_group():
@@ -611,7 +625,9 @@ def images_list():
     try:
         output = subprocess.run(
             ["incus", "image", "list", "--format=json"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         images = json.loads(output.stdout)
         if not images:
@@ -637,6 +653,7 @@ def images_build(image_name):
     runtime = get_runtime(config)
 
     from .images.builder import build_image
+
     try:
         build_image(runtime, image_name)
     except ValueError as e:
@@ -647,6 +664,7 @@ def images_build(image_name):
 # ---------------------------------------------------------------------------
 # git
 # ---------------------------------------------------------------------------
+
 
 @main.group("git")
 def git_group():
@@ -664,6 +682,7 @@ def git_update():
 # ---------------------------------------------------------------------------
 # network
 # ---------------------------------------------------------------------------
+
 
 @main.group("network")
 def network_group():
@@ -684,6 +703,7 @@ def network_apply(name):
         sys.exit(1)
 
     from .network import apply_allowlist
+
     apply_allowlist(runtime, name, domains)
     click.echo(f"Network allowlist applied to '{name}' ({len(domains)} domains).")
 
@@ -697,6 +717,7 @@ def network_remove(name):
     _ensure_running(runtime, name)
 
     from .network import remove_allowlist
+
     remove_allowlist(runtime, name)
     click.echo(f"Network restrictions removed from '{name}'.")
 
@@ -704,6 +725,7 @@ def network_remove(name):
 # ---------------------------------------------------------------------------
 # automation
 # ---------------------------------------------------------------------------
+
 
 @main.group("automation")
 def automation_group():
@@ -714,6 +736,7 @@ def automation_group():
 def automation_install():
     """Install automation jobs (launchd on macOS, systemd on Linux)."""
     from .automation import install_automation
+
     installed = install_automation()
     if installed:
         for item in installed:
@@ -727,6 +750,7 @@ def automation_install():
 def automation_remove():
     """Remove all automation jobs."""
     from .automation import remove_automation
+
     removed = remove_automation()
     if removed:
         for item in removed:
@@ -740,6 +764,7 @@ def automation_remove():
 def automation_status():
     """Show automation status."""
     from .automation import is_automation_installed
+
     status = is_automation_installed()
     if not status:
         click.echo("Automation not supported on this platform.")
@@ -747,26 +772,6 @@ def automation_status():
     for job, installed in status.items():
         state = "installed" if installed else "not installed"
         click.echo(f"  {job}: {state}")
-
-
-# ---------------------------------------------------------------------------
-# claude-skill
-# ---------------------------------------------------------------------------
-
-@main.command("claude-skill")
-def install_claude_skill():
-    """Install the lean-bubbles Claude Code skill."""
-    skill_src = Path(__file__).parent.parent / "claude-skill" / "SKILL.md"
-    skill_dst = Path.home() / ".claude" / "skills" / "lean-bubbles"
-
-    if not skill_src.exists():
-        click.echo("Error: skill file not found in package.", err=True)
-        sys.exit(1)
-
-    skill_dst.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(skill_src, skill_dst / "SKILL.md")
-    click.echo(f"Claude Code skill installed to {skill_dst}/SKILL.md")
-    click.echo("Claude will now know how to use bubble commands in your sessions.")
 
 
 if __name__ == "__main__":

@@ -7,8 +7,7 @@ Containerized development environments for Lean 4 and Mathlib, powered by [Incus
 - **Safety**: Run untrusted PRs in isolated containers with network allowlisting
 - **Convenience**: Spin up 5-10+ concurrent development sessions without managing multiple clones
 - **Speed**: Shared git objects and build caches mean new bubbles start in seconds, not minutes
-- **Persistence**: Archive a session, come back to it later from any machine via a PR URL
-- **Claude Code**: Session persistence across archive/reconstitute cycles
+- **Persistence**: Archive a session, come back to it later from the local registry
 
 ## Quick Start
 
@@ -33,9 +32,8 @@ bubble shell mathlib4-pr-12345
 # Archive when done (saves state, destroys container)
 bubble archive mathlib4-pr-12345
 
-# Resume later, even on a different machine
+# Resume later
 bubble resume mathlib4-pr-12345
-bubble resume https://github.com/leanprover-community/mathlib4/pull/12345
 
 # Destroy permanently
 bubble destroy mathlib4-pr-12345
@@ -64,7 +62,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 **Shared build caches**: `.lake` caches are shared across containers with matching toolchains, avoiding redundant `lake exe cache get` downloads.
 
-**Network allowlisting**: Containers can only reach allowed domains (GitHub, Lean releases, Anthropic API, etc.). Configurable in `~/.lean-bubbles/config.toml`.
+**Network allowlisting**: Containers can only reach allowed domains (GitHub, Lean releases). IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked. Configurable in `~/.lean-bubbles/config.toml`.
 
 ## Requirements
 
@@ -84,13 +82,11 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble wrap [dir] [--copy] [--pr N]` | Move/copy local work into a bubble |
 | `bubble pause <name>` | Freeze a bubble |
 | `bubble archive <name>` | Archive (save state, destroy container) |
-| `bubble resume <name\|PR-URL>` | Resume from archive or PR URL |
-| `bubble claude <name>` | Start/resume Claude Code in a bubble |
+| `bubble resume <name>` | Resume from local archive |
 | `bubble destroy <name>` | Delete a bubble permanently |
 | `bubble images list\|build` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
-| `bubble claude-skill` | Install Claude Code skill |
 
 ## Base Images
 
@@ -143,28 +139,26 @@ shared_repos = [
 [network]
 allowlist = [
   "github.com", "*.githubusercontent.com",
+  "objects.githubusercontent.com",
   "releases.lean-lang.org",
-  "api.anthropic.com", "statsig.anthropic.com",
-  "registry.npmjs.org",
 ]
-
-[extensions.claude]
-enabled = false          # Enable Claude Code session persistence
-unset_api_key = true     # Force subscription auth inside containers
-
-[extensions.zulip]
-enabled = false          # Enable sandboxed Zulip access
 ```
 
 ## Performance
 
 On Apple Silicon (M-series) with Apple's Virtualization.Framework, container builds run at essentially native speed. In benchmarks, building batteries takes ~19.7s in a container vs ~18.8s natively.
 
-## Claude Code Integration
+## Security
 
-Run `bubble claude-skill` to install a Claude Code skill that teaches Claude how to use bubble commands during your development sessions.
-
-Use `bubble claude <name>` to start Claude Code inside a container with optional session resume.
+- **No sudo**: The `lean` user has no sudo access and a locked password
+- **Network allowlisting**: iptables rules restrict outbound connections to allowed domains only
+- **IPv6 blocked**: All IPv6 traffic is dropped
+- **DNS restricted**: DNS queries only go to the container's configured resolver
+- **No outbound SSH**: Containers cannot SSH out (VSCode uses `incus exec` ProxyCommand)
+- **SSH key-only auth**: Password authentication is disabled
+- **Safe tar extraction**: Lake cache archives are validated against path traversal before extraction
+- **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
+- **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
 
 ## License
 
