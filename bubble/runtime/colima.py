@@ -59,4 +59,5 @@ def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
         # For now, just ensure it's running. Future: check CPU/memory match.
         return
 
+    print("Starting Colima VM (one-time setup)...")
     start_colima(cpu, memory, disk, vm_type)

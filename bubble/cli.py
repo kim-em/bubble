@@ -150,9 +150,11 @@ def _maybe_install_automation():
     try:
         status = is_automation_installed()
         if status and not any(status.values()):
+            click.echo("Installing automation (hourly git update, weekly image refresh)...")
+            click.echo("  To remove later: bubble automation remove")
             installed = install_automation()
-            if installed:
-                click.echo("  Automation installed (hourly git update, weekly image refresh).")
+            for item in installed:
+                click.echo(f"  {item}")
     except Exception:
         pass
 
@@ -298,10 +300,11 @@ def open_cmd(target, ssh, no_interactive, network, custom_name):
 
     # Step 8: Ensure image exists
     if not runtime.image_exists(image_name):
-        click.echo(f"Building {image_name} image...")
+        click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
         from .images.builder import build_image
 
         build_image(runtime, image_name)
+        click.echo(f"  {image_name} image ready.")
 
     # Deduplicate name
     existing_names = {c.name for c in runtime.list_containers()}
@@ -475,7 +478,7 @@ def _reattach(runtime: ContainerRuntime, name: str, ssh: bool, no_interactive: b
 def list_bubbles(as_json):
     """List all bubbles."""
     config = load_config()
-    runtime = get_runtime(config)
+    runtime = get_runtime(config, ensure_ready=False)
 
     containers = runtime.list_containers()
 
@@ -504,7 +507,7 @@ def list_bubbles(as_json):
 def pause(name):
     """Pause (freeze) a bubble."""
     config = load_config()
-    runtime = get_runtime(config)
+    runtime = get_runtime(config, ensure_ready=False)
     runtime.freeze(name)
     click.echo(f"Bubble '{name}' paused.")
 
@@ -515,7 +518,7 @@ def pause(name):
 def destroy(name, force):
     """Destroy a bubble permanently."""
     config = load_config()
-    runtime = get_runtime(config)
+    runtime = get_runtime(config, ensure_ready=False)
 
     if not force:
         click.confirm(f"Permanently destroy bubble '{name}'?", abort=True)
@@ -609,7 +612,7 @@ def network_group():
 def network_apply(name):
     """Apply network allowlist to a bubble."""
     config = load_config()
-    runtime = get_runtime(config)
+    runtime = get_runtime(config, ensure_ready=False)
     _ensure_running(runtime, name)
 
     domains = config.get("network", {}).get("allowlist", [])
@@ -628,7 +631,7 @@ def network_apply(name):
 def network_remove(name):
     """Remove network restrictions from a bubble."""
     config = load_config()
-    runtime = get_runtime(config)
+    runtime = get_runtime(config, ensure_ready=False)
     _ensure_running(runtime, name)
 
     from .network import remove_allowlist
