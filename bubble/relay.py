@@ -155,7 +155,9 @@ class RateLimiter:
 
             # Evict oldest container if too many tracked
             if container not in self._requests and len(self._requests) >= MAX_TRACKED_CONTAINERS:
-                oldest_key = min(self._requests, key=lambda k: self._requests[k][-1] if self._requests[k] else 0)
+                oldest_key = min(
+                    self._requests, key=lambda k: self._requests[k][-1] if self._requests[k] else 0
+                )
                 del self._requests[oldest_key]
 
             q = self._requests.setdefault(container, deque())
@@ -216,8 +218,7 @@ def validate_relay_target(target: str) -> tuple[str, str]:
     # Check that the repo is already known (cloned in ~/.bubble/git/)
     if not repo_is_known(t.org_repo):
         return "unknown_repo", (
-            f"Repo '{t.org_repo}' is not available. "
-            "Open it outside of a bubble first."
+            f"Repo '{t.org_repo}' is not available. Open it outside of a bubble first."
         )
 
     return "ok", ""
@@ -227,16 +228,17 @@ def _setup_logging():
     """Configure relay request logging to ~/.bubble/relay.log."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(str(RELAY_LOG))
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    ))
+    handler.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
 
-def _handle_connection(conn: socket.socket, rate_limiter: RateLimiter,
-                       token_registry: TokenRegistry | None = None,
-                       runtime_factory=None):
+def _handle_connection(
+    conn: socket.socket,
+    rate_limiter: RateLimiter,
+    token_registry: TokenRegistry | None = None,
+    runtime_factory=None,
+):
     """Handle a single relay connection."""
     try:
         conn.settimeout(5.0)
@@ -261,14 +263,18 @@ def _handle_connection(conn: socket.socket, rate_limiter: RateLimiter,
             container = token_registry.lookup(str(token)[:128]) or ""
             if not container:
                 _send_response(conn, "error", "Invalid relay token.")
-                logger.info("REJECT  invalid_token  target=%s",
-                             _sanitize_for_log(str(target)[:MAX_TARGET_LENGTH]))
+                logger.info(
+                    "REJECT  invalid_token  target=%s",
+                    _sanitize_for_log(str(target)[:MAX_TARGET_LENGTH]),
+                )
                 return
         elif token_registry:
             # Token registry is active but no token provided
             _send_response(conn, "error", "Relay token required.")
-            logger.info("REJECT  missing_token  target=%s",
-                         _sanitize_for_log(str(target)[:MAX_TARGET_LENGTH]))
+            logger.info(
+                "REJECT  missing_token  target=%s",
+                _sanitize_for_log(str(target)[:MAX_TARGET_LENGTH]),
+            )
             return
 
         # Sanitize for logging
@@ -285,8 +291,13 @@ def _handle_connection(conn: socket.socket, rate_limiter: RateLimiter,
         status, message = validate_relay_target(target)
         if status != "ok":
             _send_response(conn, status, message)
-            logger.info("REJECT  %s  container=%s  target=%s  %s",
-                         status, log_container, log_target, message)
+            logger.info(
+                "REJECT  %s  container=%s  target=%s  %s",
+                status,
+                log_container,
+                log_target,
+                message,
+            )
             return
 
         # Success — open the bubble
@@ -331,6 +342,7 @@ def _open_bubble(target: str, runtime_factory):
     cloning repos that don't exist in the git store (TOCTOU protection).
     """
     import subprocess
+
     subprocess.Popen(
         ["bubble", "open", "--no-clone", target],
         stdout=subprocess.DEVNULL,
@@ -363,8 +375,7 @@ def run_daemon(runtime_factory=None):
     try:
         while True:
             conn, _ = server.accept()
-            executor.submit(_handle_connection, conn, rate_limiter,
-                            token_registry, runtime_factory)
+            executor.submit(_handle_connection, conn, rate_limiter, token_registry, runtime_factory)
     except KeyboardInterrupt:
         logger.info("Relay daemon stopped")
     finally:

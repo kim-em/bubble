@@ -5,26 +5,17 @@ import socket
 import threading
 import time
 
-import pytest
-
 from bubble.relay import (
     GLOBAL_RATE_LIMIT_PER_HOUR,
-    MAX_REQUEST_SIZE,
     MAX_TARGET_LENGTH,
     MAX_TRACKED_CONTAINERS,
-    RELAY_TOKENS,
     RateLimiter,
     TokenRegistry,
     _handle_connection,
-    _load_tokens,
     _sanitize_for_log,
-    _save_tokens,
     _send_response,
-    generate_relay_token,
-    remove_relay_token,
     validate_relay_target,
 )
-
 
 # ---------------------------------------------------------------------------
 # RateLimiter
@@ -223,59 +214,35 @@ class TestValidateRelayTarget:
         status, msg = validate_relay_target("owner/..")
         assert status == "error"
 
-    def test_unknown_repo(self, tmp_path, monkeypatch):
-        # Point BUBBLE_HOME to a temp dir so no repos are "known"
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        # Re-import to pick up new DATA_DIR
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
-        import bubble.git_store
-        importlib.reload(bubble.git_store)
+    def test_unknown_repo(self, relay_env):
         import bubble.relay
-        importlib.reload(bubble.relay)
 
         status, msg = bubble.relay.validate_relay_target("leanprover/lean4")
         assert status == "unknown_repo"
         assert "not available" in msg.lower()
 
-    def test_known_repo(self, tmp_path, monkeypatch):
-        # Set up a fake known repo
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
-        import bubble.git_store
-        importlib.reload(bubble.git_store)
+    def test_known_repo(self, relay_env):
         import bubble.relay
-        importlib.reload(bubble.relay)
 
         # Create fake bare repo directory
-        git_dir = tmp_path / "git"
+        git_dir = relay_env / "git"
         git_dir.mkdir()
         (git_dir / "lean4.git").mkdir()
 
         # Also need a repos.json for the registry
-        repos_file = tmp_path / "repos.json"
+        repos_file = relay_env / "repos.json"
         repos_file.write_text("{}")
 
         status, msg = bubble.relay.validate_relay_target("leanprover/lean4")
         assert status == "ok"
 
-    def test_valid_pr_target(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
-        import bubble.git_store
-        importlib.reload(bubble.git_store)
+    def test_valid_pr_target(self, relay_env):
         import bubble.relay
-        importlib.reload(bubble.relay)
 
-        git_dir = tmp_path / "git"
+        git_dir = relay_env / "git"
         git_dir.mkdir()
         (git_dir / "lean4.git").mkdir()
-        repos_file = tmp_path / "repos.json"
+        repos_file = relay_env / "repos.json"
         repos_file.write_text("{}")
 
         status, msg = bubble.relay.validate_relay_target("leanprover/lean4/pull/123")
@@ -411,26 +378,16 @@ class TestSanitizeForLog:
 
 
 class TestTokenManagement:
-    def test_generate_token(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
+    def test_generate_token(self, relay_env):
         import bubble.relay
-        importlib.reload(bubble.relay)
 
         token = bubble.relay.generate_relay_token("my-container")
         assert len(token) == 64  # 32 bytes hex = 64 chars
         tokens = bubble.relay._load_tokens()
         assert tokens[token] == "my-container"
 
-    def test_generate_multiple_tokens(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
+    def test_generate_multiple_tokens(self, relay_env):
         import bubble.relay
-        importlib.reload(bubble.relay)
 
         t1 = bubble.relay.generate_relay_token("container-1")
         t2 = bubble.relay.generate_relay_token("container-2")
@@ -439,13 +396,8 @@ class TestTokenManagement:
         assert tokens[t1] == "container-1"
         assert tokens[t2] == "container-2"
 
-    def test_remove_token(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
+    def test_remove_token(self, relay_env):
         import bubble.relay
-        importlib.reload(bubble.relay)
 
         t1 = bubble.relay.generate_relay_token("keep-me")
         t2 = bubble.relay.generate_relay_token("remove-me")
@@ -454,13 +406,8 @@ class TestTokenManagement:
         assert t1 in tokens
         assert t2 not in tokens
 
-    def test_token_registry_lookup(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
+    def test_token_registry_lookup(self, relay_env):
         import bubble.relay
-        importlib.reload(bubble.relay)
 
         token = bubble.relay.generate_relay_token("my-container")
         registry = bubble.relay.TokenRegistry()
@@ -505,16 +452,9 @@ class TestTokenAuth:
             s1.close()
             s2.close()
 
-    def test_valid_token_accepted(self, tmp_path, monkeypatch):
+    def test_valid_token_accepted(self, relay_env):
         """With valid token, request proceeds to target validation."""
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
-        import bubble.git_store
-        importlib.reload(bubble.git_store)
         import bubble.relay
-        importlib.reload(bubble.relay)
 
         token = bubble.relay.generate_relay_token("my-container")
         rl = bubble.relay.RateLimiter()
@@ -536,16 +476,9 @@ class TestTokenAuth:
             s1.close()
             s2.close()
 
-    def test_rate_limit_uses_authenticated_name(self, tmp_path, monkeypatch):
+    def test_rate_limit_uses_authenticated_name(self, relay_env):
         """Rate limiting is keyed on authenticated container, not spoofable."""
-        monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
-        import importlib
-        import bubble.config
-        importlib.reload(bubble.config)
-        import bubble.git_store
-        importlib.reload(bubble.git_store)
         import bubble.relay
-        importlib.reload(bubble.relay)
 
         token = bubble.relay.generate_relay_token("my-container")
         rl = bubble.relay.RateLimiter()

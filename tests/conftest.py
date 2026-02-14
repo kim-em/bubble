@@ -72,6 +72,13 @@ class MockRuntime(ContainerRuntime):
         self.calls.append(("image_delete", alias))
         self._images.discard(alias)
 
+    def list_images(self) -> list[dict]:
+        self.calls.append(("list_images",))
+        return []
+
+    def push_file(self, name: str, local_path: str, remote_path: str):
+        self.calls.append(("push_file", name, local_path, remote_path))
+
 
 @pytest.fixture
 def mock_runtime():
@@ -122,6 +129,22 @@ def tmp_ssh_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(vscode, "SSH_MAIN_CONFIG", tmp_path / ".ssh" / "config")
 
     return ssh_dir
+
+
+@pytest.fixture
+def relay_env(tmp_path, monkeypatch):
+    """Set BUBBLE_HOME to tmp_path and reload relay-related modules."""
+    import importlib
+
+    import bubble.config
+    import bubble.git_store
+    import bubble.relay
+
+    monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
+    importlib.reload(bubble.config)
+    importlib.reload(bubble.git_store)
+    importlib.reload(bubble.relay)
+    return tmp_path
 
 
 def _incus_is_available() -> bool:

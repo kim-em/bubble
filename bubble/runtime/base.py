@@ -2,16 +2,14 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
 class ContainerInfo:
     name: str
     state: str  # "running", "stopped", "frozen"
-    ipv4: Optional[str] = None
-    image: Optional[str] = None
-    ssh_port: Optional[int] = None
+    ipv4: str | None = None
+    image: str | None = None
 
 
 class ContainerRuntime(ABC):
@@ -72,3 +70,11 @@ class ContainerRuntime(ABC):
     @abstractmethod
     def image_delete(self, alias: str):
         """Delete an image."""
+
+    @abstractmethod
+    def list_images(self) -> list[dict]:
+        """List all images. Returns list of dicts with aliases, size, created_at."""
+
+    @abstractmethod
+    def push_file(self, name: str, local_path: str, remote_path: str):
+        """Push a local file into a container."""

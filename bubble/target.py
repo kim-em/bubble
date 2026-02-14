@@ -51,9 +51,7 @@ def _parse_github_remote(url: str) -> tuple[str, str]:
     if m:
         return m.group(1), m.group(2)
 
-    raise TargetParseError(
-        f"Remote URL is not a GitHub repository: {url}"
-    )
+    raise TargetParseError(f"Remote URL is not a GitHub repository: {url}")
 
 
 def _git_repo_info(path: str) -> tuple[str, str, str, str]:
@@ -68,7 +66,9 @@ def _git_repo_info(path: str) -> tuple[str, str, str, str]:
     try:
         result = subprocess.run(
             ["git", "-C", abs_path, "rev-parse", "--show-toplevel", "--absolute-git-dir"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         lines = result.stdout.strip().splitlines()
         repo_root = lines[0]
@@ -80,7 +80,9 @@ def _git_repo_info(path: str) -> tuple[str, str, str, str]:
     try:
         result = subprocess.run(
             ["git", "-C", repo_root, "remote", "get-url", "origin"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         remote_url = result.stdout.strip()
     except subprocess.CalledProcessError:
@@ -114,32 +116,33 @@ def _parse_local_path(raw: str) -> Target:
     try:
         result = subprocess.run(
             ["git", "-C", repo_root, "symbolic-ref", "--short", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         branch = result.stdout.strip()
     except subprocess.CalledProcessError:
-        raise TargetParseError(
-            "HEAD is detached. Check out a branch first."
-        )
+        raise TargetParseError("HEAD is detached. Check out a branch first.")
 
     if not branch:
-        raise TargetParseError(
-            "HEAD is detached. Check out a branch first."
-        )
+        raise TargetParseError("HEAD is detached. Check out a branch first.")
 
     # Check for modified/staged files (ignore untracked)
     result = subprocess.run(
         ["git", "-C", repo_root, "status", "--porcelain", "-uno"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.stdout.strip():
-        raise TargetParseError(
-            "Working tree has uncommitted changes. Commit or stash them first."
-        )
+        raise TargetParseError("Working tree has uncommitted changes. Commit or stash them first.")
 
     return Target(
-        owner=owner, repo=repo, kind="branch", ref=branch,
-        original=raw, local_path=repo_root,
+        owner=owner,
+        repo=repo,
+        kind="branch",
+        ref=branch,
+        original=raw,
+        local_path=repo_root,
     )
 
 
@@ -183,7 +186,11 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
         try:
             owner, repo, _, _ = _git_repo_info(".")
             return Target(
-                owner=owner, repo=repo, kind="pr", ref=s, original=original,
+                owner=owner,
+                repo=repo,
+                kind="pr",
+                ref=s,
+                original=original,
             )
         except TargetParseError:
             raise TargetParseError(
@@ -236,12 +243,8 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
             return Target(owner=owner, repo=repo, kind="pr", ref=pr_num, original=original)
         if registry.is_ambiguous(short):
             options = registry.get_ambiguous_options(short)
-            raise TargetParseError(
-                f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?"
-            )
-        raise TargetParseError(
-            f"Unknown repo '{short}'. Use the full owner/repo form first."
-        )
+            raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
+        raise TargetParseError(f"Unknown repo '{short}'. Use the full owner/repo form first.")
 
     if len(parts) >= 3 and parts[1] == "tree":
         # short_name/tree/branch
@@ -253,12 +256,8 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
             return Target(owner=owner, repo=repo, kind="branch", ref=branch, original=original)
         if registry.is_ambiguous(short):
             options = registry.get_ambiguous_options(short)
-            raise TargetParseError(
-                f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?"
-            )
-        raise TargetParseError(
-            f"Unknown repo '{short}'. Use the full owner/repo form first."
-        )
+            raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
+        raise TargetParseError(f"Unknown repo '{short}'. Use the full owner/repo form first.")
 
     if len(parts) == 1:
         # short_name — just a repo
@@ -269,9 +268,7 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
             return Target(owner=owner, repo=repo, kind="repo", ref="", original=original)
         if registry.is_ambiguous(short):
             options = registry.get_ambiguous_options(short)
-            raise TargetParseError(
-                f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?"
-            )
+            raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
         raise TargetParseError(
             f"Unknown repo '{short}'. Use the full owner/repo form first. "
             f"If this is a local path, use ./{short} or --path."

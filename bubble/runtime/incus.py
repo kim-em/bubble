@@ -37,12 +37,9 @@ class IncusRuntime(ContainerRuntime):
         self._run(args)
         return self._get_info(name)
 
-    def _get_info(self, name: str) -> ContainerInfo:
-        """Get info for a single container."""
-        data = self._run_json(["list", name])
-        if not data:
-            raise RuntimeError(f"Container '{name}' not found")
-        c = data[0]
+    @staticmethod
+    def _parse_container(c: dict) -> ContainerInfo:
+        """Parse Incus container JSON into ContainerInfo."""
         ipv4 = None
         state = c.get("state") or {}
         network = state.get("network") or {}
@@ -58,29 +55,18 @@ class IncusRuntime(ContainerRuntime):
             ipv4=ipv4,
         )
 
+    def _get_info(self, name: str) -> ContainerInfo:
+        """Get info for a single container."""
+        data = self._run_json(["list", name])
+        if not data:
+            raise RuntimeError(f"Container '{name}' not found")
+        return self._parse_container(data[0])
+
     def list_containers(self) -> list[ContainerInfo]:
         data = self._run_json(["list"])
         if not isinstance(data, list):
             return []
-        result = []
-        for c in data:
-            ipv4 = None
-            state = c.get("state") or {}
-            network = state.get("network") or {}
-            eth0 = network.get("eth0") or {}
-            for addr in eth0.get("addresses", []):
-                if addr["family"] == "inet":
-                    ipv4 = addr["address"]
-                    break
-            state_map = {"Running": "running", "Stopped": "stopped", "Frozen": "frozen"}
-            result.append(
-                ContainerInfo(
-                    name=c["name"],
-                    state=state_map.get(c["status"], c["status"].lower()),
-                    ipv4=ipv4,
-                )
-            )
-        return result
+        return [self._parse_container(c) for c in data]
 
     def start(self, name: str):
         self._run(["start", name])
@@ -146,3 +132,12 @@ class IncusRuntime(ContainerRuntime):
 
     def image_delete(self, alias: str):
         self._run(["image", "delete", alias])
+
+    def list_images(self) -> list[dict]:
+        data = self._run_json(["image", "list"])
+        if not isinstance(data, list):
+            return []
+        return data
+
+    def push_file(self, name: str, local_path: str, remote_path: str):
+        self._run(["file", "push", local_path, f"{name}{remote_path}"])

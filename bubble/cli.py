@@ -6,16 +6,15 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import click
 
 from . import __version__
-from .config import DATA_DIR, ensure_dirs, load_config, save_config, repo_short_name
+from .config import DATA_DIR, ensure_dirs, load_config, repo_short_name, save_config
 from .git_store import bare_repo_path, ensure_repo, fetch_ref, github_url, update_all_repos
 from .hooks import select_hook
-from .lifecycle import _load_registry, register_bubble, unregister_bubble
+from .lifecycle import load_registry, register_bubble, unregister_bubble
 from .naming import deduplicate_name, generate_name
 from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
@@ -59,11 +58,14 @@ def _install_incus_debian():
     )
     key_data = subprocess.run(
         ["curl", "-fsSL", "https://pkgs.zabbly.com/key.asc"],
-        capture_output=True, check=True,
+        capture_output=True,
+        check=True,
     )
     subprocess.run(
         ["sudo", "tee", "/etc/apt/keyrings/zabbly.asc"],
-        input=key_data.stdout, capture_output=True, check=True,
+        input=key_data.stdout,
+        capture_output=True,
+        check=True,
     )
 
     # Determine codename and architecture
@@ -75,7 +77,9 @@ def _install_incus_debian():
     codename = os_release.get("VERSION_CODENAME", "jammy")
     arch = subprocess.run(
         ["dpkg", "--print-architecture"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
 
     # Add repository
@@ -90,7 +94,9 @@ def _install_incus_debian():
     )
     subprocess.run(
         ["sudo", "tee", "/etc/apt/sources.list.d/zabbly-incus-stable.sources"],
-        input=sources_content.encode(), capture_output=True, check=True,
+        input=sources_content.encode(),
+        capture_output=True,
+        check=True,
     )
 
     # Install
@@ -137,7 +143,9 @@ def _ensure_dependencies():
         if not _is_command_available("brew"):
             click.echo("Homebrew is required but not installed.")
             click.echo("  Install it with:")
-            click.echo('  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"')
+            click.echo(
+                '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+            )
             sys.exit(1)
 
         # Check Colima and Incus
@@ -150,7 +158,9 @@ def _ensure_dependencies():
         if missing:
             names = " and ".join(missing)
             cmd = "brew install " + " ".join(missing)
-            click.echo(f"{names} {'is' if len(missing) == 1 else 'are'} required but not installed.")
+            click.echo(
+                f"{names} {'is' if len(missing) == 1 else 'are'} required but not installed."
+            )
             if click.confirm(f"  Install via Homebrew? ({cmd})", default=True):
                 subprocess.run(["brew", "install"] + missing, check=True)
             else:
@@ -193,9 +203,7 @@ def _ensure_dependencies():
                         click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
                         sys.exit(1)
                 elif has_snap:
-                    if click.confirm(
-                        "  Install via snap? (requires sudo)", default=True
-                    ):
+                    if click.confirm("  Install via snap? (requires sudo)", default=True):
                         _install_incus_snap()
                     else:
                         click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
@@ -271,11 +279,7 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
                     "mkdir -p ~/.ssh && chmod 700 ~/.ssh",
                 ],
             )
-            subprocess.run(
-                ["incus", "file", "push", tmp_keys, f"{name}/home/user/.ssh/authorized_keys"],
-                check=True,
-                capture_output=True,
-            )
+            runtime.push_file(name, tmp_keys, "/home/user/.ssh/authorized_keys")
             runtime.exec(
                 name,
                 [
@@ -291,8 +295,9 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
     add_ssh_config(name)
 
 
-def _apply_network(runtime: ContainerRuntime, name: str, config: dict,
-                    extra_domains: list[str] | None = None):
+def _apply_network(
+    runtime: ContainerRuntime, name: str, config: dict, extra_domains: list[str] | None = None
+):
     """Apply network allowlist to a container if configured."""
     domains = list(config.get("network", {}).get("allowlist", []))
     if extra_domains:
@@ -337,11 +342,14 @@ def _maybe_install_automation():
         pass
 
 
-def _find_existing_container(runtime: ContainerRuntime, target_str: str,
-                             generated_name: str | None = None,
-                             org_repo: str | None = None,
-                             kind: str | None = None,
-                             ref: str | None = None) -> str | None:
+def _find_existing_container(
+    runtime: ContainerRuntime,
+    target_str: str,
+    generated_name: str | None = None,
+    org_repo: str | None = None,
+    kind: str | None = None,
+    ref: str | None = None,
+) -> str | None:
     """Find an existing container matching the target. Returns name or None."""
     containers = {c.name for c in runtime.list_containers()}
 
@@ -355,7 +363,7 @@ def _find_existing_container(runtime: ContainerRuntime, target_str: str,
 
     # Check registry for same org_repo + PR/branch
     if org_repo and kind and ref:
-        registry = _load_registry()
+        registry = load_registry()
         for bname, binfo in registry.get("bubbles", {}).items():
             if binfo.get("state") != "active":
                 continue
@@ -397,103 +405,62 @@ def main():
 # ---------------------------------------------------------------------------
 
 
-@main.command("open")
-@click.argument("target")
-@click.option("--ssh", is_flag=True, help="Drop into SSH session instead of VSCode")
-@click.option("--no-interactive", is_flag=True, help="Just create, don't attach")
-@click.option("--network/--no-network", default=True, help="Apply network allowlist")
-@click.option("--name", "custom_name", type=str, help="Custom container name")
-@click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
-@click.option("--no-clone", is_flag=True, hidden=True,
-              help="Fail if bare repo doesn't exist (used by relay)")
-def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_clone):
-    """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
-    # If --path flag, ensure target is treated as a local path
-    if force_path and not target.startswith(("/", ".", "..")):
-        target = "./" + target
-
-    config = load_config()
-    runtime = get_runtime(config)
-
-    # Step 1: Check if target matches an existing container name
-    existing = _find_existing_container(runtime, target)
-    if existing:
-        _reattach(runtime, existing, ssh, no_interactive)
-        return
-
-    # Step 2: Parse target
-    registry = RepoRegistry()
-    try:
-        t = parse_target(target, registry)
-    except TargetParseError as e:
-        click.echo(str(e), err=True)
-        sys.exit(1)
-
-    # Step 3: Register repo in RepoRegistry
-    registry.register(t.owner, t.repo)
-
-    # Step 4: Generate name and check for existing container
+def _generate_bubble_name(t, custom_name: str | None) -> str:
+    """Generate a container name from a parsed target."""
     if custom_name:
-        name = custom_name
-    elif t.kind == "pr":
-        name = generate_name(t.short_name, "pr", t.ref)
-    elif t.kind == "branch":
-        name = generate_name(t.short_name, "branch", t.ref)
-    elif t.kind == "commit":
-        name = generate_name(t.short_name, "commit", t.ref[:12])
-    else:
-        name = generate_name(t.short_name, "main", "")
+        return custom_name
+    if t.kind == "pr":
+        return generate_name(t.short_name, "pr", t.ref)
+    if t.kind == "branch":
+        return generate_name(t.short_name, "branch", t.ref)
+    if t.kind == "commit":
+        return generate_name(t.short_name, "commit", t.ref[:12])
+    return generate_name(t.short_name, "main", "")
 
-    existing = _find_existing_container(
-        runtime, target, generated_name=name,
-        org_repo=t.org_repo, kind=t.kind, ref=t.ref,
-    )
-    if existing:
-        _reattach(runtime, existing, ssh, no_interactive)
-        return
 
-    # Step 5: Ensure dirs and bare repo (or use local .git for local targets)
-    ensure_dirs()
+def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
+    """Resolve the git reference source (bare repo or local .git).
 
+    Returns (ref_path, mount_name).
+    """
     if t.local_path:
-        # Local target: resolve actual git dir (handles worktrees where .git is a file)
         try:
             git_dir_result = subprocess.run(
                 ["git", "-C", t.local_path, "rev-parse", "--absolute-git-dir"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             ref_path = Path(git_dir_result.stdout.strip())
         except subprocess.CalledProcessError:
             ref_path = Path(t.local_path) / ".git"
-        ref_mount_name = f"{repo_short_name(t.org_repo)}.git"
+        mount_name = f"{repo_short_name(t.org_repo)}.git"
     else:
         if no_clone:
-            # Relay mode: fail if repo doesn't exist instead of cloning
             bare_path = bare_repo_path(t.org_repo)
             if not bare_path.exists():
-                click.echo(
-                    f"Repo '{t.org_repo}' is not available in the git store.", err=True
-                )
+                click.echo(f"Repo '{t.org_repo}' is not available in the git store.", err=True)
                 sys.exit(1)
         else:
             bare_path = ensure_repo(t.org_repo)
         ref_path = bare_path
+        mount_name = ref_path.name
 
-        # Step 6: Fetch specific ref if needed
         if t.kind == "pr":
             click.echo(f"Fetching PR #{t.ref}...")
             try:
                 fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
             except Exception:
-                # May already be available from a full fetch
-                pass
+                pass  # May already be available from a full fetch
 
-    # Step 7: Hook detection
+    return ref_path, mount_name
+
+
+def _detect_and_build_image(runtime, ref_path, t):
+    """Detect language hook and ensure image exists. Returns (hook, image_name)."""
     if t.kind == "pr":
         hook_ref = f"refs/pull/{t.ref}/head"
-    elif t.kind == "branch":
-        hook_ref = t.ref
-    elif t.kind == "commit":
+    elif t.kind in ("branch", "commit"):
         hook_ref = t.ref
     else:
         hook_ref = "HEAD"
@@ -505,7 +472,6 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
     else:
         image_name = "base"
 
-    # Step 8: Ensure image exists
     if not runtime.image_exists(image_name):
         click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
         from .images.builder import build_image
@@ -513,61 +479,56 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
         build_image(runtime, image_name)
         click.echo(f"  {image_name} image ready.")
 
-    # Deduplicate name
-    existing_names = {c.name for c in runtime.list_containers()}
-    name = deduplicate_name(name, existing_names)
+    return hook, image_name
 
-    click.echo(f"Creating bubble '{name}'...")
 
-    # Step 9: Launch container
+def _provision_container(runtime, name, image_name, ref_path, mount_name, config):
+    """Launch container, wait for readiness, mount git repo, set up relay."""
     runtime.launch(name, image_name)
 
-    # Wait for container to be ready
-    for _ in range(30):
-        try:
-            runtime.exec(name, ["true"])
-            try:
-                runtime.exec(name, ["getent", "hosts", "github.com"])
-                break
-            except Exception:
-                time.sleep(1)
-        except Exception:
-            time.sleep(1)
+    from .images.builder import _wait_for_container
 
-    # Mount reference repo (bare mirror or local .git)
-    short = repo_short_name(t.org_repo)
-    if t.local_path:
-        mount_name = ref_mount_name
-        mount_source = str(ref_path)
-    else:
-        mount_name = ref_path.name
-        mount_source = str(ref_path)
+    try:
+        _wait_for_container(runtime, name)
+    except RuntimeError:
+        click.echo("Warning: container DNS not ready yet, continuing anyway...", err=True)
 
+    mount_source = str(ref_path)
     if Path(mount_source).exists():
         runtime.add_disk(
             name, "shared-git", mount_source, f"/shared/git/{mount_name}", readonly=True
         )
 
-    # Add relay proxy device if enabled
     relay_enabled = config.get("relay", {}).get("enabled", False)
     if relay_enabled:
         relay_sock = str(DATA_DIR / "relay.sock")
         if Path(relay_sock).exists():
             runtime.add_device(
-                name, "bubble-relay", "proxy",
+                name,
+                "bubble-relay",
+                "proxy",
                 connect=f"unix:{relay_sock}",
                 listen="unix:/bubble/relay.sock",
                 bind="container",
                 uid="1000",
                 gid="1000",
             )
-            # Generate auth token and inject into container
             from .relay import generate_relay_token
-            token = generate_relay_token(name)
-            runtime.exec(name, ["bash", "-c", f"echo {shlex.quote(token)} > /bubble/relay-token"
-                                               " && chmod 600 /bubble/relay-token"])
 
-    # Clone repo inside container
+            token = generate_relay_token(name)
+            runtime.exec(
+                name,
+                [
+                    "bash",
+                    "-c",
+                    f"echo {shlex.quote(token)} > /bubble/relay-token"
+                    " && chmod 600 /bubble/relay-token",
+                ],
+            )
+
+
+def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
+    """Clone the repo and checkout the appropriate ref. Returns the checkout branch name."""
     url = github_url(t.org_repo)
     click.echo(f"Cloning {t.org_repo} (using shared objects)...")
     runtime.exec(
@@ -581,7 +542,6 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
         ],
     )
 
-    # Checkout the appropriate ref
     checkout_branch = ""
     if t.kind == "pr":
         click.echo(f"Checking out PR #{t.ref}...")
@@ -605,17 +565,10 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
         try:
             runtime.exec(
                 name,
-                [
-                    "su",
-                    "-",
-                    "user",
-                    "-c",
-                    f"cd /home/user/{short} && git checkout {q_branch}",
-                ],
+                ["su", "-", "user", "-c", f"cd /home/user/{short} && git checkout {q_branch}"],
             )
         except RuntimeError:
             if t.local_path:
-                # Branch not on remote — fetch it from the mounted local repo
                 runtime.exec(
                     name,
                     [
@@ -634,70 +587,133 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
         q_commit = shlex.quote(t.ref)
         runtime.exec(
             name,
-            [
-                "su",
-                "-",
-                "user",
-                "-c",
-                f"cd /home/user/{short} && git checkout {q_commit}",
-            ],
+            ["su", "-", "user", "-c", f"cd /home/user/{short} && git checkout {q_commit}"],
         )
 
-    # Step 10: Run hook post_clone
+    return checkout_branch
+
+
+def _finalize_bubble(
+    runtime, name, t, hook, image_name, checkout_branch, short, network, config, ssh, no_interactive
+):
+    """Post-clone setup: hooks, SSH, network, registration, and attach."""
     project_dir = f"/home/user/{short}"
     if hook:
         hook.post_clone(runtime, name, project_dir)
-
-    # Step 11: Ensure hook's VSCode extensions
-    if hook:
         ensure_vscode_extensions(hook.vscode_extensions())
 
-    # Step 12: Apply network allowlist (merging hook domains)
     if network:
         extra_domains = hook.network_domains() if hook else None
         _apply_network(runtime, name, config, extra_domains)
 
-    # Set up SSH access
     click.echo("Setting up SSH access...")
     _setup_ssh(runtime, name)
 
-    # Register in lifecycle
     commit = ""
     try:
         commit = runtime.exec(
             name,
-            [
-                "su",
-                "-",
-                "user",
-                "-c",
-                f"cd /home/user/{short} && git rev-parse HEAD",
-            ],
+            ["su", "-", "user", "-c", f"cd /home/user/{short} && git rev-parse HEAD"],
         ).strip()
     except Exception:
         pass
     register_bubble(
-        name, t.org_repo,
+        name,
+        t.org_repo,
         branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
         commit=commit,
         pr=int(t.ref) if t.kind == "pr" else 0,
         base_image=image_name,
     )
 
-    # Install automation on first bubble creation if not already installed
     _maybe_install_automation()
 
     click.echo(f"Bubble '{name}' created successfully.")
     click.echo(f"  SSH: ssh bubble-{name}")
 
-    # Step 13: Attach
     if not no_interactive:
         if ssh:
-            click.echo(f"Connecting via SSH...")
+            click.echo("Connecting via SSH...")
             subprocess.run(["ssh", f"bubble-{name}"])
         else:
             click.echo("Opening VSCode...")
             open_vscode(name, project_dir)
+
+
+@main.command("open")
+@click.argument("target")
+@click.option("--ssh", is_flag=True, help="Drop into SSH session instead of VSCode")
+@click.option("--no-interactive", is_flag=True, help="Just create, don't attach")
+@click.option("--network/--no-network", default=True, help="Apply network allowlist")
+@click.option("--name", "custom_name", type=str, help="Custom container name")
+@click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
+@click.option(
+    "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
+)
+def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_clone):
+    """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
+    if force_path and not target.startswith(("/", ".", "..")):
+        target = "./" + target
+
+    config = load_config()
+    runtime = get_runtime(config)
+
+    # Check if target matches an existing container
+    existing = _find_existing_container(runtime, target)
+    if existing:
+        _reattach(runtime, existing, ssh, no_interactive)
+        return
+
+    # Parse and register target
+    registry = RepoRegistry()
+    try:
+        t = parse_target(target, registry)
+    except TargetParseError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    registry.register(t.owner, t.repo)
+
+    # Generate name and check for existing container with same target
+    name = _generate_bubble_name(t, custom_name)
+    existing = _find_existing_container(
+        runtime,
+        target,
+        generated_name=name,
+        org_repo=t.org_repo,
+        kind=t.kind,
+        ref=t.ref,
+    )
+    if existing:
+        _reattach(runtime, existing, ssh, no_interactive)
+        return
+
+    # Resolve git source, detect language, and build image
+    ensure_dirs()
+    ref_path, mount_name = _resolve_ref_source(t, no_clone)
+    hook, image_name = _detect_and_build_image(runtime, ref_path, t)
+
+    # Deduplicate and create
+    existing_names = {c.name for c in runtime.list_containers()}
+    name = deduplicate_name(name, existing_names)
+    click.echo(f"Creating bubble '{name}'...")
+
+    # Provision, clone, and finalize
+    short = repo_short_name(t.org_repo)
+    _provision_container(runtime, name, image_name, ref_path, mount_name, config)
+    checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
+    _finalize_bubble(
+        runtime,
+        name,
+        t,
+        hook,
+        image_name,
+        checkout_branch,
+        short,
+        network,
+        config,
+        ssh,
+        no_interactive,
+    )
 
 
 def _reattach(runtime: ContainerRuntime, name: str, ssh: bool, no_interactive: bool):
@@ -792,14 +808,10 @@ def images_group():
 @images_group.command("list")
 def images_list():
     """List available base images."""
+    config = load_config()
+    runtime = get_runtime(config, ensure_ready=False)
     try:
-        output = subprocess.run(
-            ["incus", "image", "list", "--format=json"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        images = json.loads(output.stdout)
+        images = runtime.list_images()
         if not images:
             click.echo("No images. Run: bubble images build base")
             return
@@ -1004,6 +1016,7 @@ def relay_disable():
 
     # Remove socket
     from .relay import RELAY_SOCK
+
     RELAY_SOCK.unlink(missing_ok=True)
 
     click.echo("Relay disabled.")
@@ -1017,9 +1030,11 @@ def relay_status():
     click.echo(f"  Relay: {'enabled' if enabled else 'disabled'}")
 
     from .relay import RELAY_SOCK
+
     click.echo(f"  Socket: {'exists' if RELAY_SOCK.exists() else 'not found'}")
 
     from .relay import RELAY_LOG
+
     if RELAY_LOG.exists():
         # Show last 5 log entries
         lines = RELAY_LOG.read_text().strip().splitlines()

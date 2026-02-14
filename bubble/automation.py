@@ -57,41 +57,55 @@ def is_automation_installed() -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 
 
-def _install_launchd() -> list[str]:
+def _install_launchd_job(label: str) -> str | None:
+    """Install a single launchd job. Returns description or None."""
     launch_agents = Path.home() / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True, exist_ok=True)
+
+    plist_name = f"{label}.plist"
+    src = PLIST_DIR / plist_name
+    dst = launch_agents / plist_name
+
+    if dst.exists():
+        subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
+
+    if src.exists():
+        shutil.copy2(src, dst)
+        subprocess.run(["launchctl", "load", str(dst)], capture_output=True)
+        return f"launchd: {label}"
+
+    return None
+
+
+def _remove_launchd_job(label: str) -> str | None:
+    """Remove a single launchd job. Returns description or None."""
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    plist_name = f"{label}.plist"
+    dst = launch_agents / plist_name
+
+    if dst.exists():
+        subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
+        dst.unlink()
+        return f"launchd: {label}"
+
+    return None
+
+
+def _install_launchd() -> list[str]:
     installed = []
-
-    for job_name, label in LAUNCHD_LABELS.items():
-        plist_name = f"{label}.plist"
-        src = PLIST_DIR / plist_name
-        dst = launch_agents / plist_name
-
-        if dst.exists():
-            # Unload first to update
-            subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
-
-        if src.exists():
-            shutil.copy2(src, dst)
-            subprocess.run(["launchctl", "load", str(dst)], capture_output=True)
-            installed.append(f"launchd: {label}")
-
+    for label in LAUNCHD_LABELS.values():
+        result = _install_launchd_job(label)
+        if result:
+            installed.append(result)
     return installed
 
 
 def _remove_launchd() -> list[str]:
-    launch_agents = Path.home() / "Library" / "LaunchAgents"
     removed = []
-
-    for job_name, label in LAUNCHD_LABELS.items():
-        plist_name = f"{label}.plist"
-        dst = launch_agents / plist_name
-
-        if dst.exists():
-            subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
-            dst.unlink()
-            removed.append(f"launchd: {label}")
-
+    for label in LAUNCHD_LABELS.values():
+        result = _remove_launchd_job(label)
+        if result:
+            removed.append(result)
     return removed
 
 
@@ -256,35 +270,11 @@ def remove_relay_daemon() -> str:
 
 
 def _install_relay_launchd() -> str:
-    launch_agents = Path.home() / "Library" / "LaunchAgents"
-    launch_agents.mkdir(parents=True, exist_ok=True)
-
-    plist_name = f"{RELAY_LABEL}.plist"
-    src = PLIST_DIR / plist_name
-    dst = launch_agents / plist_name
-
-    if dst.exists():
-        subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
-
-    if src.exists():
-        shutil.copy2(src, dst)
-        subprocess.run(["launchctl", "load", str(dst)], capture_output=True)
-        return f"launchd: {RELAY_LABEL}"
-
-    return ""
+    return _install_launchd_job(RELAY_LABEL) or ""
 
 
 def _remove_relay_launchd() -> str:
-    launch_agents = Path.home() / "Library" / "LaunchAgents"
-    plist_name = f"{RELAY_LABEL}.plist"
-    dst = launch_agents / plist_name
-
-    if dst.exists():
-        subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
-        dst.unlink()
-        return f"launchd: {RELAY_LABEL}"
-
-    return ""
+    return _remove_launchd_job(RELAY_LABEL) or ""
 
 
 def _install_relay_systemd() -> str:

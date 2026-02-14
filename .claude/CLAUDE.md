@@ -99,6 +99,9 @@ The `user` account has no sudo and a locked password. Network allowlisting is ap
 - `~/.bubble/git/` — bare repo mirrors
 - `~/.bubble/repos.json` — learned repo short name mappings
 - `~/.bubble/registry.json` — bubble state tracking
+- `~/.bubble/relay.sock` — relay daemon Unix socket (when enabled)
+- `~/.bubble/relay-tokens.json` — relay auth tokens per container
+- `~/.bubble/relay.log` — relay request log
 - `~/.ssh/config.d/bubble` — auto-managed SSH config
 
 ## Automation
@@ -106,8 +109,9 @@ The `user` account has no sudo and a locked password. Network allowlisting is ap
 Automation is installed automatically on first bubble creation. On macOS, launchd jobs:
 - `com.bubble.git-update` — hourly git store refresh
 - `com.bubble.image-refresh` — weekly base image rebuild
+- `com.bubble.relay-daemon` — persistent relay daemon (installed via `bubble relay enable`)
 
-On Linux, equivalent systemd user timers are installed.
+On Linux, equivalent systemd user timers/services are installed.
 
 ## Bubble-in-Bubble Relay
 

@@ -47,16 +47,12 @@ class TestParseFullURL:
         assert t.ref == "master"
 
     def test_branch_with_slashes(self, registry):
-        t = parse_target(
-            "https://github.com/leanprover/lean4/tree/feat/some-feature", registry
-        )
+        t = parse_target("https://github.com/leanprover/lean4/tree/feat/some-feature", registry)
         assert t.kind == "branch"
         assert t.ref == "feat/some-feature"
 
     def test_commit_url(self, registry):
-        t = parse_target(
-            "https://github.com/leanprover/lean4/commit/abc123def456", registry
-        )
+        t = parse_target("https://github.com/leanprover/lean4/commit/abc123def456", registry)
         assert t.owner == "leanprover"
         assert t.repo == "lean4"
         assert t.kind == "commit"
@@ -183,32 +179,53 @@ _GIT_ENV = {
 }
 
 
-def _make_git_repo(tmp_path, *, remote_url="https://github.com/testowner/testrepo.git",
-                   branch="main", dirty=False, detached=False, commit=True):
+def _make_git_repo(
+    tmp_path,
+    *,
+    remote_url="https://github.com/testowner/testrepo.git",
+    branch="main",
+    dirty=False,
+    detached=False,
+    commit=True,
+):
     """Create a local git repo with a fake remote for testing."""
     repo = tmp_path / "repo"
     repo.mkdir()
     env = {**_GIT_ENV, "HOME": str(tmp_path)}
 
-    subprocess.run(["git", "init", "-b", branch, str(repo)],
-                   capture_output=True, check=True, env=env)
-    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", remote_url],
-                   capture_output=True, check=True, env=env)
+    subprocess.run(
+        ["git", "init", "-b", branch, str(repo)], capture_output=True, check=True, env=env
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", remote_url],
+        capture_output=True,
+        check=True,
+        env=env,
+    )
 
     if commit:
         (repo / "README.md").write_text("# Test\n")
-        subprocess.run(["git", "-C", str(repo), "add", "."],
-                       capture_output=True, check=True, env=env)
-        subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
-                       capture_output=True, check=True, env=env)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True, env=env
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "init"],
+            capture_output=True,
+            check=True,
+            env=env,
+        )
 
     if detached and commit:
         sha = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True, env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
         ).stdout.strip()
-        subprocess.run(["git", "-C", str(repo), "checkout", sha],
-                       capture_output=True, check=True, env=env)
+        subprocess.run(
+            ["git", "-C", str(repo), "checkout", sha], capture_output=True, check=True, env=env
+        )
 
     if dirty:
         (repo / "dirty.txt").write_text("uncommitted\n")
@@ -316,10 +333,15 @@ class TestParseLocalPath:
         env = {**_GIT_ENV, "HOME": str(tmp_path)}
         subprocess.run(["git", "init", str(repo)], capture_output=True, check=True, env=env)
         (repo / "f.txt").write_text("x\n")
-        subprocess.run(["git", "-C", str(repo), "add", "."],
-                       capture_output=True, check=True, env=env)
-        subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
-                       capture_output=True, check=True, env=env)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True, env=env
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "init"],
+            capture_output=True,
+            check=True,
+            env=env,
+        )
         with pytest.raises(TargetParseError, match="No remote"):
             _parse_local_path(str(repo))
 
@@ -354,8 +376,7 @@ class TestParseLocalPath:
 
 class TestParseBareNumber:
     def test_bare_number_in_git_repo(self, tmp_path, monkeypatch, registry):
-        repo = _make_git_repo(tmp_path,
-                              remote_url="https://github.com/leanprover/lean4.git")
+        repo = _make_git_repo(tmp_path, remote_url="https://github.com/leanprover/lean4.git")
         monkeypatch.chdir(repo)
         t = parse_target("123", registry)
         assert t.owner == "leanprover"
@@ -372,8 +393,7 @@ class TestParseBareNumber:
             parse_target("123", empty_registry)
 
     def test_bare_number_with_ssh_remote(self, tmp_path, monkeypatch, registry):
-        repo = _make_git_repo(tmp_path,
-                              remote_url="git@github.com:myorg/myrepo.git")
+        repo = _make_git_repo(tmp_path, remote_url="git@github.com:myorg/myrepo.git")
         monkeypatch.chdir(repo)
         t = parse_target("456", registry)
         assert t.owner == "myorg"

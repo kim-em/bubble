@@ -49,20 +49,6 @@ def init_bare_repo(org_repo: str) -> Path:
     return path
 
 
-def update_bare_repo(org_repo: str):
-    """Fetch latest objects into the bare repo."""
-    path = bare_repo_path(org_repo)
-    if not path.exists():
-        init_bare_repo(org_repo)
-        return
-
-    print(f"Updating {org_repo}...")
-    subprocess.run(
-        ["git", "-C", str(path), "fetch", "--all", "--prune"],
-        check=True,
-    )
-
-
 def fetch_ref(org_repo: str, ref: str):
     """Fetch a specific ref into the bare repo (e.g. a PR ref)."""
     path = bare_repo_path(org_repo)

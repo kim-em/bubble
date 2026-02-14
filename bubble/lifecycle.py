@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from .config import REGISTRY_FILE
 
 
-def _load_registry() -> dict:
+def load_registry() -> dict:
     """Load the bubble registry."""
     if REGISTRY_FILE.exists():
         return json.loads(REGISTRY_FILE.read_text())
@@ -14,9 +14,11 @@ def _load_registry() -> dict:
 
 
 def _save_registry(registry: dict):
-    """Save the bubble registry."""
+    """Save the bubble registry atomically."""
     REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    REGISTRY_FILE.write_text(json.dumps(registry, indent=2) + "\n")
+    tmp = REGISTRY_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(registry, indent=2) + "\n")
+    tmp.rename(REGISTRY_FILE)
 
 
 def register_bubble(
@@ -28,7 +30,7 @@ def register_bubble(
     base_image: str = "base",
 ):
     """Record a bubble's creation in the registry."""
-    registry = _load_registry()
+    registry = load_registry()
     registry["bubbles"][name] = {
         "org_repo": org_repo,
         "branch": branch,
@@ -43,12 +45,12 @@ def register_bubble(
 
 def get_bubble_info(name: str) -> dict | None:
     """Get registry info for a bubble."""
-    registry = _load_registry()
+    registry = load_registry()
     return registry["bubbles"].get(name)
 
 
 def unregister_bubble(name: str):
     """Remove a bubble from the registry."""
-    registry = _load_registry()
+    registry = load_registry()
     registry["bubbles"].pop(name, None)
     _save_registry(registry)

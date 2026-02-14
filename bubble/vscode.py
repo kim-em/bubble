@@ -13,34 +13,8 @@ SSH_CONFIG_DIR = Path.home() / ".ssh" / "config.d"
 SSH_CONFIG_FILE = SSH_CONFIG_DIR / "bubble"
 SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"
 
-# Port range for SSH forwarding (one per bubble)
-SSH_PORT_BASE = 22100
 
-
-def _allocated_ports() -> set[int]:
-    """Read already-allocated ports from the SSH config file."""
-    ports = set()
-    if SSH_CONFIG_FILE.exists():
-        for line in SSH_CONFIG_FILE.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("Port "):
-                try:
-                    ports.add(int(line.split()[1]))
-                except (IndexError, ValueError):
-                    pass
-    return ports
-
-
-def allocate_port() -> int:
-    """Find the next available SSH port."""
-    used = _allocated_ports()
-    port = SSH_PORT_BASE
-    while port in used:
-        port += 1
-    return port
-
-
-def add_ssh_config(bubble_name: str, port: int = 0, user: str = "user"):
+def add_ssh_config(bubble_name: str, user: str = "user"):
     """Add an SSH config entry for a bubble.
 
     Uses `incus exec` as ProxyCommand to avoid port forwarding issues on macOS.
