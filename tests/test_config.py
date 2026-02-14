@@ -1,37 +1,6 @@
 """Tests for configuration management."""
 
-import pytest
-
-from bubble.config import _deep_merge, repo_short_name, resolve_repo
-
-
-def test_resolve_repo_mathlib():
-    assert resolve_repo("mathlib4") == "leanprover-community/mathlib4"
-
-
-def test_resolve_repo_mathlib_alias():
-    assert resolve_repo("mathlib") == "leanprover-community/mathlib4"
-
-
-def test_resolve_repo_lean4():
-    assert resolve_repo("lean4") == "leanprover/lean4"
-
-
-def test_resolve_repo_lean_alias():
-    assert resolve_repo("lean") == "leanprover/lean4"
-
-
-def test_resolve_repo_batteries():
-    assert resolve_repo("batteries") == "leanprover-community/batteries"
-
-
-def test_resolve_repo_passthrough():
-    assert resolve_repo("myorg/myrepo") == "myorg/myrepo"
-
-
-def test_resolve_repo_unknown():
-    with pytest.raises(ValueError, match="Unknown repo"):
-        resolve_repo("nonexistent")
+from bubble.config import _deep_merge, repo_short_name
 
 
 def test_repo_short_name():

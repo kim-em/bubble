@@ -2,7 +2,7 @@
 
 These tests require:
 - Incus installed and available
-- lean-base image built (run: bubble images build lean-base)
+- bubble-base image built (run: bubble images build bubble-base)
 
 Mark: @pytest.mark.integration
 Skip locally with: pytest -m "not integration"
@@ -33,17 +33,17 @@ def runtime():
 
 
 @pytest.fixture(scope="session")
-def _check_lean_base(runtime):
-    """Skip all integration tests if lean-base image isn't built."""
-    if not runtime.image_exists("lean-base"):
-        pytest.skip("lean-base image not built")
+def _check_bubble_base(runtime):
+    """Skip all integration tests if bubble-base image isn't built."""
+    if not runtime.image_exists("bubble-base"):
+        pytest.skip("bubble-base image not built")
 
 
 @pytest.fixture
-def container(runtime, _check_lean_base):
-    """Launch a fresh container from lean-base, delete on teardown."""
+def container(runtime, _check_bubble_base):
+    """Launch a fresh container from bubble-base, delete on teardown."""
     name = f"ci-test-{uuid.uuid4().hex[:8]}"
-    runtime.launch(name, "lean-base")
+    runtime.launch(name, "bubble-base")
     # Wait for container to be ready
     for _ in range(15):
         try:
@@ -87,27 +87,27 @@ def container_with_allowlist(runtime, container):
 
 
 class TestNoPrivilegeEscalation:
-    def test_lean_user_cannot_sudo(self, runtime, container):
-        """lean user has no sudo access."""
+    def test_user_cannot_sudo(self, runtime, container):
+        """user has no sudo access."""
         with pytest.raises(RuntimeError):
             runtime.exec(
                 container,
                 [
                     "su",
                     "-",
-                    "lean",
+                    "user",
                     "-c",
                     "sudo whoami",
                 ],
             )
 
     def test_password_locked(self, runtime, container):
-        """lean user's password is locked (! or * prefix in shadow)."""
+        """user's password is locked (! or * prefix in shadow)."""
         shadow = runtime.exec(
             container,
             [
                 "grep",
-                "^lean:",
+                "^user:",
                 "/etc/shadow",
             ],
         )
@@ -116,13 +116,13 @@ class TestNoPrivilegeEscalation:
         assert password_field.startswith("!") or password_field.startswith("*")
 
     def test_no_sudoers_file(self, runtime, container):
-        """No sudoers entry for lean user."""
+        """No sudoers entry for user."""
         with pytest.raises(RuntimeError):
             runtime.exec(
                 container,
                 [
                     "cat",
-                    "/etc/sudoers.d/lean",
+                    "/etc/sudoers.d/user",
                 ],
             )
 
@@ -272,11 +272,11 @@ class TestSSHConfiguration:
 
 
 class TestContainerLifecycle:
-    def test_launch_exec_delete(self, runtime, _check_lean_base):
+    def test_launch_exec_delete(self, runtime, _check_bubble_base):
         """Can launch a container, execute commands, and delete it."""
         name = f"ci-test-lifecycle-{uuid.uuid4().hex[:8]}"
         try:
-            runtime.launch(name, "lean-base")
+            runtime.launch(name, "bubble-base")
             output = runtime.exec(name, ["echo", "hello"])
             assert "hello" in output
         finally:
@@ -285,9 +285,9 @@ class TestContainerLifecycle:
             except Exception:
                 pass
 
-    def test_lean_user_exists(self, runtime, container):
-        """Container has a 'lean' user."""
-        output = runtime.exec(container, ["id", "lean"])
+    def test_user_exists(self, runtime, container):
+        """Container has a 'user' user."""
+        output = runtime.exec(container, ["id", "user"])
         assert "uid=" in output
 
     def test_network_allowlist_apply_remove(self, runtime, container):

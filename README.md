@@ -1,68 +1,67 @@
 # bubble
 
-Containerized development environments for Lean 4 and Mathlib, powered by [Incus](https://linuxcontainers.org/incus/).
+Containerized development environments powered by [Incus](https://linuxcontainers.org/incus/).
 
 ## Why?
 
 - **Safety**: Run untrusted PRs in isolated containers with network allowlisting
 - **Convenience**: Spin up 5-10+ concurrent development sessions without managing multiple clones
-- **Speed**: Shared git objects and build caches mean new bubbles start in seconds, not minutes
-- **Persistence**: Archive a session, come back to it later from the local registry
+- **Speed**: Shared git objects mean new bubbles start in seconds, not minutes
+- **Language hooks**: Automatic detection of Lean 4 (and more to come) with pre-configured toolchains
 
 ## Quick Start
 
 ```bash
 pip install bubble
 
-# First-time setup (installs Colima on macOS, builds base image, clones shared repos)
+# First-time setup (installs Colima on macOS, builds base image)
 bubble init
 
-# Create a bubble for a mathlib PR and open VSCode
-bubble new mathlib4 --pr 12345
+# Open a bubble for a GitHub PR — just paste the URL
+bubble https://github.com/leanprover-community/mathlib4/pull/35219
+
+# Shorter forms work too
+bubble leanprover-community/mathlib4/pull/35219
+bubble mathlib4/pull/35219    # after first use, short names are learned
+
+# Branch or commit
+bubble leanprover-community/mathlib4/tree/some-branch
+bubble leanprover-community/mathlib4/commit/abc123
+
+# Default branch
+bubble leanprover-community/mathlib4
 
 # List your bubbles
 bubble list
 
-# Open VSCode for an existing bubble
-bubble attach mathlib4-pr-12345
+# SSH instead of VSCode
+bubble https://github.com/leanprover/lean4 --ssh
 
-# Drop into a shell instead
-bubble shell mathlib4-pr-12345
+# Just create, don't open anything
+bubble leanprover/lean4 --no-interactive
 
-# Archive when done (saves state, destroys container)
-bubble archive mathlib4-pr-12345
-
-# Resume later
-bubble resume mathlib4-pr-12345
+# Pause a bubble
+bubble pause mathlib4-pr-35219
 
 # Destroy permanently
-bubble destroy mathlib4-pr-12345
-```
-
-## Moving Local Work Into a Bubble
-
-Already working on a local checkout? Move it into a bubble:
-
-```bash
-cd ~/projects/lean/mathlib4
-bubble wrap .                    # Move state into a bubble, opens VSCode
-bubble wrap . --copy             # Copy instead (leave local dir unchanged)
-bubble wrap . --pr 12345         # Associate with a PR for future resume
+bubble destroy mathlib4-pr-35219
 ```
 
 ## How It Works
 
 Each "bubble" is a lightweight Linux container (via Incus) with:
-- Lean 4 toolchain (via elan)
-- Your project cloned and ready to build
+- Your project cloned and ready to work on
 - SSH server for VSCode Remote connection
 - Network restricted to allowed domains only
+- Language-specific tooling when detected (e.g. Lean 4 via elan)
+
+**URL-first interface**: The primary command is `bubble <target>`. Targets can be full GitHub URLs, partial URLs, org/repo paths, or learned short names. If a bubble already exists for that target, it re-attaches instead of creating a new one.
 
 **Shared git objects**: A bare mirror of each repo is maintained on the host. Containers clone via `git --reference`, sharing the immutable object store. This means creating a new bubble for a mathlib PR downloads only the few new commits, not the entire 1.5GB repo.
 
-**Shared build caches**: `.lake` caches are shared across containers with matching toolchains, avoiding redundant `lake exe cache get` downloads.
+**Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the `bubble-lean` image comes pre-loaded with recent stable and RC toolchains.
 
-**Network allowlisting**: Containers can only reach allowed domains (GitHub, Lean releases). IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked. Configurable in `~/.bubble/config.toml`.
+**Network allowlisting**: Containers can only reach allowed domains (GitHub by default, plus language-specific domains like `releases.lean-lang.org` for Lean). IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked. Configurable in `~/.bubble/config.toml`.
 
 ## Requirements
 
@@ -74,45 +73,24 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 | Command | Description |
 |---------|-------------|
+| `bubble <target>` | Open (or create) a bubble for a GitHub URL/repo |
 | `bubble init` | First-time setup |
-| `bubble new <repo> [--pr N] [--branch B]` | Create a new bubble |
-| `bubble list [--archived]` | List all bubbles |
-| `bubble attach <name>` | Open VSCode for a bubble |
-| `bubble shell <name>` | Shell into a bubble |
-| `bubble wrap [dir] [--copy] [--pr N]` | Move/copy local work into a bubble |
+| `bubble list` | List all bubbles |
 | `bubble pause <name>` | Freeze a bubble |
-| `bubble archive <name>` | Archive (save state, destroy container) |
-| `bubble resume <name>` | Resume from local archive |
 | `bubble destroy <name>` | Delete a bubble permanently |
 | `bubble images list\|build` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
-| `bubble automation install\|remove\|status` | Manage periodic jobs (git update, image refresh) |
+| `bubble automation install\|remove\|status` | Manage periodic jobs |
 
-## Base Images
+## Images
 
 | Image | Contents |
 |-------|----------|
-| `lean-base` | Ubuntu 24.04, elan, git, openssh-server |
-| `lean-mathlib` | lean-base + mathlib4 cloned + .olean cache |
-| `lean-batteries` | lean-base + batteries cloned + built |
-| `lean-lean4` | lean-base + lean4 cloned + build deps |
+| `bubble-base` | Ubuntu 24.04, git, openssh-server, build-essential |
+| `bubble-lean` | bubble-base + elan + latest stable/RC toolchains |
 
-Build derived images with `bubble images build lean-mathlib`.
-
-## Supported Repos
-
-Out of the box, `bubble new` recognizes these short names:
-
-| Short name | Repository |
-|------------|-----------|
-| `mathlib4` / `mathlib` | leanprover-community/mathlib4 |
-| `lean4` / `lean` | leanprover/lean4 |
-| `batteries` | leanprover-community/batteries |
-| `aesop` | leanprover-community/aesop |
-| `proofwidgets4` | leanprover-community/ProofWidgets4 |
-
-You can also use any `org/repo` directly: `bubble new leanprover-community/quote4`
+Build images with `bubble images build bubble-base` or `bubble images build bubble-lean`.
 
 ## Configuration
 
@@ -130,34 +108,21 @@ colima_cpu = 24          # macOS: CPUs for the Colima VM
 colima_memory = 16       # macOS: GB of RAM
 colima_vm_type = "vz"    # macOS: Apple Virtualization.Framework
 
-[git]
-shared_repos = [
-  "leanprover-community/mathlib4",
-  "leanprover/lean4",
-  "leanprover-community/batteries",
-]
-
 [network]
 allowlist = [
-  "github.com", "*.githubusercontent.com",
-  "objects.githubusercontent.com",
-  "releases.lean-lang.org",
+  "github.com",
+  "*.githubusercontent.com",
 ]
 ```
 
-## Performance
-
-On Apple Silicon (M-series) with Apple's Virtualization.Framework, container builds run at essentially native speed. In benchmarks, building batteries takes ~19.7s in a container vs ~18.8s natively.
-
 ## Security
 
-- **No sudo**: The `lean` user has no sudo access and a locked password
+- **No sudo**: The `user` account has no sudo access and a locked password
 - **Network allowlisting**: iptables rules restrict outbound connections to allowed domains only
 - **IPv6 blocked**: All IPv6 traffic is dropped
 - **DNS restricted**: DNS queries only go to the container's configured resolver
 - **No outbound SSH**: Containers cannot SSH out (VSCode uses `incus exec` ProxyCommand)
 - **SSH key-only auth**: Password authentication is disabled
-- **Safe tar extraction**: Lake cache archives are validated against path traversal before extraction
 - **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
 - **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
 

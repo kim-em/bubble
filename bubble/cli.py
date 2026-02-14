@@ -12,16 +12,15 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .config import (
-    ensure_dirs,
-    load_config,
-    repo_short_name,
-    resolve_repo,
-)
-from .git_store import bare_repo_path, ensure_repo, github_url, update_all_repos
+from .config import ensure_dirs, load_config, repo_short_name
+from .git_store import bare_repo_path, ensure_repo, fetch_ref, github_url, update_all_repos
+from .hooks import select_hook
+from .lifecycle import _load_registry, register_bubble, unregister_bubble
 from .naming import deduplicate_name, generate_name
+from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
 from .runtime.incus import IncusRuntime
+from .target import TargetParseError, parse_target
 from .vscode import (
     add_ssh_config,
     ensure_vscode_extensions,
@@ -84,7 +83,6 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
         if key_path.exists():
             pub_keys.append(key_path.read_text().strip())
     if pub_keys:
-        # Write keys to temp file and push via incus file push (avoids shell injection)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".keys", delete=False) as f:
             f.write("\n".join(pub_keys) + "\n")
             tmp_keys = f.name
@@ -94,13 +92,13 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
                 [
                     "su",
                     "-",
-                    "lean",
+                    "user",
                     "-c",
                     "mkdir -p ~/.ssh && chmod 700 ~/.ssh",
                 ],
             )
             subprocess.run(
-                ["incus", "file", "push", tmp_keys, f"{name}/home/lean/.ssh/authorized_keys"],
+                ["incus", "file", "push", tmp_keys, f"{name}/home/user/.ssh/authorized_keys"],
                 check=True,
                 capture_output=True,
             )
@@ -109,8 +107,8 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
                 [
                     "bash",
                     "-c",
-                    "chown lean:lean /home/lean/.ssh/authorized_keys"
-                    " && chmod 600 /home/lean/.ssh/authorized_keys",
+                    "chown user:user /home/user/.ssh/authorized_keys"
+                    " && chmod 600 /home/user/.ssh/authorized_keys",
                 ],
             )
         finally:
@@ -119,9 +117,14 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
     add_ssh_config(name)
 
 
-def _apply_network(runtime: ContainerRuntime, name: str, config: dict):
+def _apply_network(runtime: ContainerRuntime, name: str, config: dict,
+                    extra_domains: list[str] | None = None):
     """Apply network allowlist to a container if configured."""
-    domains = config.get("network", {}).get("allowlist", [])
+    domains = list(config.get("network", {}).get("allowlist", []))
+    if extra_domains:
+        for d in extra_domains:
+            if d not in domains:
+                domains.append(d)
     if domains:
         try:
             from .network import apply_allowlist
@@ -136,12 +139,46 @@ def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
     """Detect the project directory inside a container."""
     try:
         return (
-            runtime.exec(name, ["bash", "-c", "ls -d /home/lean/*/ 2>/dev/null | head -1"])
+            runtime.exec(name, ["bash", "-c", "ls -d /home/user/*/ 2>/dev/null | head -1"])
             .strip()
             .rstrip("/")
         )
     except Exception:
-        return "/home/lean"
+        return "/home/user"
+
+
+def _find_existing_container(runtime: ContainerRuntime, target_str: str,
+                             generated_name: str | None = None,
+                             org_repo: str | None = None,
+                             kind: str | None = None,
+                             ref: str | None = None) -> str | None:
+    """Find an existing container matching the target. Returns name or None."""
+    containers = {c.name for c in runtime.list_containers()}
+
+    # Check if raw target string matches a container name
+    if target_str in containers:
+        return target_str
+
+    # Check by generated name
+    if generated_name and generated_name in containers:
+        return generated_name
+
+    # Check registry for same org_repo + PR/branch
+    if org_repo and kind and ref:
+        registry = _load_registry()
+        for bname, binfo in registry.get("bubbles", {}).items():
+            if binfo.get("state") != "active":
+                continue
+            if binfo.get("org_repo") != org_repo:
+                continue
+            if bname not in containers:
+                continue
+            if kind == "pr" and str(binfo.get("pr", "")) == ref:
+                return bname
+            if kind == "branch" and binfo.get("branch") == ref:
+                return bname
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -149,121 +186,124 @@ def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+class BubbleGroup(click.Group):
+    """Custom group that routes unknown first args to the implicit 'open' command."""
+
+    def parse_args(self, ctx, args):
+        """If the first arg isn't a known command, treat it as a target for 'open'."""
+        if args and args[0] not in self.commands and not args[0].startswith("-"):
+            args = ["open"] + args
+        return super().parse_args(ctx, args)
+
+
+@click.group(cls=BubbleGroup)
 @click.version_option(__version__)
 def main():
-    """bubble: Containerized Lean development environments."""
+    """bubble: Containerized development environments."""
 
 
 # ---------------------------------------------------------------------------
-# init
+# open (the primary command, invoked implicitly)
 # ---------------------------------------------------------------------------
 
 
-@main.command()
-def init():
-    """First-time setup: configure runtime, build base image, init git store."""
+@main.command("open")
+@click.argument("target")
+@click.option("--ssh", is_flag=True, help="Drop into SSH session instead of VSCode")
+@click.option("--no-interactive", is_flag=True, help="Just create, don't attach")
+@click.option("--network/--no-network", default=True, help="Apply network allowlist")
+@click.option("--name", "custom_name", type=str, help="Custom container name")
+def open_cmd(target, ssh, no_interactive, network, custom_name):
+    """Open a bubble for a GitHub target (URL, org/repo, or shorthand)."""
     config = load_config()
+    runtime = get_runtime(config)
+
+    # Step 1: Check if target matches an existing container name
+    existing = _find_existing_container(runtime, target)
+    if existing:
+        _reattach(runtime, existing, ssh, no_interactive)
+        return
+
+    # Step 2: Parse target
+    registry = RepoRegistry()
+    try:
+        t = parse_target(target, registry)
+    except TargetParseError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+
+    # Step 3: Register repo in RepoRegistry
+    registry.register(t.owner, t.repo)
+
+    # Step 4: Generate name and check for existing container
+    if custom_name:
+        name = custom_name
+    elif t.kind == "pr":
+        name = generate_name(t.short_name, "pr", t.ref)
+    elif t.kind == "branch":
+        name = generate_name(t.short_name, "branch", t.ref)
+    elif t.kind == "commit":
+        name = generate_name(t.short_name, "commit", t.ref[:12])
+    else:
+        name = generate_name(t.short_name, "main", "")
+
+    existing = _find_existing_container(
+        runtime, target, generated_name=name,
+        org_repo=t.org_repo, kind=t.kind, ref=t.ref,
+    )
+    if existing:
+        _reattach(runtime, existing, ssh, no_interactive)
+        return
+
+    # Step 5: Ensure platform and bare repo
+    ensure_platform(config)
     ensure_dirs()
 
-    # Platform setup
-    click.echo("Setting up container runtime...")
-    ensure_platform(config)
+    bare_path = ensure_repo(t.org_repo)
 
-    runtime = get_runtime(config)
-    if not runtime.is_available():
-        click.echo("Error: Incus is not available. Ensure Colima is running.", err=True)
-        sys.exit(1)
-    click.echo("  Runtime ready.")
+    # Step 6: Fetch specific ref if needed
+    if t.kind == "pr":
+        click.echo(f"Fetching PR #{t.ref}...")
+        try:
+            fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
+        except Exception:
+            # May already be available from a full fetch
+            pass
 
-    # VSCode extensions
-    ensure_vscode_extensions()
-
-    # Build lean-base image if needed
-    if not runtime.image_exists("lean-base"):
-        click.echo("Building lean-base image...")
-        from .images.builder import build_lean_base
-
-        build_lean_base(runtime)
+    # Step 7: Hook detection
+    if t.kind == "pr":
+        hook_ref = f"refs/pull/{t.ref}/head"
+    elif t.kind == "branch":
+        hook_ref = t.ref
+    elif t.kind == "commit":
+        hook_ref = t.ref
     else:
-        click.echo("  lean-base image already exists.")
+        hook_ref = "HEAD"
 
-    # Init shared git store
-    click.echo("Initializing shared git store...")
-    for repo in config["git"]["shared_repos"]:
-        path = bare_repo_path(repo)
-        if path.exists():
-            click.echo(f"  {repo}: already exists")
-        else:
-            click.echo(f"  {repo}: cloning bare mirror...")
-            ensure_repo(repo)
-
-    # Offer to install automation
-    from .automation import install_automation, is_automation_installed
-
-    status = is_automation_installed()
-    if not any(status.values()):
-        if click.confirm(
-            "Install automation (hourly git update, weekly image refresh)?", default=True
-        ):
-            installed = install_automation()
-            for item in installed:
-                click.echo(f"  Installed: {item}")
+    hook = select_hook(bare_path, hook_ref)
+    if hook:
+        click.echo(f"  Detected: {hook.name()}")
+        image_name = hook.image_name()
     else:
-        click.echo("  Automation already installed.")
+        image_name = "bubble-base"
 
-    click.echo()
-    click.echo("Setup complete! Try: bubble new batteries --pr 1234")
+    # Step 8: Ensure image exists
+    if not runtime.image_exists(image_name):
+        click.echo(f"Building {image_name} image...")
+        from .images.builder import build_image
 
+        build_image(runtime, image_name)
 
-# ---------------------------------------------------------------------------
-# new
-# ---------------------------------------------------------------------------
-
-
-@main.command("new")
-@click.argument("repo")
-@click.option("--pr", type=int, help="PR number to checkout")
-@click.option("--branch", type=str, help="Branch to checkout")
-@click.option("--name", type=str, help="Custom container name")
-@click.option("--no-attach", is_flag=True, help="Don't open VSCode after creation")
-@click.option("--network/--no-network", default=True, help="Apply network allowlist")
-def new_bubble(repo, pr, branch, name, no_attach, network):
-    """Create a new bubble for a Lean project."""
-    config = load_config()
-    ensure_platform(config)
-    runtime = get_runtime(config)
-
-    # Resolve repo name
-    org_repo = resolve_repo(repo)
-    short = repo_short_name(org_repo)
-
-    # Generate name
-    if not name:
-        if pr:
-            name = generate_name(short, "pr", str(pr))
-        elif branch:
-            name = generate_name(short, "branch", branch)
-        else:
-            name = generate_name(short, "main", "")
-
-    # Deduplicate
-    existing = {c.name for c in runtime.list_containers()}
-    name = deduplicate_name(name, existing)
+    # Deduplicate name
+    existing_names = {c.name for c in runtime.list_containers()}
+    name = deduplicate_name(name, existing_names)
 
     click.echo(f"Creating bubble '{name}'...")
 
-    # Ensure lean-base image exists
-    if not runtime.image_exists("lean-base"):
-        click.echo("Building lean-base image first...")
-        from .images.builder import build_lean_base
+    # Step 9: Launch container
+    runtime.launch(name, image_name)
 
-        build_lean_base(runtime)
-
-    # Launch container
-    runtime.launch(name, "lean-base")
-
-    # Wait for container to be ready (including DNS)
+    # Wait for container to be ready
     for _ in range(30):
         try:
             runtime.exec(name, ["true"])
@@ -275,77 +315,91 @@ def new_bubble(repo, pr, branch, name, no_attach, network):
         except Exception:
             time.sleep(1)
 
-    # Mount only the needed bare repo (not the entire git store)
-    bare_path = ensure_repo(org_repo)
+    # Mount bare repo
     if bare_path.exists():
         runtime.add_disk(
             name, "shared-git", str(bare_path), f"/shared/git/{bare_path.name}", readonly=True
         )
 
-    # Clone the repo inside the container using --reference
-    url = github_url(org_repo)
-    click.echo(f"Cloning {org_repo} (using shared objects)...")
+    # Clone repo inside container
+    short = repo_short_name(t.org_repo)
+    url = github_url(t.org_repo)
+    click.echo(f"Cloning {t.org_repo} (using shared objects)...")
     runtime.exec(
         name,
         [
             "su",
             "-",
-            "lean",
+            "user",
             "-c",
-            f"git clone --reference /shared/git/{bare_path.name} {url} /home/lean/{short}",
+            f"git clone --reference /shared/git/{bare_path.name} {url} /home/user/{short}",
         ],
     )
 
-    # Checkout PR or branch
+    # Checkout the appropriate ref
     checkout_branch = ""
-    if pr:
-        click.echo(f"Checking out PR #{pr}...")
-        checkout_branch = f"pr-{pr}"
+    if t.kind == "pr":
+        click.echo(f"Checking out PR #{t.ref}...")
+        checkout_branch = f"pr-{t.ref}"
         q_branch = shlex.quote(checkout_branch)
         runtime.exec(
             name,
             [
                 "su",
                 "-",
-                "lean",
+                "user",
                 "-c",
-                f"cd /home/lean/{short} && git fetch origin pull/{pr}/head:{q_branch}"
+                f"cd /home/user/{short} && git fetch origin pull/{t.ref}/head:{q_branch}"
                 f" && git checkout {q_branch}",
             ],
         )
-    elif branch:
-        click.echo(f"Checking out branch '{branch}'...")
-        checkout_branch = branch
-        q_branch = shlex.quote(branch)
+    elif t.kind == "branch":
+        click.echo(f"Checking out branch '{t.ref}'...")
+        checkout_branch = t.ref
+        q_branch = shlex.quote(t.ref)
         runtime.exec(
             name,
             [
                 "su",
                 "-",
-                "lean",
+                "user",
                 "-c",
-                f"cd /home/lean/{short} && git checkout {q_branch}",
+                f"cd /home/user/{short} && git checkout {q_branch}",
+            ],
+        )
+    elif t.kind == "commit":
+        click.echo(f"Checking out commit {t.ref[:12]}...")
+        q_commit = shlex.quote(t.ref)
+        runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "user",
+                "-c",
+                f"cd /home/user/{short} && git checkout {q_commit}",
             ],
         )
 
-    # Inject .lake cache if available
-    from .lake_cache import inject_cache_into_container
+    # Step 10: Run hook post_clone
+    project_dir = f"/home/user/{short}"
+    if hook:
+        hook.post_clone(runtime, name, project_dir)
 
-    project_dir = f"/home/lean/{short}"
-    if inject_cache_into_container(runtime, name, project_dir, short):
-        click.echo("  Injected cached .lake artifacts.")
+    # Step 11: Ensure hook's VSCode extensions
+    if hook:
+        ensure_vscode_extensions(hook.vscode_extensions())
 
-    # Apply network allowlist
+    # Step 12: Apply network allowlist (merging hook domains)
     if network:
-        _apply_network(runtime, name, config)
+        extra_domains = hook.network_domains() if hook else None
+        _apply_network(runtime, name, config, extra_domains)
 
     # Set up SSH access
     click.echo("Setting up SSH access...")
     _setup_ssh(runtime, name)
 
     # Register in lifecycle
-    from .lifecycle import register_bubble
-
     commit = ""
     try:
         commit = runtime.exec(
@@ -353,21 +407,49 @@ def new_bubble(repo, pr, branch, name, no_attach, network):
             [
                 "su",
                 "-",
-                "lean",
+                "user",
                 "-c",
-                f"cd /home/lean/{short} && git rev-parse HEAD",
+                f"cd /home/user/{short} && git rev-parse HEAD",
             ],
         ).strip()
     except Exception:
         pass
-    register_bubble(name, org_repo, branch=checkout_branch, commit=commit, pr=pr or 0)
+    register_bubble(
+        name, t.org_repo,
+        branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
+        commit=commit,
+        pr=int(t.ref) if t.kind == "pr" else 0,
+        base_image=image_name,
+    )
 
     click.echo(f"Bubble '{name}' created successfully.")
     click.echo(f"  SSH: ssh bubble-{name}")
-    click.echo(f"  Shell: bubble shell {name}")
 
-    if not no_attach:
-        click.echo("Opening VSCode...")
+    # Step 13: Attach
+    if not no_interactive:
+        if ssh:
+            click.echo(f"Connecting via SSH...")
+            subprocess.run(["ssh", f"bubble-{name}"])
+        else:
+            click.echo("Opening VSCode...")
+            open_vscode(name, project_dir)
+
+
+def _reattach(runtime: ContainerRuntime, name: str, ssh: bool, no_interactive: bool):
+    """Re-attach to an existing container."""
+    _ensure_running(runtime, name)
+
+    if no_interactive:
+        click.echo(f"Bubble '{name}' is running.")
+        return
+
+    project_dir = _detect_project_dir(runtime, name)
+
+    if ssh:
+        click.echo(f"Connecting to '{name}' via SSH...")
+        subprocess.run(["ssh", f"bubble-{name}"])
+    else:
+        click.echo(f"Opening VSCode for '{name}'...")
         open_vscode(name, project_dir)
 
 
@@ -378,75 +460,26 @@ def new_bubble(repo, pr, branch, name, no_attach, network):
 
 @main.command("list")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-@click.option("--archived", is_flag=True, help="Include archived bubbles")
-def list_bubbles(as_json, archived):
+def list_bubbles(as_json):
     """List all bubbles."""
     config = load_config()
     runtime = get_runtime(config)
 
     containers = runtime.list_containers()
 
-    # Merge with archived info from registry
-    from .lifecycle import _load_registry
-
-    registry = _load_registry()
-    archived_bubbles = []
-    if archived:
-        for bname, binfo in registry.get("bubbles", {}).items():
-            if binfo.get("state") == "archived":
-                archived_bubbles.append(binfo | {"name": bname})
-
     if as_json:
         data = [{"name": c.name, "state": c.state, "ipv4": c.ipv4} for c in containers]
-        if archived:
-            data.extend(archived_bubbles)
         click.echo(json.dumps(data, indent=2))
         return
 
-    if not containers and not archived_bubbles:
-        click.echo("No bubbles. Create one with: bubble new mathlib4")
+    if not containers:
+        click.echo("No bubbles. Create one with: bubble owner/repo")
         return
 
-    if containers:
-        click.echo(f"{'NAME':<30} {'STATE':<10} {'IPv4':<16}")
-        click.echo("-" * 56)
-        for c in containers:
-            click.echo(f"{c.name:<30} {c.state:<10} {c.ipv4 or '-':<16}")
-
-    if archived_bubbles:
-        click.echo()
-        click.echo(f"{'ARCHIVED':<30} {'REPO':<25} {'BRANCH':<20}")
-        click.echo("-" * 75)
-        for b in archived_bubbles:
-            click.echo(f"{b['name']:<30} {b.get('org_repo', ''):<25} {b.get('branch', ''):<20}")
-
-
-# ---------------------------------------------------------------------------
-# attach / shell
-# ---------------------------------------------------------------------------
-
-
-@main.command()
-@click.argument("name")
-def attach(name):
-    """Open VSCode connected to a bubble."""
-    config = load_config()
-    runtime = get_runtime(config)
-    _ensure_running(runtime, name)
-
-    project_dir = _detect_project_dir(runtime, name)
-    click.echo(f"Opening VSCode for '{name}'...")
-    open_vscode(name, project_dir)
-
-
-@main.command()
-@click.argument("name")
-def shell(name):
-    """Open a shell in a bubble."""
-    config = load_config()
-    runtime = get_runtime(config)
-    _ensure_running(runtime, name)
-    subprocess.run(["incus", "exec", name, "--", "su", "-", "lean"])
+    click.echo(f"{'NAME':<30} {'STATE':<10} {'IPv4':<16}")
+    click.echo("-" * 56)
+    for c in containers:
+        click.echo(f"{c.name:<30} {c.state:<10} {c.ipv4 or '-':<16}")
 
 
 # ---------------------------------------------------------------------------
@@ -477,136 +510,56 @@ def destroy(name, force):
 
     runtime.delete(name, force=True)
     remove_ssh_config(name)
+    unregister_bubble(name)
     click.echo(f"Bubble '{name}' destroyed.")
 
 
 # ---------------------------------------------------------------------------
-# wrap
-# ---------------------------------------------------------------------------
-
-
-@main.command("wrap")
-@click.argument("directory", default=".", type=click.Path(exists=True))
-@click.option("--pr", type=int, help="Associate with a PR number")
-@click.option(
-    "--copy", "copy_mode", is_flag=True, help="Copy instead of move (leave local unchanged)"
-)
-@click.option("--name", type=str, help="Custom container name")
-@click.option("--no-attach", is_flag=True, help="Don't open VSCode after wrapping")
-def wrap_cmd(directory, pr, copy_mode, name, no_attach):
-    """Move (or copy) a local working directory into a bubble."""
-    config = load_config()
-    ensure_platform(config)
-    runtime = get_runtime(config)
-
-    from .wrap import detect_repo_info, wrap_directory
-
-    directory = Path(directory).resolve()
-    info = detect_repo_info(directory)
-
-    click.echo(f"Detected: {info['org_repo']} on branch '{info['branch']}'")
-    if info["has_changes"]:
-        if copy_mode:
-            click.echo("  (copying with uncommitted changes)")
-        else:
-            click.echo("  (will stash uncommitted changes locally)")
-
-    bubble_name = wrap_directory(
-        runtime,
-        directory,
-        config,
-        pr=pr or 0,
-        copy_mode=copy_mode,
-        custom_name=name or "",
-    )
-
-    _apply_network(runtime, bubble_name, config)
-    add_ssh_config(bubble_name)
-    click.echo(f"Bubble '{bubble_name}' created from local directory.")
-    click.echo(f"  SSH: ssh bubble-{bubble_name}")
-
-    if not no_attach:
-        short = info["short"]
-        click.echo("Opening VSCode...")
-        open_vscode(bubble_name, f"/home/lean/{short}")
-
-
-# ---------------------------------------------------------------------------
-# archive / resume
+# init
 # ---------------------------------------------------------------------------
 
 
 @main.command()
-@click.argument("name")
-@click.option("--force", is_flag=True, help="Archive even if git is not fully synced")
-def archive(name, force):
-    """Archive a bubble (save state, destroy container)."""
+def init():
+    """First-time setup: configure runtime, build base image."""
     config = load_config()
-    runtime = get_runtime(config)
+    ensure_dirs()
 
-    _ensure_running(runtime, name)
-    project_dir = _detect_project_dir(runtime, name)
-
-    # Check git sync state
-    from .lifecycle import archive_bubble, check_git_synced
-
-    synced, reason = check_git_synced(runtime, name, project_dir)
-    if not synced and not force:
-        click.echo(f"Cannot archive: {reason}", err=True)
-        click.echo("Use --force to archive anyway, or push/commit first.", err=True)
-        sys.exit(1)
-    elif not synced:
-        click.echo(f"Warning: {reason}")
-
-    state = archive_bubble(runtime, name, project_dir)
-    remove_ssh_config(name)
-
-    click.echo(f"Bubble '{name}' archived.")
-    click.echo(f"  Repo: {state.get('org_repo', '')}")
-    click.echo(f"  Branch: {state.get('branch', '')}")
-    click.echo(f"  Commit: {state.get('commit', '')[:12]}")
-    click.echo(f"Resume with: bubble resume {name}")
-
-
-@main.command()
-@click.argument("name")
-@click.option("--no-attach", is_flag=True, help="Don't open VSCode after resuming")
-def resume(name, no_attach):
-    """Resume an archived bubble from the local registry."""
-    config = load_config()
+    # Platform setup
+    click.echo("Setting up container runtime...")
     ensure_platform(config)
+
     runtime = get_runtime(config)
-
-    # Look up from local registry
-    from .lifecycle import get_bubble_info
-
-    state = get_bubble_info(name)
-    if not state:
-        click.echo(f"No archived bubble '{name}' found.", err=True)
+    if not runtime.is_available():
+        click.echo("Error: Incus is not available. Ensure Colima is running.", err=True)
         sys.exit(1)
-    if state.get("state") != "archived":
-        click.echo(f"Bubble '{name}' is not archived (state: {state.get('state')}).", err=True)
-        sys.exit(1)
+    click.echo("  Runtime ready.")
 
-    # Deduplicate name
-    existing = {c.name for c in runtime.list_containers()}
-    name = deduplicate_name(name, existing)
+    # Build bubble-base image if needed
+    if not runtime.image_exists("bubble-base"):
+        click.echo("Building bubble-base image...")
+        from .images.builder import build_image
 
-    click.echo(f"Reconstituting bubble '{name}'...")
-    from .lifecycle import reconstitute_bubble
+        build_image(runtime, "bubble-base")
+    else:
+        click.echo("  bubble-base image already exists.")
 
-    reconstitute_bubble(runtime, name, state)
+    # Offer to install automation
+    from .automation import install_automation, is_automation_installed
 
-    _apply_network(runtime, name, config)
-    _setup_ssh(runtime, name)
+    status = is_automation_installed()
+    if not any(status.values()):
+        if click.confirm(
+            "Install automation (hourly git update, weekly image refresh)?", default=True
+        ):
+            installed = install_automation()
+            for item in installed:
+                click.echo(f"  Installed: {item}")
+    else:
+        click.echo("  Automation already installed.")
 
-    short = repo_short_name(state.get("org_repo", ""))
-    project_dir = f"/home/lean/{short}"
-    click.echo(f"Bubble '{name}' resumed.")
-
-    if not no_attach:
-        click.echo("Opening VSCode...")
-        open_vscode(name, project_dir)
+    click.echo()
+    click.echo("Setup complete! Try: bubble owner/repo")
 
 
 # ---------------------------------------------------------------------------
@@ -645,9 +598,9 @@ def images_list():
 
 
 @images_group.command("build")
-@click.argument("image_name", default="lean-base")
+@click.argument("image_name", default="bubble-base")
 def images_build(image_name):
-    """Build a base image (lean-base, lean-mathlib, lean-batteries, lean-lean4)."""
+    """Build a base image (bubble-base, bubble-lean)."""
     config = load_config()
     ensure_platform(config)
     runtime = get_runtime(config)
@@ -674,8 +627,7 @@ def git_group():
 @git_group.command("update")
 def git_update():
     """Update all shared bare repos."""
-    config = load_config()
-    update_all_repos(config["git"]["shared_repos"])
+    update_all_repos()
     click.echo("Git store updated.")
 
 

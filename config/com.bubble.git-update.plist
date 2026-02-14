@@ -3,23 +3,23 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.lean-bubbles.git-update</string>
+    <string>com.bubble.git-update</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
         <string>
             if command -v bubble &amp;&gt; /dev/null; then
-                bubble git update 2&gt;&amp;1 | logger -t lean-bubbles-git
+                bubble git update 2&gt;&amp;1 | logger -t bubble-git
             fi
         </string>
     </array>
     <key>StartInterval</key>
     <integer>3600</integer>
     <key>StandardOutPath</key>
-    <string>/tmp/lean-bubbles-git-update.log</string>
+    <string>/tmp/bubble-git-update.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/lean-bubbles-git-update.log</string>
+    <string>/tmp/bubble-git-update.log</string>
     <key>RunAtLoad</key>
     <false/>
 </dict>

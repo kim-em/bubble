@@ -63,13 +63,34 @@ def update_bare_repo(org_repo: str):
     )
 
 
-def update_all_repos(repos: list[str]):
-    """Update all configured bare repos."""
-    for repo in repos:
-        try:
-            update_bare_repo(repo)
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: failed to update {repo}: {e}")
+def fetch_ref(org_repo: str, ref: str):
+    """Fetch a specific ref into the bare repo (e.g. a PR ref)."""
+    path = bare_repo_path(org_repo)
+    if not path.exists():
+        init_bare_repo(org_repo)
+        return
+
+    subprocess.run(
+        ["git", "-C", str(path), "fetch", "origin", ref],
+        check=True,
+    )
+
+
+def update_all_repos():
+    """Update all bare repos found in the git store directory."""
+    if not GIT_DIR.exists():
+        return
+
+    for repo_dir in sorted(GIT_DIR.iterdir()):
+        if repo_dir.is_dir() and repo_dir.name.endswith(".git"):
+            try:
+                print(f"Updating {repo_dir.name}...")
+                subprocess.run(
+                    ["git", "-C", str(repo_dir), "fetch", "--all", "--prune"],
+                    check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                print(f"Warning: failed to update {repo_dir.name}: {e}")
 
 
 def ensure_repo(org_repo: str) -> Path:

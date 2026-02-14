@@ -164,7 +164,7 @@ def _install_systemd() -> list[str]:
 
         [Service]
         Type=oneshot
-        ExecStart={bubble} images build lean-base
+        ExecStart={bubble} images build bubble-base
     """)
     )
 

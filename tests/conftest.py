@@ -14,7 +14,7 @@ class MockRuntime(ContainerRuntime):
         self.calls = []
         self.exec_responses: dict[str, str] = {}
         self._containers: dict[str, ContainerInfo] = {}
-        self._images: set[str] = {"lean-base"}
+        self._images: set[str] = {"bubble-base"}
 
     def is_available(self) -> bool:
         self.calls.append(("is_available",))
@@ -84,29 +84,26 @@ def tmp_data_dir(tmp_path, monkeypatch):
     """Redirect all bubble data dirs to a temp directory."""
     import bubble.config as config
     import bubble.git_store as git_store
-    import bubble.lake_cache as lake_cache
     import bubble.lifecycle as lifecycle
 
     data_dir = tmp_path / "bubble"
     data_dir.mkdir()
     git_dir = data_dir / "git"
     git_dir.mkdir()
-    lake_cache_dir = data_dir / "lake-cache"
-    lake_cache_dir.mkdir()
     registry_file = data_dir / "registry.json"
     config_file = data_dir / "config.toml"
+    repos_file = data_dir / "repos.json"
 
     # Patch the canonical config module
     monkeypatch.setattr(config, "DATA_DIR", data_dir)
     monkeypatch.setattr(config, "CONFIG_FILE", config_file)
     monkeypatch.setattr(config, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(config, "GIT_DIR", git_dir)
-    monkeypatch.setattr(config, "LAKE_CACHE_DIR", lake_cache_dir)
+    monkeypatch.setattr(config, "REPOS_FILE", repos_file)
 
     # Also patch modules that do `from .config import X` (separate bindings)
     monkeypatch.setattr(lifecycle, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(git_store, "GIT_DIR", git_dir)
-    monkeypatch.setattr(lake_cache, "LAKE_CACHE_DIR", lake_cache_dir)
 
     return data_dir
 
@@ -141,11 +138,11 @@ def _incus_is_available() -> bool:
         return False
 
 
-def _lean_base_image_exists() -> bool:
-    """Check if the lean-base image exists."""
+def _bubble_base_image_exists() -> bool:
+    """Check if the bubble-base image exists."""
     try:
         result = subprocess.run(
-            ["incus", "image", "show", "lean-base"],
+            ["incus", "image", "show", "bubble-base"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -160,7 +157,7 @@ requires_incus = pytest.mark.skipif(
     not _incus_is_available(),
     reason="Incus not available",
 )
-requires_lean_base = pytest.mark.skipif(
-    not _incus_is_available() or not _lean_base_image_exists(),
-    reason="Incus not available or lean-base image not built",
+requires_bubble_base = pytest.mark.skipif(
+    not _incus_is_available() or not _bubble_base_image_exists(),
+    reason="Incus not available or bubble-base image not built",
 )

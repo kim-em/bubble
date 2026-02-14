@@ -40,7 +40,7 @@ def allocate_port() -> int:
     return port
 
 
-def add_ssh_config(bubble_name: str, port: int = 0, user: str = "lean"):
+def add_ssh_config(bubble_name: str, port: int = 0, user: str = "user"):
     """Add an SSH config entry for a bubble.
 
     Uses `incus exec` as ProxyCommand to avoid port forwarding issues on macOS.
@@ -100,9 +100,6 @@ def _ensure_include_directive():
         ssh_config.write_text(include_line + "\n")
 
 
-REQUIRED_EXTENSIONS = ["leanprover.lean4"]
-
-
 def _vscode_settings_path() -> Path:
     """Get the VSCode user settings.json path."""
     if platform.system() == "Darwin":
@@ -110,8 +107,11 @@ def _vscode_settings_path() -> Path:
     return Path.home() / ".config" / "Code" / "User" / "settings.json"
 
 
-def ensure_vscode_extensions():
-    """Ensure VSCode is configured to auto-install Lean extension on remote SSH hosts."""
+def ensure_vscode_extensions(extensions: list[str] | None = None):
+    """Ensure VSCode is configured to auto-install extensions on remote SSH hosts."""
+    if not extensions:
+        return
+
     settings_path = _vscode_settings_path()
     if not settings_path.exists():
         return
@@ -123,7 +123,7 @@ def ensure_vscode_extensions():
 
     existing = settings.get("remote.SSH.defaultExtensions", [])
     added = []
-    for ext in REQUIRED_EXTENSIONS:
+    for ext in extensions:
         if ext not in existing:
             existing.append(ext)
             added.append(ext)
@@ -133,7 +133,7 @@ def ensure_vscode_extensions():
         settings_path.write_text(json.dumps(settings, indent=4) + "\n")
 
 
-def open_vscode(bubble_name: str, remote_path: str = "/home/lean"):
+def open_vscode(bubble_name: str, remote_path: str = "/home/user"):
     """Open VSCode connected to a bubble via Remote SSH."""
     host = f"bubble-{bubble_name}"
     uri = f"vscode-remote://ssh-remote+{host}{remote_path}"

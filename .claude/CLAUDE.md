@@ -4,91 +4,99 @@ This file helps Claude Code sessions understand the bubble codebase.
 
 ## What This Project Is
 
-`bubble` provides containerized Lean 4 development environments via Incus containers. Users create isolated "bubbles" for working on Lean/Mathlib PRs, with VSCode Remote SSH as the primary interface.
+`bubble` provides containerized development environments via Incus containers. The primary interface is URL-based: `bubble <github-url>` creates (or re-attaches to) an isolated container with VSCode Remote SSH. Language-specific hooks (currently Lean 4) auto-detect the project type and select the right image.
 
 ## Package Structure
 
 ```
 bubble/
-├── cli.py              # Click CLI. All commands defined here. Entry point: main()
+├── cli.py              # Click CLI with BubbleGroup (routes unknown args to `open` command)
 ├── config.py           # TOML config at ~/.bubble/config.toml
-│                       # Also defines KNOWN_REPOS for short name resolution
+├── target.py           # GitHub URL/shorthand parsing → Target dataclass
+├── repo_registry.py    # Learned short name → owner/repo mappings (~/.bubble/repos.json)
 ├── naming.py           # Container name generation: <repo>-<source>-<id>
 ├── git_store.py        # Shared bare repo management at ~/.bubble/git/
-├── lake_cache.py       # Shared .lake cache volume, keyed by repo+toolchain
-├── lifecycle.py        # Archive/reconstitute, registry tracking
-├── wrap.py             # `bubble wrap .` — move local working dir into a bubble
+├── lifecycle.py        # Registry tracking for active bubbles
 ├── network.py          # Network allowlisting via iptables inside containers
 ├── vscode.py           # SSH config generation + `code --remote` launching
 ├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
+├── hooks/
+│   ├── __init__.py     # Hook ABC, discover_hooks(), select_hook()
+│   └── lean.py         # LeanHook: detects lean-toolchain, uses bubble-lean image
 ├── runtime/
 │   ├── base.py         # Abstract ContainerRuntime interface
 │   ├── incus.py        # IncusRuntime: shells out to `incus` CLI
 │   └── colima.py       # macOS: ensure Colima VM is running with correct resources
 ├── images/
-│   ├── builder.py      # Image build orchestration (launch container, run script, publish)
-│   └── scripts/        # Shell scripts run inside containers during image build
-│       ├── lean-base.sh
-│       ├── lean-mathlib.sh
-│       ├── lean-batteries.sh
-│       └── lean-lean4.sh
+│   ├── builder.py      # Image build via IMAGES registry dict (recursive parent building)
+│   └── scripts/
+│       ├── base.sh     # Ubuntu 24.04 + git + ssh + build-essential (user: "user")
+│       └── lean.sh     # elan + latest stable/RC toolchains (derives from bubble-base)
 ```
 
 ## Key Design Decisions
+
+### URL-First Interface
+The primary command is `bubble <target>`. A custom `BubbleGroup(click.Group)` routes any unknown first argument to the implicit `open` command. Targets are parsed by `target.py` into a `Target(owner, repo, kind, ref)` dataclass. Short names are resolved via `RepoRegistry`, which learns mappings automatically on first use.
+
+### Language Hooks
+The `hooks/` package provides a pluggable system for language-specific behavior. Each `Hook` subclass implements `detect()` (check bare repo for language markers), `image_name()`, `post_clone()`, `vscode_extensions()`, and `network_domains()`. Hook detection runs against the host bare repo via `git show <ref>:<file>` — no container needed.
 
 ### Runtime Abstraction
 `ContainerRuntime` (base.py) is an abstract interface. `IncusRuntime` is the only implementation today. Docker/Podman support is a stretch goal — the abstraction exists to make that possible without refactoring.
 
 ### Git Object Sharing
-The core performance optimization. Host maintains bare mirror repos (`git clone --bare`). Containers clone with `git clone --reference /shared/git/repo.git url` — git alternates share immutable objects. Each container has fully independent refs/branches/working tree.
+The core performance optimization. Host maintains bare mirror repos (`git clone --bare`). Containers clone with `git clone --reference /shared/git/repo.git url` — git alternates share immutable objects. Each container has fully independent refs/branches/working tree. `update_all_repos()` discovers repos from the `~/.bubble/git/*.git` directory listing.
+
+### Image Registry
+Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. Currently: `bubble-base` (from Ubuntu 24.04) and `bubble-lean` (from bubble-base).
 
 ### Colima on macOS
 Incus requires Linux. On macOS, Colima runs a lightweight Linux VM with Apple's Virtualization.Framework (`--vm-type vz`). The `ensure_colima()` function starts it if needed.
 
 ### SSH via ProxyCommand
-Each container runs sshd. Rather than port forwarding (which doesn't work well through Colima on macOS), we use `ProxyCommand incus exec <name> -- su - lean -c "nc localhost 22"`. SSH config entries are auto-generated in `~/.ssh/config.d/bubble`.
+Each container runs sshd. Rather than port forwarding (which doesn't work well through Colima on macOS), we use `ProxyCommand incus exec <name> -- su - user -c "nc localhost 22"`. SSH config entries are auto-generated in `~/.ssh/config.d/bubble`.
 
 ### Container Naming
-Names are `<repo>-<source>-<id>` (e.g., `mathlib4-pr-12345`). Numeric suffix for collisions. Full reconstruction state lives in the registry and PR metadata, not the name.
+Names are `<repo>-<source>-<id>` (e.g., `mathlib4-pr-12345`). Numeric suffix for collisions. The `open` command checks for existing containers by generated name and registry lookup before creating new ones.
 
 ### Container Lifecycle
 ```
-created → running ⇄ paused → archived → (reconstituted → running)
-             │                        → destroyed
-             └→ destroyed
+created → running ⇄ paused → destroyed
 ```
 
-Archive checks git sync state (uncommitted changes, unpushed commits), saves metadata to `~/.bubble/registry.json`, then destroys the container. Reconstitute recreates from base image + saved state.
-
 ### Network Allowlisting
-Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Configurable domain list in config.toml.
+Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Base allowlist comes from config.toml; hooks contribute additional domains (e.g., Lean adds `releases.lean-lang.org`).
 
 ### Security Model
-The `lean` user has no sudo and a locked password. Network allowlisting is applied on all container creation paths (new, resume, wrap). SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Tar extraction from containers uses safe validation. Each container mounts only its specific bare repo, not the entire git store.
+The `user` account has no sudo and a locked password. Network allowlisting is applied on container creation. SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Each container mounts only its specific bare repo, not the entire git store.
+
+## How to Add a New Language Hook
+
+1. Create `bubble/hooks/<language>.py` with a class extending `Hook`
+2. Implement `detect()` to check for language markers in the bare repo
+3. Implement `image_name()` to return the image to use
+4. Add image script in `images/scripts/<name>.sh` and entry in `builder.py`'s `IMAGES` dict
+5. Register the hook in `hooks/__init__.py`'s `discover_hooks()`
 
 ## How to Add a New Command
 
 1. Add a `@main.command()` function in `cli.py`
 2. Load config with `load_config()`, get runtime with `get_runtime(config)`
 3. Use `runtime.exec()`, `runtime.launch()`, etc. for container operations
-4. Use `_ensure_running()`, `_setup_ssh()`, `_detect_project_dir()` helpers
-
-## How to Add a New Base Image
-
-1. Create a script in `images/scripts/<name>.sh`
-2. Add the image name to `DERIVED_IMAGES` dict in `images/builder.py`
-3. The `build_image()` function handles it automatically
 
 ## Data Locations
 
 - `~/.bubble/config.toml` — user settings
 - `~/.bubble/git/` — bare repo mirrors
-- `~/.bubble/lake-cache/` — shared .lake caches (keyed by repo+toolchain)
-- `~/.bubble/registry.json` — bubble state tracking (active + archived)
+- `~/.bubble/repos.json` — learned repo short name mappings
+- `~/.bubble/registry.json` — bubble state tracking
 - `~/.ssh/config.d/bubble` — auto-managed SSH config
 
 ## Automation
 
-On macOS, `bubble init` installs launchd jobs:
+On macOS, `bubble automation install` installs launchd jobs:
 - `com.bubble.git-update` — hourly git store refresh
 - `com.bubble.image-refresh` — weekly base image rebuild
+
+On Linux, equivalent systemd user timers are installed.

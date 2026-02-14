@@ -16,7 +16,7 @@ DATA_DIR = Path(os.environ.get("BUBBLE_HOME", Path.home() / ".bubble"))
 CONFIG_FILE = DATA_DIR / "config.toml"
 REGISTRY_FILE = DATA_DIR / "registry.json"
 GIT_DIR = DATA_DIR / "git"
-LAKE_CACHE_DIR = DATA_DIR / "lake-cache"
+REPOS_FILE = DATA_DIR / "repos.json"
 
 DEFAULT_CONFIG = {
     "runtime": {
@@ -26,14 +26,6 @@ DEFAULT_CONFIG = {
         "colima_disk": 60,
         "colima_vm_type": "vz",
     },
-    "git": {
-        "shared_repos": [
-            "leanprover-community/mathlib4",
-            "leanprover/lean4",
-            "leanprover-community/batteries",
-        ],
-        "update_interval": "1h",
-    },
     "images": {
         "refresh": "weekly",
     },
@@ -41,30 +33,14 @@ DEFAULT_CONFIG = {
         "allowlist": [
             "github.com",
             "*.githubusercontent.com",
-            "objects.githubusercontent.com",
-            "releases.lean-lang.org",
         ],
     },
-}
-
-# Well-known repos and their GitHub URLs
-KNOWN_REPOS = {
-    "mathlib4": "leanprover-community/mathlib4",
-    "mathlib": "leanprover-community/mathlib4",
-    "lean4": "leanprover/lean4",
-    "lean": "leanprover/lean4",
-    "batteries": "leanprover-community/batteries",
-    "std4": "leanprover-community/batteries",
-    "proofwidgets4": "leanprover-community/ProofWidgets4",
-    "aesop": "leanprover-community/aesop",
-    "quote4": "leanprover-community/quote4",
-    "doc-gen4": "leanprover-community/doc-gen4",
 }
 
 
 def ensure_dirs():
     """Create data directories if they don't exist."""
-    for d in [DATA_DIR, GIT_DIR, LAKE_CACHE_DIR]:
+    for d in [DATA_DIR, GIT_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -98,18 +74,6 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             result[key] = value
     return result
-
-
-def resolve_repo(name: str) -> str:
-    """Resolve a short repo name to org/repo format."""
-    if "/" in name:
-        return name
-    lower = name.lower()
-    if lower in KNOWN_REPOS:
-        return KNOWN_REPOS[lower]
-    raise ValueError(
-        f"Unknown repo '{name}'. Use org/repo format or one of: {', '.join(KNOWN_REPOS.keys())}"
-    )
 
 
 def repo_short_name(full_name: str) -> str:
