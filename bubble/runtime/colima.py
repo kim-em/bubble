@@ -51,9 +51,6 @@ def stop_colima():
 
 def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
     """Ensure Colima is running with correct settings. Restart if needed."""
-    if not is_colima_installed():
-        raise RuntimeError("Colima is not installed. Run: brew install colima incus")
-
     if is_colima_running():
         # Check if config matches
         # For now, just ensure it's running. Future: check CPU/memory match.

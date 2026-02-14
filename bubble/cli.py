@@ -29,18 +29,65 @@ from .vscode import (
 )
 
 
+def _is_command_available(cmd: str) -> bool:
+    """Check if a command is available on PATH."""
+    try:
+        subprocess.run([cmd, "--version"], capture_output=True, timeout=5)
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _ensure_dependencies():
+    """Check for required dependencies and offer to install them interactively."""
+    system = platform.system()
+
+    if system == "Darwin":
+        # Check Homebrew
+        if not _is_command_available("brew"):
+            click.echo("Homebrew is required but not installed.")
+            click.echo("  Install it with:")
+            click.echo('  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"')
+            sys.exit(1)
+
+        # Check Colima and Incus
+        missing = []
+        if not _is_command_available("colima"):
+            missing.append("colima")
+        if not _is_command_available("incus"):
+            missing.append("incus")
+
+        if missing:
+            names = " and ".join(missing)
+            cmd = "brew install " + " ".join(missing)
+            click.echo(f"{names} {'is' if len(missing) == 1 else 'are'} required but not installed.")
+            if click.confirm(f"  Install via Homebrew? ({cmd})", default=True):
+                subprocess.run(["brew", "install"] + missing, check=True)
+            else:
+                click.echo(f"  To install manually: {cmd}")
+                sys.exit(1)
+
+    elif system == "Linux":
+        if not _is_command_available("incus"):
+            click.echo("Incus is required but not installed.")
+            click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
+            sys.exit(1)
+
+
 def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
     """Get the configured container runtime. Ensures platform is ready by default."""
-    if ensure_ready and platform.system() == "Darwin":
-        from .runtime.colima import ensure_colima
+    if ensure_ready:
+        _ensure_dependencies()
+        if platform.system() == "Darwin":
+            from .runtime.colima import ensure_colima
 
-        rt = config["runtime"]
-        ensure_colima(
-            cpu=rt["colima_cpu"],
-            memory=rt["colima_memory"],
-            disk=rt.get("colima_disk", 60),
-            vm_type=rt.get("colima_vm_type", "vz"),
-        )
+            rt = config["runtime"]
+            ensure_colima(
+                cpu=rt["colima_cpu"],
+                memory=rt["colima_memory"],
+                disk=rt.get("colima_disk", 60),
+                vm_type=rt.get("colima_vm_type", "vz"),
+            )
     backend = config["runtime"]["backend"]
     if backend == "incus":
         return IncusRuntime()
