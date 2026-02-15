@@ -88,3 +88,40 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         VSCODE_COMMIT_FILE.write_text(vscode_commit + "\n")
 
     print(f"{image_name} image built successfully.")
+
+
+def build_lean_toolchain_image(runtime: ContainerRuntime, version: str):
+    """Build a toolchain-specific Lean image (e.g. lean-v4.16.0).
+
+    Launches from the base 'lean' image and installs one specific toolchain.
+    """
+    # Ensure base lean image exists
+    if not runtime.image_exists("lean"):
+        build_image(runtime, "lean")
+
+    alias = f"lean-{version}"
+    build_name = f"lean-toolchain-{version}-builder"
+    print(f"Building {alias} image...")
+
+    runtime.launch(build_name, "lean")
+    try:
+        _wait_for_container(runtime, build_name)
+
+        script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
+        script = f"export LEAN_TOOLCHAIN='{version}'\n" + script
+        runtime.exec(build_name, ["bash", "-c", script])
+
+        runtime.stop(build_name)
+        if runtime.image_exists(alias):
+            runtime.image_delete(alias)
+        runtime.publish(build_name, alias)
+    finally:
+        try:
+            runtime.delete(build_name, force=True)
+        except Exception:
+            pass
+        # Remove lock file so future builds can proceed
+        lock_path = Path(f"/tmp/bubble-lean-{version}.lock")
+        lock_path.unlink(missing_ok=True)
+
+    print(f"{alias} image built successfully.")

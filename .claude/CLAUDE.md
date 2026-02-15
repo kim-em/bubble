@@ -33,7 +33,8 @@ bubble/
 │   ├── builder.py      # Image build via IMAGES registry dict (recursive parent building)
 │   └── scripts/
 │       ├── base.sh     # Ubuntu 24.04 + git + ssh + build-essential (user: "user")
-│       └── lean.sh     # elan + latest stable/RC toolchains (derives from base)
+│       ├── lean.sh     # elan + VS Code Lean extension (derives from base, no toolchains)
+│       └── lean-toolchain.sh  # Installs one specific Lean toolchain (for versioned images)
 ```
 
 ## Key Design Decisions
@@ -58,7 +59,10 @@ The `hooks/` package provides a pluggable system for language-specific behavior.
 The core performance optimization. Host maintains bare mirror repos (`git clone --bare`). Containers clone with `git clone --reference /shared/git/repo.git url` — git alternates share immutable objects. Each container has fully independent refs/branches/working tree. `update_all_repos()` discovers repos from the `~/.bubble/git/*.git` directory listing.
 
 ### Image Registry
-Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. Currently: `base` (from Ubuntu 24.04) and `lean` (from base).
+Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. Static images: `base` (from Ubuntu 24.04) and `lean` (from base, elan + VS Code extension only, no toolchains).
+
+### Lazy Lean Toolchain Images
+The `lean` image has only elan (no toolchains pre-installed). When `LeanHook` detects a project, it reads `lean-toolchain` and parses the version. For stable/RC versions (v4.X.Y, v4.X.Y-rcK), it requests image `lean-v4.X.Y`. If that image exists, it's used directly. If not, the plain `lean` image is used (elan downloads the toolchain on demand) and a background build of the versioned image is triggered for next time. Dynamic images are built via `build_lean_toolchain_image()` in `builder.py`. Nightlies and custom toolchains always use the plain `lean` image.
 
 ### Colima on macOS
 Incus requires Linux. On macOS, Colima runs a lightweight Linux VM with Apple's Virtualization.Framework (`--vm-type vz`). The `ensure_colima()` function starts it if needed.

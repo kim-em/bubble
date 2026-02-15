@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from bubble.hooks import discover_hooks, select_hook
-from bubble.hooks.lean import LeanHook
+from bubble.hooks.lean import LeanHook, _parse_lean_version
 
 
 @pytest.fixture
@@ -71,6 +71,54 @@ def non_lean_repo(tmp_path):
     return repo
 
 
+@pytest.fixture
+def nightly_lean_repo(tmp_path):
+    """Create a bare git repo with a nightly lean-toolchain file."""
+    repo = tmp_path / "nightly.git"
+    subprocess.run(["git", "init", "--bare", str(repo)], capture_output=True, check=True)
+
+    work = tmp_path / "work3"
+    subprocess.run(["git", "clone", str(repo), str(work)], capture_output=True, check=True)
+    (work / "lean-toolchain").write_text("leanprover/lean4:nightly-2025-01-15\n")
+    subprocess.run(["git", "-C", str(work), "add", "."], capture_output=True, check=True)
+    subprocess.run(
+        ["git", "-C", str(work), "commit", "-m", "init"],
+        capture_output=True,
+        check=True,
+        env={
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "t@t",
+            "HOME": str(tmp_path),
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+        },
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "push", "origin", "master"],
+        capture_output=True,
+        check=True,
+    )
+    return repo
+
+
+class TestParseLeanVersion:
+    def test_stable(self):
+        assert _parse_lean_version("leanprover/lean4:v4.16.0") == "v4.16.0"
+
+    def test_rc(self):
+        assert _parse_lean_version("leanprover/lean4:v4.17.0-rc2") == "v4.17.0-rc2"
+
+    def test_nightly(self):
+        assert _parse_lean_version("leanprover/lean4:nightly-2025-01-15") is None
+
+    def test_bare_version(self):
+        assert _parse_lean_version("v4.16.0") == "v4.16.0"
+
+    def test_custom(self):
+        assert _parse_lean_version("leanprover/lean4:my-branch") is None
+
+
 class TestLeanHook:
     def test_detect_lean_repo(self, lean_repo):
         hook = LeanHook()
@@ -88,8 +136,18 @@ class TestLeanHook:
         hook = LeanHook()
         assert hook.name() == "Lean 4"
 
-    def test_image_name(self):
+    def test_image_name_without_detect(self):
         hook = LeanHook()
+        assert hook.image_name() == "lean"
+
+    def test_image_name_stable(self, lean_repo):
+        hook = LeanHook()
+        hook.detect(lean_repo, "HEAD")
+        assert hook.image_name() == "lean-v4.27.0"
+
+    def test_image_name_nightly(self, nightly_lean_repo):
+        hook = LeanHook()
+        hook.detect(nightly_lean_repo, "HEAD")
         assert hook.image_name() == "lean"
 
     def test_network_domains(self):

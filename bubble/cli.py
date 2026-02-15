@@ -471,6 +471,26 @@ def help_cmd(ctx, command):
 # ---------------------------------------------------------------------------
 
 
+def _spawn_background_bubble(args: list[str], log_path: str):
+    """Spawn a background bubble command, detached from the current process.
+
+    Tries `bubble` on PATH first, falls back to `sys.executable -m bubble`.
+    """
+    bubble_cmd = shutil.which("bubble")
+    if bubble_cmd:
+        cmd = [bubble_cmd] + args
+    else:
+        cmd = [sys.executable, "-m", "bubble"] + args
+    log_file = open(log_path, "w")
+    subprocess.Popen(
+        cmd,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    log_file.close()
+
+
 def _maybe_rebuild_base_image():
     """If VS Code has updated since the base image was built, rebuild in background."""
     commit = get_vscode_commit()
@@ -478,14 +498,10 @@ def _maybe_rebuild_base_image():
         return
     if VSCODE_COMMIT_FILE.exists() and VSCODE_COMMIT_FILE.read_text().strip() == commit:
         return
-    bubble_cmd = shutil.which("bubble")
-    if bubble_cmd:
-        subprocess.Popen(
-            [bubble_cmd, "images", "build", "base"],
-            stdout=open("/tmp/bubble-vscode-rebuild.log", "w"),
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    _spawn_background_bubble(
+        ["images", "build", "base"],
+        "/tmp/bubble-vscode-rebuild.log",
+    )
 
 
 def _generate_bubble_name(t, custom_name: str | None) -> str:
@@ -556,13 +572,35 @@ def _detect_and_build_image(runtime, ref_path, t):
         image_name = "base"
 
     if not runtime.image_exists(image_name):
-        click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
-        from .images.builder import build_image
+        if image_name.startswith("lean-v"):
+            # Toolchain-specific image doesn't exist yet — fall back to base lean
+            # and build the toolchain image in the background for next time
+            version = image_name[len("lean-"):]
+            _background_build_lean_toolchain(version)
+            image_name = "lean"
+        if not runtime.image_exists(image_name):
+            click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
+            from .images.builder import build_image
 
-        build_image(runtime, image_name)
-        click.echo(f"  {image_name} image ready.")
+            build_image(runtime, image_name)
+            click.echo(f"  {image_name} image ready.")
 
     return hook, image_name
+
+
+def _background_build_lean_toolchain(version: str):
+    """Fire off a background build of a toolchain-specific Lean image."""
+    # Lock file prevents duplicate concurrent builds for the same version
+    lock_path = Path(f"/tmp/bubble-lean-{version}.lock")
+    try:
+        lock_path.touch(exist_ok=False)
+    except FileExistsError:
+        return  # Build already in progress
+    click.echo(f"  Building lean-{version} image in background for next time...")
+    _spawn_background_bubble(
+        ["images", "build", f"lean-{version}"],
+        f"/tmp/bubble-lean-{version}-build.log",
+    )
 
 
 def _provision_container(runtime, name, image_name, ref_path, mount_name, config):
@@ -1117,17 +1155,48 @@ def images_list():
 @images_group.command("build")
 @click.argument("image_name", default="base")
 def images_build(image_name):
-    """Build an image (base, lean)."""
+    """Build an image (base, lean, or lean-v4.X.Y for a specific toolchain)."""
     config = load_config()
     runtime = get_runtime(config)
 
-    from .images.builder import build_image
+    if image_name.startswith("lean-v"):
+        import re
 
-    try:
-        build_image(runtime, image_name)
-    except ValueError as e:
-        click.echo(str(e), err=True)
+        from .images.builder import build_lean_toolchain_image
+
+        version = image_name[len("lean-"):]
+        if not re.fullmatch(r"v\d+\.\d+\.\d+(-rc\d+)?", version):
+            click.echo(
+                f"Invalid toolchain version: {version}. Expected format: v4.X.Y or v4.X.Y-rcN",
+                err=True,
+            )
+            sys.exit(1)
+        try:
+            build_lean_toolchain_image(runtime, version)
+        except Exception as e:
+            click.echo(str(e), err=True)
+            sys.exit(1)
+    else:
+        from .images.builder import build_image
+
+        try:
+            build_image(runtime, image_name)
+        except ValueError as e:
+            click.echo(str(e), err=True)
+            sys.exit(1)
+
+
+@images_group.command("delete")
+@click.argument("image_name")
+def images_delete(image_name):
+    """Delete an image by alias (e.g. base, lean, lean-v4.16.0)."""
+    config = load_config()
+    runtime = get_runtime(config, ensure_ready=False)
+    if not runtime.image_exists(image_name):
+        click.echo(f"Image '{image_name}' not found.", err=True)
         sys.exit(1)
+    runtime.image_delete(image_name)
+    click.echo(f"Deleted image '{image_name}'.")
 
 
 # ---------------------------------------------------------------------------
