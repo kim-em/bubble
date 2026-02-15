@@ -16,6 +16,7 @@ from .config import DATA_DIR, ensure_dirs, load_config, repo_short_name, save_co
 from .git_store import bare_repo_path, ensure_repo, fetch_ref, github_url, update_all_repos
 from .hooks import select_hook
 from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
+from .clean import CleanStatus, check_clean, format_reasons
 from .lifecycle import load_registry, register_bubble, unregister_bubble
 from .naming import deduplicate_name, generate_name
 from .repo_registry import RepoRegistry
@@ -856,12 +857,22 @@ def _format_age(dt: "datetime | None") -> str:
 @main.command("list")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.option("-v", "--verbose", is_flag=True, help="Include disk usage and IPv4 (slower)")
-def list_bubbles(as_json, verbose):
+@click.option("-c", "--clean", "show_clean", is_flag=True, help="Check cleanness status (slower)")
+def list_bubbles(as_json, verbose, show_clean):
     """List all bubbles."""
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
 
     containers = runtime.list_containers(fast=not verbose)
+
+    # Check cleanness for running containers if requested
+    clean_statuses = {}
+    if show_clean:
+        for c in containers:
+            if c.state == "running":
+                clean_statuses[c.name] = check_clean(runtime, c.name)
+            else:
+                clean_statuses[c.name] = CleanStatus(clean=False, error="not running")
 
     if as_json:
         data = []
@@ -875,6 +886,12 @@ def list_bubbles(as_json, verbose):
             if verbose:
                 entry["ipv4"] = c.ipv4
                 entry["disk_usage"] = c.disk_usage
+            if show_clean:
+                cs = clean_statuses.get(c.name)
+                if cs and cs.error:
+                    entry["clean"] = None
+                elif cs:
+                    entry["clean"] = {"status": cs.clean, "reasons": cs.reasons}
             data.append(entry)
         click.echo(json.dumps(data, indent=2))
         return
@@ -884,13 +901,30 @@ def list_bubbles(as_json, verbose):
         return
 
     if verbose:
-        click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12} {'DISK':<10} {'IPv4':<16}")
-        click.echo("-" * 90)
+        if show_clean:
+            click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12} {'DISK':<10} {'IPv4':<16} {'STATUS'}")
+            click.echo("-" * 110)
+        else:
+            click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12} {'DISK':<10} {'IPv4':<16}")
+            click.echo("-" * 90)
         for c in containers:
             disk = _format_bytes(c.disk_usage) if c.disk_usage else "-"
             created = _format_age(c.created_at)
             used = _format_age(c.last_used_at)
-            click.echo(f"{c.name:<30} {c.state:<10} {created:<12} {used:<12} {disk:<10} {c.ipv4 or '-':<16}")
+            line = f"{c.name:<30} {c.state:<10} {created:<12} {used:<12} {disk:<10} {c.ipv4 or '-':<16}"
+            if show_clean:
+                cs = clean_statuses.get(c.name)
+                line += f" {cs.summary}" if cs else ""
+            click.echo(line)
+    elif show_clean:
+        click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12} {'STATUS'}")
+        click.echo("-" * 80)
+        for c in containers:
+            created = _format_age(c.created_at)
+            used = _format_age(c.last_used_at)
+            cs = clean_statuses.get(c.name)
+            status = cs.summary if cs else ""
+            click.echo(f"{c.name:<30} {c.state:<10} {created:<12} {used:<12} {status}")
     else:
         click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}")
         click.echo("-" * 64)
@@ -898,7 +932,7 @@ def list_bubbles(as_json, verbose):
             created = _format_age(c.created_at)
             used = _format_age(c.last_used_at)
             click.echo(f"{c.name:<30} {c.state:<10} {created:<12} {used:<12}")
-        click.echo("\nUse -v for disk usage and network info.")
+        click.echo("\nUse -v for disk usage and network info, -c to check cleanness.")
 
 
 # ---------------------------------------------------------------------------
@@ -925,12 +959,124 @@ def destroy(name, force):
     runtime = get_runtime(config, ensure_ready=False)
 
     if not force:
-        click.confirm(f"Permanently destroy bubble '{name}'?", abort=True)
+        cs = check_clean(runtime, name)
+        if cs.clean:
+            click.echo(f"Bubble '{name}' is clean. ", nl=False)
+        elif cs.error:
+            click.confirm(
+                f"Cannot verify cleanness ({cs.error}). Permanently destroy bubble '{name}'?",
+                abort=True,
+            )
+        else:
+            reasons = format_reasons(cs.reasons)
+            click.echo("Warning: bubble has unsaved work:")
+            for r in reasons:
+                click.echo(f"  - {r}")
+            click.confirm(f"Permanently destroy bubble '{name}'?", abort=True)
 
     runtime.delete(name, force=True)
     remove_ssh_config(name)
     unregister_bubble(name)
     click.echo(f"Bubble '{name}' destroyed.")
+
+
+@main.command()
+@click.option("-n", "--dry-run", is_flag=True, help="Show what would be destroyed")
+@click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
+@click.option("-a", "--all", "check_all", is_flag=True, help="Start stopped/frozen bubbles to check them")
+@click.option("--age", type=int, default=0, help="Only clean up bubbles unused for N+ days")
+def cleanup(dry_run, force, check_all, age):
+    """Destroy all clean bubbles (safe, no unsaved work)."""
+    config = load_config()
+    runtime = get_runtime(config, ensure_ready=False)
+
+    containers = runtime.list_containers(fast=True)
+    to_check = [c for c in containers if c.state == "running"]
+    to_start = []
+    if check_all:
+        to_start = [c for c in containers if c.state in ("stopped", "frozen")]
+
+    if not to_check and not to_start:
+        click.echo("No bubbles to check.")
+        return
+
+    if age > 0:
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=age)
+        to_check = [c for c in to_check if c.last_used_at and c.last_used_at < cutoff]
+        to_start = [c for c in to_start if c.last_used_at and c.last_used_at < cutoff]
+        if not to_check and not to_start:
+            click.echo(f"No bubbles unused for {age}+ days.")
+            return
+
+    # Start stopped/frozen containers temporarily for checking
+    started_containers = []
+    for c in to_start:
+        try:
+            click.echo(f"  Starting {c.name} for inspection...")
+            if c.state == "frozen":
+                runtime.unfreeze(c.name)
+            else:
+                runtime.start(c.name)
+            started_containers.append(c)
+            to_check.append(c)
+        except Exception as e:
+            click.echo(f"  {c.name:<30} could not start: {e}")
+
+    total = len(to_check)
+    click.echo(f"Checking {total} bubble{'s' if total != 1 else ''}...")
+    clean_list = []
+    dirty_count = 0
+    for c in to_check:
+        cs = check_clean(runtime, c.name)
+        if cs.clean:
+            click.echo(f"  {c.name:<30} clean")
+            clean_list.append(c.name)
+        else:
+            reasons = cs.summary
+            click.echo(f"  {c.name:<30} {reasons}")
+            dirty_count += 1
+
+    # Re-stop containers that were started just for checking and are dirty
+    started_names = {c.name for c in started_containers}
+    clean_names = set(clean_list)
+    for c in started_containers:
+        if c.name not in clean_names:
+            try:
+                runtime.stop(c.name)
+            except Exception:
+                pass
+
+    if not clean_list:
+        click.echo("No clean bubbles to destroy.")
+        return
+
+    if dry_run:
+        click.echo(f"\nWould destroy {len(clean_list)} clean bubble{'s' if len(clean_list) != 1 else ''}.")
+        # Re-stop clean containers that were started for checking
+        for name in clean_list:
+            if name in started_names:
+                try:
+                    runtime.stop(name)
+                except Exception:
+                    pass
+        return
+
+    if not force:
+        click.confirm(
+            f"\nDestroy {len(clean_list)} clean bubble{'s' if len(clean_list) != 1 else ''}?",
+            abort=True,
+        )
+
+    for name in clean_list:
+        runtime.delete(name, force=True)
+        remove_ssh_config(name)
+        unregister_bubble(name)
+        click.echo(f"  Destroyed {name}")
+
+    if dirty_count:
+        click.echo(f"Kept {dirty_count} dirty bubble{'s' if dirty_count != 1 else ''}.")
 
 
 # ---------------------------------------------------------------------------
