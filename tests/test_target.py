@@ -1,15 +1,12 @@
 """Tests for the target parsing module."""
 
-import os
 import subprocess
 
 import pytest
 
 from bubble.repo_registry import RepoRegistry
 from bubble.target import (
-    Target,
     TargetParseError,
-    _git_repo_info,
     _parse_github_remote,
     _parse_local_path,
     parse_target,

@@ -12,11 +12,11 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .config import DATA_DIR, ensure_dirs, load_config, repo_short_name, save_config
+from .clean import CleanStatus, check_clean, format_reasons
+from .config import ensure_dirs, load_config, repo_short_name, save_config
 from .git_store import bare_repo_path, ensure_repo, fetch_ref, github_url, update_all_repos
 from .hooks import select_hook
 from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
-from .clean import CleanStatus, check_clean, format_reasons
 from .lifecycle import load_registry, register_bubble, unregister_bubble
 from .naming import deduplicate_name, generate_name
 from .repo_registry import RepoRegistry
@@ -688,7 +688,10 @@ def _provision_container(runtime, name, image_name, ref_path, mount_name, config
 
 
 def _get_pr_metadata(owner: str, repo: str, pr_number: str) -> tuple[str, str, str] | None:
-    """Query GitHub API for PR head branch info. Returns (head_ref, head_repo, clone_url) or None."""
+    """Query GitHub API for PR head branch info.
+
+    Returns (head_ref, head_repo, clone_url) or None.
+    """
     try:
         result = subprocess.run(
             [
@@ -967,7 +970,7 @@ def _format_bytes(n: int) -> str:
     return f"{n:.1f} PB"
 
 
-def _format_age(dt: "datetime | None") -> str:
+def _format_age(dt: "datetime | None") -> str:  # noqa: F821
     """Format a datetime as a human-readable age string."""
     if dt is None:
         return "-"
@@ -1042,16 +1045,23 @@ def list_bubbles(as_json, verbose, show_clean):
 
     if verbose:
         if show_clean:
-            click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12} {'DISK':<10} {'IPv4':<16} {'STATUS'}")
+            click.echo(
+                f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}"
+                f" {'DISK':<10} {'IPv4':<16} {'STATUS'}"
+            )
             click.echo("-" * 110)
         else:
-            click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12} {'DISK':<10} {'IPv4':<16}")
+            click.echo(
+                f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}"
+                f" {'DISK':<10} {'IPv4':<16}"
+            )
             click.echo("-" * 90)
         for c in containers:
             disk = _format_bytes(c.disk_usage) if c.disk_usage else "-"
             created = _format_age(c.created_at)
             used = _format_age(c.last_used_at)
-            line = f"{c.name:<30} {c.state:<10} {created:<12} {used:<12} {disk:<10} {c.ipv4 or '-':<16}"
+            ipv4 = c.ipv4 or "-"
+            line = f"{c.name:<30} {c.state:<10} {created:<12} {used:<12} {disk:<10} {ipv4:<16}"
             if show_clean:
                 cs = clean_statuses.get(c.name)
                 line += f" {cs.summary}" if cs else ""
@@ -1140,7 +1150,10 @@ def destroy(name, force):
 @main.command()
 @click.option("-n", "--dry-run", is_flag=True, help="Show what would be destroyed")
 @click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
-@click.option("-a", "--all", "check_all", is_flag=True, help="Start stopped/frozen bubbles to check them")
+@click.option(
+    "-a", "--all", "check_all", is_flag=True,
+    help="Start stopped/frozen bubbles to check them",
+)
 @click.option("--age", type=int, default=0, help="Only clean up bubbles unused for N+ days")
 def cleanup(dry_run, force, check_all, age):
     """Destroy all clean bubbles (safe, no unsaved work)."""
@@ -1210,7 +1223,8 @@ def cleanup(dry_run, force, check_all, age):
         return
 
     if dry_run:
-        click.echo(f"\nWould destroy {len(clean_list)} clean bubble{'s' if len(clean_list) != 1 else ''}.")
+        n = len(clean_list)
+        click.echo(f"\nWould destroy {n} clean bubble{'s' if n != 1 else ''}.")
         # Re-stop clean containers that were started for checking
         for name in clean_list:
             if name in started_names:

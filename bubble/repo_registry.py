@@ -8,7 +8,7 @@ from .config import REPOS_FILE
 
 
 class RepoRegistry:
-    """Maps short repo names (e.g. 'mathlib4') to full owner/repo (e.g. 'leanprover-community/mathlib4').
+    """Maps short repo names to full owner/repo pairs.
 
     Repos are learned on first use and stored in ~/.bubble/repos.json.
     """

@@ -28,7 +28,6 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from .config import DATA_DIR
 from .git_store import repo_is_known
@@ -196,6 +195,10 @@ def validate_relay_target(target: str) -> tuple[str, str]:
     if target.startswith((".", "/", "~")):
         return "error", "Local paths are not allowed via relay."
 
+    # Reject targets starting with '-' to prevent CLI option injection
+    if target.startswith("-"):
+        return "error", "Invalid target."
+
     if "--path" in target:
         return "error", "The --path flag is not allowed via relay."
 
@@ -350,10 +353,18 @@ def _open_bubble(target: str, runtime_factory):
     import subprocess
 
     subprocess.Popen(
-        ["bubble", "open", "--no-clone", target],
+        ["bubble", "open", "--no-clone", "--no-interactive", target],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def _guarded_handle(semaphore, conn, rate_limiter, token_registry, runtime_factory):
+    """Wrapper that releases the handler semaphore after connection handling."""
+    try:
+        _handle_connection(conn, rate_limiter, token_registry, runtime_factory)
+    finally:
+        semaphore.release()
 
 
 def run_daemon(runtime_factory=None):
@@ -390,6 +401,9 @@ def run_daemon(runtime_factory=None):
     rate_limiter = RateLimiter()
     token_registry = TokenRegistry()
     executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_HANDLERS)
+    # Pre-auth connection cap: reject new connections when all handler slots
+    # are busy. Prevents unauthenticated DoS from blocking legitimate requests.
+    handler_semaphore = threading.Semaphore(MAX_CONCURRENT_HANDLERS)
 
     logger.info("Relay daemon started on %s", listen_addr)
     print(f"Relay daemon listening on {listen_addr}")
@@ -397,7 +411,17 @@ def run_daemon(runtime_factory=None):
     try:
         while True:
             conn, _ = server.accept()
-            executor.submit(_handle_connection, conn, rate_limiter, token_registry, runtime_factory)
+            if not handler_semaphore.acquire(blocking=False):
+                # All handler slots busy — drop the connection immediately
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
+            executor.submit(
+                _guarded_handle, handler_semaphore, conn,
+                rate_limiter, token_registry, runtime_factory,
+            )
     except KeyboardInterrupt:
         logger.info("Relay daemon stopped")
     finally:

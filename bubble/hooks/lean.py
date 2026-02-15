@@ -7,8 +7,8 @@ from pathlib import Path
 
 import click
 
-from . import Hook
 from ..runtime.base import ContainerRuntime
+from . import Hook
 
 # Matches stable releases (v4.16.0) and release candidates (v4.16.0-rc2)
 _STABLE_OR_RC_RE = re.compile(r"^v\d+\.\d+\.\d+(-rc\d+)?$")

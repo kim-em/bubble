@@ -95,7 +95,7 @@ def _build_allowlist_script(domains: list[str]) -> str:
             resolve_domain = domain[2:]
             lines.append(f"IPS=$(getent ahostsv4 {resolve_domain} 2>/dev/null"
                          " | awk '{print $1}' | sort -u)")
-            lines.append(f'if [ -z "$IPS" ]; then')
+            lines.append('if [ -z "$IPS" ]; then')
             lines.append(f'  echo "Warning: wildcard domain {domain} did not resolve.'
                          f' Use explicit subdomains instead." >&2')
             lines.append("else")
