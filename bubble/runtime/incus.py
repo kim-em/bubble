@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from datetime import datetime, timezone
 
 from .base import ContainerInfo, ContainerRuntime
 
@@ -48,11 +49,31 @@ class IncusRuntime(ContainerRuntime):
             if addr["family"] == "inet":
                 ipv4 = addr["address"]
                 break
+        disk_usage = None
+        disk = state.get("disk") or {}
+        root = disk.get("root") or {}
+        if root.get("usage"):
+            disk_usage = root["usage"]
+
+        def _parse_ts(key: str) -> datetime | None:
+            raw = c.get(key)
+            if not raw or raw.startswith("0001-"):
+                return None
+            # Incus uses RFC 3339 with nanoseconds; truncate to microseconds
+            raw = raw.rstrip("Z")
+            if "." in raw:
+                base, frac = raw.split(".", 1)
+                raw = f"{base}.{frac[:6]}"
+            return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+
         state_map = {"Running": "running", "Stopped": "stopped", "Frozen": "frozen"}
         return ContainerInfo(
             name=c["name"],
             state=state_map.get(c["status"], c["status"].lower()),
             ipv4=ipv4,
+            disk_usage=disk_usage,
+            created_at=_parse_ts("created_at"),
+            last_used_at=_parse_ts("last_used_at"),
         )
 
     def _get_info(self, name: str) -> ContainerInfo:
@@ -62,8 +83,11 @@ class IncusRuntime(ContainerRuntime):
             raise RuntimeError(f"Container '{name}' not found")
         return self._parse_container(data[0])
 
-    def list_containers(self) -> list[ContainerInfo]:
-        data = self._run_json(["list"])
+    def list_containers(self, fast: bool = True) -> list[ContainerInfo]:
+        args = ["list"]
+        if fast:
+            args.append("--fast")
+        data = self._run_json(args)
         if not isinstance(data, list):
             return []
         return [self._parse_container(c) for c in data]

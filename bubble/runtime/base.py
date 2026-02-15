@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass
@@ -10,6 +11,9 @@ class ContainerInfo:
     state: str  # "running", "stopped", "frozen"
     ipv4: str | None = None
     image: str | None = None
+    disk_usage: int | None = None  # bytes
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
 
 
 class ContainerRuntime(ABC):
@@ -24,8 +28,8 @@ class ContainerRuntime(ABC):
         """Launch a new container from an image."""
 
     @abstractmethod
-    def list_containers(self) -> list[ContainerInfo]:
-        """List all containers."""
+    def list_containers(self, fast: bool = True) -> list[ContainerInfo]:
+        """List all containers. With fast=True, skips expensive state queries (disk, network)."""
 
     @abstractmethod
     def start(self, name: str):

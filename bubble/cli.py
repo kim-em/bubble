@@ -385,8 +385,35 @@ def _find_existing_container(
 # ---------------------------------------------------------------------------
 
 
+BASIC_COMMANDS = {"open", "list", "pause", "destroy"}
+
+
 class BubbleGroup(click.Group):
     """Custom group that routes unknown first args to the implicit 'open' command."""
+
+    def format_usage(self, ctx, formatter):
+        formatter.write("Usage: bubble TARGET [OPTIONS]\n")
+        formatter.write("       bubble COMMAND [ARGS]...\n")
+
+    def format_commands(self, ctx, formatter):
+        """Split commands into Basic and Advanced sections."""
+        commands = []
+        for subcommand in self.list_commands(ctx):
+            cmd = self.commands.get(subcommand)
+            if cmd is None or cmd.hidden:
+                continue
+            help_text = cmd.get_short_help_str(limit=formatter.width)
+            commands.append((subcommand, help_text))
+
+        basic = [(n, h) for n, h in commands if n in BASIC_COMMANDS]
+        advanced = [(n, h) for n, h in commands if n not in BASIC_COMMANDS]
+
+        if basic:
+            with formatter.section("Commands"):
+                formatter.write_dl(basic)
+        if advanced:
+            with formatter.section("Advanced"):
+                formatter.write_dl(advanced)
 
     def parse_args(self, ctx, args):
         """If the first arg isn't a known command, treat it as a target for 'open'."""
@@ -395,10 +422,45 @@ class BubbleGroup(click.Group):
         return super().parse_args(ctx, args)
 
 
-@click.group(cls=BubbleGroup)
+@click.group(cls=BubbleGroup, context_settings=dict(help_option_names=["-h", "--help"]))
 @click.version_option(__version__)
 def main():
-    """bubble: Containerized development environments."""
+    """bubble: Open a containerized dev environment in VSCode.
+
+    Run bubble TARGET to create (or reattach to) an isolated container and
+    open it in VSCode via Remote SSH. Use --ssh for a terminal session instead.
+
+    \b
+    Examples:
+      bubble .                                      Current directory
+      bubble leanprover-community/mathlib4          GitHub repo
+      bubble https://github.com/owner/repo/pull/42  Pull request
+      bubble mathlib4/pull/123                      PR shorthand
+      bubble 456                                    PR in current repo
+    """
+
+
+@main.command("help", hidden=True)
+@click.argument("command", nargs=-1)
+@click.pass_context
+def help_cmd(ctx, command):
+    """Show help for a command."""
+    if not command:
+        click.echo(main.get_help(ctx))
+        return
+    cmd = main
+    for name in command:
+        if isinstance(cmd, click.Group):
+            cmd = cmd.get_command(ctx, name)
+            if cmd is None:
+                click.echo(f"Unknown command: {' '.join(command)}")
+                raise SystemExit(1)
+        else:
+            click.echo(f"'{name}' is not a subcommand of '{command[command.index(name)-1]}'")
+            raise SystemExit(1)
+    # Build a proper context so the Usage line shows the right command name
+    sub_ctx = click.Context(cmd, info_name=command[-1], parent=ctx.parent)
+    click.echo(cmd.get_help(sub_ctx))
 
 
 # ---------------------------------------------------------------------------
@@ -734,6 +796,37 @@ def _reattach(runtime: ContainerRuntime, name: str, ssh: bool, no_interactive: b
         open_vscode(name, project_dir)
 
 
+def _format_bytes(n: int) -> str:
+    """Format byte count as human-readable string."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
+def _format_age(dt: "datetime | None") -> str:
+    """Format a datetime as a human-readable age string."""
+    if dt is None:
+        return "-"
+    from datetime import datetime, timezone
+    delta = datetime.now(timezone.utc) - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 30:
+        return f"{days}d ago"
+    months = days // 30
+    return f"{months}mo ago"
+
+
 # ---------------------------------------------------------------------------
 # list
 # ---------------------------------------------------------------------------
@@ -741,15 +834,27 @@ def _reattach(runtime: ContainerRuntime, name: str, ssh: bool, no_interactive: b
 
 @main.command("list")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def list_bubbles(as_json):
+@click.option("-v", "--verbose", is_flag=True, help="Include disk usage and IPv4 (slower)")
+def list_bubbles(as_json, verbose):
     """List all bubbles."""
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
 
-    containers = runtime.list_containers()
+    containers = runtime.list_containers(fast=not verbose)
 
     if as_json:
-        data = [{"name": c.name, "state": c.state, "ipv4": c.ipv4} for c in containers]
+        data = []
+        for c in containers:
+            entry = {
+                "name": c.name,
+                "state": c.state,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "last_used_at": c.last_used_at.isoformat() if c.last_used_at else None,
+            }
+            if verbose:
+                entry["ipv4"] = c.ipv4
+                entry["disk_usage"] = c.disk_usage
+            data.append(entry)
         click.echo(json.dumps(data, indent=2))
         return
 
@@ -757,10 +862,22 @@ def list_bubbles(as_json):
         click.echo("No bubbles. Create one with: bubble owner/repo")
         return
 
-    click.echo(f"{'NAME':<30} {'STATE':<10} {'IPv4':<16}")
-    click.echo("-" * 56)
-    for c in containers:
-        click.echo(f"{c.name:<30} {c.state:<10} {c.ipv4 or '-':<16}")
+    if verbose:
+        click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12} {'DISK':<10} {'IPv4':<16}")
+        click.echo("-" * 90)
+        for c in containers:
+            disk = _format_bytes(c.disk_usage) if c.disk_usage else "-"
+            created = _format_age(c.created_at)
+            used = _format_age(c.last_used_at)
+            click.echo(f"{c.name:<30} {c.state:<10} {created:<12} {used:<12} {disk:<10} {c.ipv4 or '-':<16}")
+    else:
+        click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}")
+        click.echo("-" * 64)
+        for c in containers:
+            created = _format_age(c.created_at)
+            used = _format_age(c.last_used_at)
+            click.echo(f"{c.name:<30} {c.state:<10} {created:<12} {used:<12}")
+        click.echo("\nUse -v for disk usage and network info.")
 
 
 # ---------------------------------------------------------------------------
