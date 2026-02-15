@@ -100,7 +100,9 @@ def build_lean_toolchain_image(runtime: ContainerRuntime, version: str):
         build_image(runtime, "lean")
 
     alias = f"lean-{version}"
-    build_name = f"lean-toolchain-{version}-builder"
+    # Incus container names only allow alphanumeric + hyphens
+    safe_version = version.replace(".", "-")
+    build_name = f"lean-tc-{safe_version}-builder"
     print(f"Building {alias} image...")
 
     runtime.launch(build_name, "lean")

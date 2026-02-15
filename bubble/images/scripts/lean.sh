@@ -79,6 +79,23 @@ try:
         for item in os.listdir(nested):
             os.rename(os.path.join(nested, item), os.path.join(ext_dir, item))
         os.rmdir(nested)
+    # Write extensions.json so VS Code recognizes the pre-installed extension
+    rel_location = f"leanprover.lean4-{version}"
+    manifest = [
+        {
+            "identifier": {"id": "leanprover.lean4"},
+            "version": version,
+            "location": {
+                "$mid": 1,
+                "path": os.path.join(EXTENSIONS_DIR, rel_location),
+                "scheme": "file",
+            },
+            "relativeLocation": rel_location,
+            "metadata": {},
+        }
+    ]
+    with open(os.path.join(EXTENSIONS_DIR, "extensions.json"), "w") as mf:
+        json.dump(manifest, mf)
     print(f"  Installed to {ext_dir}")
 finally:
     os.unlink(tmp_path)
