@@ -74,8 +74,18 @@ def main():
         s.connect(sock_path)
         request = json.dumps({"target": target, "token": token})
         s.sendall(request.encode())
-        # Read response (single recv — response is always < 4KB)
-        data = s.recv(4096)
+        s.shutdown(socket.SHUT_WR)
+        # Read response until EOF
+        chunks = []
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        data = b"".join(chunks)
+        if not data:
+            print("Relay error: no response from daemon", file=sys.stderr)
+            sys.exit(1)
         response = json.loads(data)
         print(response.get("message", ""))
         sys.exit(0 if response.get("status") == "ok" else 1)

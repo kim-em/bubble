@@ -320,6 +320,10 @@ def _handle_connection(
             logger.info("ERROR  container=%s  target=%s  %s", log_container, log_target, e)
 
     except socket.timeout:
+        try:
+            _send_response(conn, "error", "Request timed out.")
+        except Exception:
+            pass
         logger.info("REJECT  timeout")
     except Exception as e:
         try:
@@ -329,6 +333,7 @@ def _handle_connection(
         logger.info("ERROR  %s", e)
     finally:
         try:
+            time.sleep(0.1)  # Allow proxy to flush response
             conn.close()
         except Exception:
             pass
@@ -338,6 +343,10 @@ def _send_response(conn: socket.socket, status: str, message: str):
     """Send a JSON response and close the write end."""
     response = json.dumps({"status": status, "message": message})
     conn.sendall(response.encode("utf-8") + b"\n")
+    try:
+        conn.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
 
 
 def _open_bubble(target: str):
