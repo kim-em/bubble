@@ -16,6 +16,7 @@ bubble/
 ├── repo_registry.py    # Learned short name → owner/repo mappings (~/.bubble/repos.json)
 ├── naming.py           # Container name generation: <repo>-<source>-<id>
 ├── git_store.py        # Shared bare repo management at ~/.bubble/git/
+├── clean.py            # Container cleanness checking (safe to discard?)
 ├── lifecycle.py        # Registry tracking for active bubbles
 ├── network.py          # Network allowlisting via iptables inside containers
 ├── vscode.py           # SSH config generation + `code --remote` launching

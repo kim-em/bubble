@@ -83,7 +83,8 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble <target>` | Open (or create) a bubble for a GitHub URL/repo |
 | `bubble list` | List all bubbles |
 | `bubble pause <name>` | Freeze a bubble |
-| `bubble destroy <name>` | Delete a bubble permanently |
+| `bubble destroy <name>` | Delete a bubble permanently (skips confirmation if clean) |
+| `bubble cleanup` | Destroy all clean bubbles (no unsaved work) |
 | `bubble images list\|build` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
