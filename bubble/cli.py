@@ -211,6 +211,27 @@ def _ensure_dependencies():
                     sys.exit(1)
 
 
+def _colima_host_ip() -> str:
+    """Get the host IP as seen from the Colima VM.
+
+    Resolves host.lima.internal from the VM's /etc/hosts.
+    Falls back to 192.168.5.2 (the default vz networking address).
+    """
+    try:
+        result = subprocess.run(
+            ["colima", "ssh", "--", "getent", "hosts", "host.lima.internal"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split()[0]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return "192.168.5.2"
+
+
 def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
     """Get the configured container runtime. Ensures platform is ready by default."""
     if ensure_ready:
@@ -626,17 +647,30 @@ def _provision_container(runtime, name, image_name, ref_path, mount_name, config
 
     relay_enabled = config.get("relay", {}).get("enabled", False)
     if relay_enabled:
-        relay_sock = str(DATA_DIR / "relay.sock")
-        if Path(relay_sock).exists():
+        from .relay import RELAY_PORT_FILE, RELAY_SOCK
+
+        # macOS/Colima: Unix sockets can't traverse virtio-fs, use TCP.
+        # incus proxy needs an IP (not hostname), so resolve host.lima.internal
+        # from the VM — this is the host's IP as seen from incusd.
+        if platform.system() == "Darwin" and RELAY_PORT_FILE.exists():
+            port = RELAY_PORT_FILE.read_text().strip()
+            host_ip = _colima_host_ip()
+            connect_addr = f"tcp:{host_ip}:{port}"
+        elif RELAY_SOCK.exists():
+            connect_addr = f"unix:{RELAY_SOCK}"
+        else:
+            connect_addr = None
+
+        if connect_addr:
             runtime.add_device(
                 name,
                 "bubble-relay",
                 "proxy",
-                connect=f"unix:{relay_sock}",
+                connect=connect_addr,
                 listen="unix:/bubble/relay.sock",
                 bind="container",
-                uid="1000",
-                gid="1000",
+                uid="1001",
+                gid="1001",
             )
             from .relay import generate_relay_token
 
@@ -647,6 +681,7 @@ def _provision_container(runtime, name, image_name, ref_path, mount_name, config
                     "bash",
                     "-c",
                     f"echo {shlex.quote(token)} > /bubble/relay-token"
+                    " && chown user:user /bubble/relay-token"
                     " && chmod 600 /bubble/relay-token",
                 ],
             )
@@ -1451,10 +1486,11 @@ def relay_disable():
     except Exception:
         pass
 
-    # Remove socket
-    from .relay import RELAY_SOCK
+    # Remove socket/port file
+    from .relay import RELAY_PORT_FILE, RELAY_SOCK
 
     RELAY_SOCK.unlink(missing_ok=True)
+    RELAY_PORT_FILE.unlink(missing_ok=True)
 
     click.echo("Relay disabled.")
 
@@ -1466,9 +1502,16 @@ def relay_status():
     enabled = config.get("relay", {}).get("enabled", False)
     click.echo(f"  Relay: {'enabled' if enabled else 'disabled'}")
 
-    from .relay import RELAY_SOCK
+    from .relay import RELAY_PORT_FILE, RELAY_SOCK
 
-    click.echo(f"  Socket: {'exists' if RELAY_SOCK.exists() else 'not found'}")
+    if platform.system() == "Darwin":
+        if RELAY_PORT_FILE.exists():
+            port = RELAY_PORT_FILE.read_text().strip()
+            click.echo(f"  Listening: TCP 127.0.0.1:{port}")
+        else:
+            click.echo("  Listening: not running")
+    else:
+        click.echo(f"  Socket: {'exists' if RELAY_SOCK.exists() else 'not found'}")
 
     from .relay import RELAY_LOG
 

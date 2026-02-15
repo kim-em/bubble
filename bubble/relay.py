@@ -1,8 +1,12 @@
 """Bubble-in-bubble relay daemon.
 
-Listens on a Unix socket (~/.bubble/relay.sock) for requests from inside
-containers to open new bubbles. Each request is validated, rate-limited,
-and logged before delegating to the normal bubble open logic.
+Listens for requests from inside containers to open new bubbles.
+
+On macOS (Colima): listens on TCP because Unix sockets can't traverse
+the virtio-fs mount between macOS and the Colima VM. The port is saved
+to ~/.bubble/relay.port for the incus proxy device to connect to.
+
+On Linux: listens on a Unix socket at ~/.bubble/relay.sock.
 
 Security model:
 - Only repos already cloned in ~/.bubble/git/ are allowed (no new clones)
@@ -16,6 +20,7 @@ Security model:
 import json
 import logging
 import os
+import platform
 import re
 import secrets
 import socket
@@ -31,6 +36,7 @@ from .repo_registry import RepoRegistry
 from .target import TargetParseError, parse_target
 
 RELAY_SOCK = DATA_DIR / "relay.sock"
+RELAY_PORT_FILE = DATA_DIR / "relay.port"
 RELAY_LOG = DATA_DIR / "relay.log"
 RELAY_TOKENS = DATA_DIR / "relay-tokens.json"
 
@@ -351,26 +357,42 @@ def _open_bubble(target: str, runtime_factory):
 
 
 def run_daemon(runtime_factory=None):
-    """Run the relay daemon, listening on RELAY_SOCK."""
+    """Run the relay daemon.
+
+    On macOS: listens on TCP (Unix sockets can't traverse Colima's virtio-fs).
+    On Linux: listens on a Unix socket.
+    """
     _setup_logging()
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Remove stale socket
-    RELAY_SOCK.unlink(missing_ok=True)
+    use_tcp = platform.system() == "Darwin"
 
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(RELAY_SOCK))
-    server.listen(5)
-    # Owner-only permissions — Incus proxy device connects on behalf of containers
-    RELAY_SOCK.chmod(0o600)
+    if use_tcp:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(5)
+        port = server.getsockname()[1]
+        RELAY_PORT_FILE.write_text(str(port))
+        os.chmod(str(RELAY_PORT_FILE), 0o600)
+        listen_addr = f"127.0.0.1:{port}"
+    else:
+        # Remove stale socket
+        RELAY_SOCK.unlink(missing_ok=True)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(RELAY_SOCK))
+        server.listen(5)
+        # Owner-only permissions
+        RELAY_SOCK.chmod(0o600)
+        listen_addr = str(RELAY_SOCK)
 
     rate_limiter = RateLimiter()
     token_registry = TokenRegistry()
     executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_HANDLERS)
 
-    logger.info("Relay daemon started on %s", RELAY_SOCK)
-    print(f"Relay daemon listening on {RELAY_SOCK}")
+    logger.info("Relay daemon started on %s", listen_addr)
+    print(f"Relay daemon listening on {listen_addr}")
 
     try:
         while True:
@@ -381,4 +403,7 @@ def run_daemon(runtime_factory=None):
     finally:
         executor.shutdown(wait=False)
         server.close()
-        RELAY_SOCK.unlink(missing_ok=True)
+        if use_tcp:
+            RELAY_PORT_FILE.unlink(missing_ok=True)
+        else:
+            RELAY_SOCK.unlink(missing_ok=True)

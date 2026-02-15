@@ -73,14 +73,9 @@ def main():
         s.settimeout(30)
         s.connect(sock_path)
         request = json.dumps({"target": target, "token": token})
-        s.sendall(request.encode() + b"\n")
-        s.shutdown(socket.SHUT_WR)
-        data = b""
-        while True:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            data += chunk
+        s.sendall(request.encode())
+        # Read response (single recv — response is always < 4KB)
+        data = s.recv(4096)
         response = json.loads(data)
         print(response.get("message", ""))
         sys.exit(0 if response.get("status") == "ok" else 1)
