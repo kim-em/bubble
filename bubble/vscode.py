@@ -97,6 +97,18 @@ def _ensure_include_directive():
         ssh_config.write_text(include_line + "\n")
 
 
+def open_editor(editor: str, bubble_name: str, remote_path: str = "/home/user"):
+    """Open the specified editor connected to a bubble."""
+    if editor == "vscode":
+        open_vscode(bubble_name, remote_path)
+    elif editor == "emacs":
+        open_emacs(bubble_name, remote_path)
+    elif editor == "neovim":
+        open_neovim(bubble_name, remote_path)
+    elif editor == "shell":
+        subprocess.run(["ssh", f"bubble-{bubble_name}"])
+
+
 def open_vscode(bubble_name: str, remote_path: str = "/home/user"):
     """Open VSCode connected to a bubble via Remote SSH."""
     host = f"bubble-{bubble_name}"
@@ -106,3 +118,15 @@ def open_vscode(bubble_name: str, remote_path: str = "/home/user"):
     except FileNotFoundError:
         print(f"VSCode CLI not found. Connect manually: Remote SSH → {host}")
         print(f"Or run: code --folder-uri {uri}")
+
+
+def open_emacs(bubble_name: str, remote_path: str = "/home/user"):
+    """SSH into a bubble and launch Emacs."""
+    host = f"bubble-{bubble_name}"
+    subprocess.run(["ssh", "-t", host, f"cd {shlex.quote(remote_path)} && emacs -nw ."])
+
+
+def open_neovim(bubble_name: str, remote_path: str = "/home/user"):
+    """SSH into a bubble and launch Neovim."""
+    host = f"bubble-{bubble_name}"
+    subprocess.run(["ssh", "-t", host, f"cd {shlex.quote(remote_path)} && nvim ."])

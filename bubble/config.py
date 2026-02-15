@@ -19,6 +19,7 @@ GIT_DIR = DATA_DIR / "git"
 REPOS_FILE = DATA_DIR / "repos.json"
 
 DEFAULT_CONFIG = {
+    "editor": "vscode",
     "runtime": {
         "backend": "incus",
         "colima_cpu": os.cpu_count() or 4,

@@ -24,7 +24,7 @@ from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
 from .runtime.incus import IncusRuntime
 from .target import TargetParseError, parse_target
-from .vscode import SSH_CONFIG_FILE, add_ssh_config, open_vscode, remove_ssh_config
+from .vscode import SSH_CONFIG_FILE, add_ssh_config, open_editor, open_vscode, remove_ssh_config
 
 
 def _is_command_available(cmd: str) -> bool:
@@ -454,10 +454,12 @@ class BubbleGroup(click.Group):
 @click.group(cls=BubbleGroup, context_settings=dict(help_option_names=["-h", "--help"]))
 @click.version_option(__version__)
 def main():
-    """bubble: Open a containerized dev environment in VSCode.
+    """bubble: Open a containerized dev environment.
 
     Run bubble TARGET to create (or reattach to) an isolated container and
-    open it in VSCode via Remote SSH. Use --shell for a terminal session instead.
+    open it in your preferred editor. Defaults to VSCode via Remote SSH.
+    Use --emacs, --neovim, or --shell for alternatives, or set a default
+    with: bubble editor neovim
 
     \b
     Examples:
@@ -857,7 +859,7 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
 
 def _finalize_bubble(
     runtime, name, t, hook, image_name, checkout_branch, short, network, config,
-    shell, no_interactive, machine_readable=False,
+    editor, no_interactive, machine_readable=False,
 ):
     """Post-clone setup: hooks, SSH, network, registration, and attach."""
     q_short = shlex.quote(short)
@@ -907,12 +909,13 @@ def _finalize_bubble(
     click.echo(f"  SSH: ssh bubble-{name}")
 
     if not no_interactive:
-        if shell:
-            click.echo("Connecting via SSH...")
-            subprocess.run(["ssh", f"bubble-{name}"])
-        else:
+        if editor == "vscode":
             click.echo("Opening VSCode...")
-            open_vscode(name, project_dir)
+        elif editor == "shell":
+            click.echo("Connecting via SSH...")
+        else:
+            click.echo(f"Opening {editor}...")
+        open_editor(editor, name, project_dir)
 
 
 def _machine_readable_output(status: str, name: str, **kwargs):
@@ -922,7 +925,7 @@ def _machine_readable_output(status: str, name: str, **kwargs):
     click.echo(json.dumps(data))
 
 
-def _open_remote(remote_host, target, shell, no_interactive, network, custom_name, config):
+def _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
 
@@ -956,17 +959,22 @@ def _open_remote(remote_host, target, shell, no_interactive, network, custom_nam
     click.echo(f"  SSH: ssh bubble-{name}")
 
     if not no_interactive:
-        if shell:
-            click.echo("Connecting via SSH...")
-            subprocess.run(["ssh", f"bubble-{name}"])
-        else:
+        if editor == "vscode":
             click.echo("Opening VSCode...")
-            open_vscode(name, project_dir)
+        elif editor == "shell":
+            click.echo("Connecting via SSH...")
+        else:
+            click.echo(f"Opening {editor}...")
+        open_editor(editor, name, project_dir)
 
 
 @main.command("open")
 @click.argument("target")
-@click.option("--shell", is_flag=True, help="Drop into SSH session instead of VSCode")
+@click.option("--editor", "editor_choice", type=click.Choice(["vscode", "emacs", "neovim", "shell"]),
+              default=None, help="Editor to use (default: from config or vscode)")
+@click.option("--shell", is_flag=True, help="Drop into SSH session (shortcut for --editor shell)")
+@click.option("--emacs", is_flag=True, help="Open Emacs over SSH (shortcut for --editor emacs)")
+@click.option("--neovim", is_flag=True, help="Open Neovim over SSH (shortcut for --editor neovim)")
 @click.option("--ssh", "ssh_host", type=str, default=None, metavar="HOST",
               help="Run on remote host (host, user@host, or user@host:port)")
 @click.option("--local", "force_local", is_flag=True,
@@ -980,13 +988,25 @@ def _open_remote(remote_host, target, shell, no_interactive, network, custom_nam
 @click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
 )
-def open_cmd(target, shell, ssh_host, force_local, no_interactive, machine_readable,
-             network, custom_name, force_path, no_clone):
+def open_cmd(target, editor_choice, shell, emacs, neovim, ssh_host, force_local, no_interactive,
+             machine_readable, network, custom_name, force_path, no_clone):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
         target = "./" + target
 
     config = load_config()
+
+    # Resolve editor: shortcut flags > --editor > config > vscode
+    if shell:
+        editor = "shell"
+    elif emacs:
+        editor = "emacs"
+    elif neovim:
+        editor = "neovim"
+    elif editor_choice is not None:
+        editor = editor_choice
+    else:
+        editor = config.get("editor", "vscode")
 
     # Resolve remote host: explicit --ssh > config default, --local overrides both
     remote_host = None
@@ -1001,7 +1021,7 @@ def open_cmd(target, shell, ssh_host, force_local, no_interactive, machine_reada
                 remote_host = RemoteHost.parse(default)
 
     if remote_host:
-        _open_remote(remote_host, target, shell, no_interactive, network, custom_name, config)
+        _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config)
         return
 
     # Local flow
@@ -1017,7 +1037,7 @@ def open_cmd(target, shell, ssh_host, force_local, no_interactive, machine_reada
             project_dir = _detect_project_dir(runtime, existing)
             _machine_readable_output("reattached", existing, project_dir=project_dir)
             return
-        _reattach(runtime, existing, shell, no_interactive)
+        _reattach(runtime, existing, editor, no_interactive)
         return
 
     # Parse and register target
@@ -1048,7 +1068,7 @@ def open_cmd(target, shell, ssh_host, force_local, no_interactive, machine_reada
             _machine_readable_output("reattached", existing, project_dir=project_dir,
                                      org_repo=t.org_repo)
             return
-        _reattach(runtime, existing, shell, no_interactive)
+        _reattach(runtime, existing, editor, no_interactive)
         return
 
     # Resolve git source, detect language, and build image
@@ -1076,13 +1096,13 @@ def open_cmd(target, shell, ssh_host, force_local, no_interactive, machine_reada
         short,
         network,
         config,
-        shell,
+        editor,
         no_interactive,
         machine_readable,
     )
 
 
-def _reattach(runtime: ContainerRuntime, name: str, shell: bool, no_interactive: bool):
+def _reattach(runtime: ContainerRuntime, name: str, editor: str, no_interactive: bool):
     """Re-attach to an existing container."""
     _ensure_running(runtime, name)
 
@@ -1092,12 +1112,13 @@ def _reattach(runtime: ContainerRuntime, name: str, shell: bool, no_interactive:
 
     project_dir = _detect_project_dir(runtime, name)
 
-    if shell:
-        click.echo(f"Connecting to '{name}' via SSH...")
-        subprocess.run(["ssh", f"bubble-{name}"])
-    else:
+    if editor == "vscode":
         click.echo(f"Opening VSCode for '{name}'...")
-        open_vscode(name, project_dir)
+    elif editor == "shell":
+        click.echo(f"Connecting to '{name}' via SSH...")
+    else:
+        click.echo(f"Opening {editor} for '{name}'...")
+    open_editor(editor, name, project_dir)
 
 
 def _format_bytes(n: int) -> str:
@@ -1936,6 +1957,27 @@ def doctor():
         click.echo("\nNo issues found.")
     else:
         click.echo(f"\nFound {issues} issue(s), fixed {fixed}.")
+
+
+# ---------------------------------------------------------------------------
+# editor
+# ---------------------------------------------------------------------------
+
+
+@main.command("editor")
+@click.argument("choice", required=False,
+                type=click.Choice(["vscode", "emacs", "neovim", "shell"]))
+def editor_cmd(choice):
+    """Get or set the default editor for new bubbles."""
+    config = load_config()
+    if choice is None:
+        current = config.get("editor", "vscode")
+        click.echo(f"Current editor: {current}")
+        click.echo("Set with: bubble editor vscode|emacs|neovim|shell")
+        return
+    config["editor"] = choice
+    save_config(config)
+    click.echo(f"Default editor set to: {choice}")
 
 
 if __name__ == "__main__":
