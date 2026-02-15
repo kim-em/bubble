@@ -567,14 +567,18 @@ def _detect_and_build_image(runtime, ref_path, t):
 
 def _provision_container(runtime, name, image_name, ref_path, mount_name, config):
     """Launch container, wait for readiness, mount git repo, set up relay."""
+    click.echo("  Launching container...", nl=False)
     runtime.launch(name, image_name)
+    click.echo(" done.")
 
+    click.echo("  Waiting for network...", nl=False)
     from .images.builder import _wait_for_container
 
     try:
         _wait_for_container(runtime, name)
+        click.echo(" done.")
     except RuntimeError:
-        click.echo("Warning: container DNS not ready yet, continuing anyway...", err=True)
+        click.echo(" timeout (continuing anyway).")
 
     mount_source = str(ref_path)
     if Path(mount_source).exists():
