@@ -38,7 +38,6 @@ def register_bubble(
         "pr": pr,
         "base_image": base_image,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "state": "active",
     }
     _save_registry(registry)
 

@@ -4,6 +4,7 @@ import json
 import socket
 import threading
 import time
+from collections import deque
 
 from bubble.relay import (
     GLOBAL_RATE_LIMIT_PER_HOUR,
@@ -50,7 +51,7 @@ class TestRateLimiter:
         rl = RateLimiter()
         now = time.time()
         # Simulate 9 requests spread over 10 minutes (3 per minute window)
-        q = rl._requests.setdefault("c1", __import__("collections").deque())
+        q = rl._requests.setdefault("c1", deque())
         for i in range(9):
             # Each at 2-minute intervals — clears the 1-minute window
             q.append(now - 600 + i * 65)
@@ -60,7 +61,7 @@ class TestRateLimiter:
     def test_ten_minute_limit(self):
         rl = RateLimiter()
         now = time.time()
-        q = rl._requests.setdefault("c1", __import__("collections").deque())
+        q = rl._requests.setdefault("c1", deque())
         for i in range(10):
             q.append(now - 500 + i * 50)
         assert rl.check("c1") is False
@@ -68,7 +69,7 @@ class TestRateLimiter:
     def test_hour_window(self):
         rl = RateLimiter()
         now = time.time()
-        q = rl._requests.setdefault("c1", __import__("collections").deque())
+        q = rl._requests.setdefault("c1", deque())
         for i in range(19):
             q.append(now - 3500 + i * 180)
         # Under all windows
@@ -77,7 +78,7 @@ class TestRateLimiter:
     def test_hour_limit(self):
         rl = RateLimiter()
         now = time.time()
-        q = rl._requests.setdefault("c1", __import__("collections").deque())
+        q = rl._requests.setdefault("c1", deque())
         for i in range(20):
             q.append(now - 3500 + i * 170)
         assert rl.check("c1") is False
@@ -85,7 +86,7 @@ class TestRateLimiter:
     def test_old_entries_pruned(self):
         rl = RateLimiter()
         now = time.time()
-        q = rl._requests.setdefault("c1", __import__("collections").deque())
+        q = rl._requests.setdefault("c1", deque())
         # Add entries from over an hour ago
         for i in range(20):
             q.append(now - 4000)
@@ -122,7 +123,7 @@ class TestRateLimiter:
         now = time.time()
         # Directly populate tracking dict to avoid global rate limit
         for i in range(MAX_TRACKED_CONTAINERS):
-            q = rl._requests.setdefault(f"container-{i}", __import__("collections").deque())
+            q = rl._requests.setdefault(f"container-{i}", deque())
             q.append(now - 3500)  # old enough to not trigger per-container limits
         # Adding one more should evict the oldest, not crash
         assert rl.check("new-container") is True
@@ -173,6 +174,12 @@ class TestValidateRelayTarget:
 
     def test_reject_path_flag(self):
         status, msg = validate_relay_target("--path foo")
+        assert status == "error"
+
+    def test_reject_dash_prefix(self):
+        status, msg = validate_relay_target("--no-interactive")
+        assert status == "error"
+        status, msg = validate_relay_target("-v")
         assert status == "error"
 
     def test_reject_semicolons(self):

@@ -17,7 +17,6 @@ class TestRegistry:
         assert info["org_repo"] == "org/repo"
         assert info["branch"] == "main"
         assert info["commit"] == "abc123"
-        assert info["state"] == "active"
 
     def test_get_unknown_returns_none(self, tmp_data_dir):
         assert get_bubble_info("nonexistent") is None

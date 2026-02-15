@@ -1,7 +1,6 @@
 """Learned repo name registry for short name resolution."""
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import REPOS_FILE
@@ -48,17 +47,13 @@ class RepoRegistry:
         """Record a repo usage. Auto-learns short name mapping."""
         short = repo.lower()
         org_repo = f"{owner}/{repo}"
-        now = datetime.now(timezone.utc).isoformat()
 
         # Check for ambiguity
         existing = self._repos.get(short)
         if existing:
             existing_org_repo = f"{existing['owner']}/{existing['repo']}"
             if existing_org_repo == org_repo:
-                # Same repo, just update last_used
-                existing["last_used"] = now
-                self._save()
-                return
+                return  # Already registered
             else:
                 # Different repo with same short name — mark ambiguous
                 self._ambiguous.setdefault(short, [existing_org_repo])
@@ -79,7 +74,6 @@ class RepoRegistry:
         self._repos[short] = {
             "owner": owner,
             "repo": repo,
-            "last_used": now,
         }
         self._save()
 

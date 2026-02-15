@@ -54,25 +54,22 @@ def _parse_github_remote(url: str) -> tuple[str, str]:
     raise TargetParseError(f"Remote URL is not a GitHub repository: {url}")
 
 
-def _git_repo_info(path: str) -> tuple[str, str, str, str]:
-    """Extract (owner, repo, repo_root, git_dir) from a local git checkout.
+def _git_repo_info(path: str) -> tuple[str, str, str]:
+    """Extract (owner, repo, repo_root) from a local git checkout.
 
-    Returns the resolved git directory (handles worktrees where .git is a file).
     Raises TargetParseError if not a git repo or no GitHub remote.
     """
     abs_path = str(Path(path).resolve())
 
-    # Check it's a git repo and find root + git dir
+    # Check it's a git repo and find root
     try:
         result = subprocess.run(
-            ["git", "-C", abs_path, "rev-parse", "--show-toplevel", "--absolute-git-dir"],
+            ["git", "-C", abs_path, "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
             check=True,
         )
-        lines = result.stdout.strip().splitlines()
-        repo_root = lines[0]
-        git_dir = lines[1] if len(lines) > 1 else str(Path(repo_root) / ".git")
+        repo_root = result.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         raise TargetParseError(f"{abs_path} is not a git repository.")
 
@@ -96,7 +93,7 @@ def _git_repo_info(path: str) -> tuple[str, str, str, str]:
         )
 
     owner, repo = _parse_github_remote(remote_url)
-    return owner, repo, repo_root, git_dir
+    return owner, repo, repo_root
 
 
 def _parse_local_path(raw: str) -> Target:
@@ -110,7 +107,7 @@ def _parse_local_path(raw: str) -> Target:
     if not path.exists():
         raise TargetParseError(f"Path does not exist: {raw}")
 
-    owner, repo, repo_root, _ = _git_repo_info(str(path))
+    owner, repo, repo_root = _git_repo_info(str(path))
 
     # Get current branch
     try:
@@ -184,7 +181,7 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
     # Bare number: PR in current directory's repo
     if s.isdigit():
         try:
-            owner, repo, _, _ = _git_repo_info(".")
+            owner, repo, _ = _git_repo_info(".")
             return Target(
                 owner=owner,
                 repo=repo,

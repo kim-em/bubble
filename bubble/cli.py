@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import click
@@ -14,7 +15,7 @@ import click
 from . import __version__
 from .clean import CleanStatus, check_clean, format_reasons
 from .config import ensure_dirs, load_config, repo_short_name, save_config
-from .git_store import bare_repo_path, ensure_repo, fetch_ref, github_url, update_all_repos
+from .git_store import bare_repo_path, fetch_ref, github_url, init_bare_repo, update_all_repos
 from .hooks import select_hook
 from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
 from .lifecycle import load_registry, register_bubble, unregister_bubble
@@ -390,8 +391,6 @@ def _find_existing_container(
     if org_repo and kind and ref:
         registry = load_registry()
         for bname, binfo in registry.get("bubbles", {}).items():
-            if binfo.get("state") != "active":
-                continue
             if binfo.get("org_repo") != org_repo:
                 continue
             if bname not in containers:
@@ -562,7 +561,7 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
                 click.echo(f"Repo '{t.org_repo}' is not available in the git store.", err=True)
                 sys.exit(1)
         else:
-            bare_path = ensure_repo(t.org_repo)
+            bare_path = init_bare_repo(t.org_repo)
         ref_path = bare_path
         mount_name = ref_path.name
 
@@ -597,6 +596,7 @@ def _detect_and_build_image(runtime, ref_path, t):
             # Toolchain-specific image doesn't exist yet — fall back to base lean
             # and build the toolchain image in the background for next time
             version = image_name[len("lean-"):]
+            click.echo(f"  Toolchain {version} image not cached, using base lean image (building {image_name} in background for next time)")
             _background_build_lean_toolchain(version)
             image_name = "lean"
         if not runtime.image_exists(image_name):
@@ -605,6 +605,9 @@ def _detect_and_build_image(runtime, ref_path, t):
 
             build_image(runtime, image_name)
             click.echo(f"  {image_name} image ready.")
+    elif image_name.startswith("lean-v"):
+        version = image_name[len("lean-"):]
+        click.echo(f"  Using cached toolchain image ({version})")
 
     return hook, image_name
 
@@ -616,7 +619,15 @@ def _background_build_lean_toolchain(version: str):
     try:
         lock_path.touch(exist_ok=False)
     except FileExistsError:
-        return  # Build already in progress
+        # Stale lock from a killed build? Delete if older than 1 hour.
+        try:
+            age = time.time() - lock_path.stat().st_mtime
+            if age < 3600:
+                return  # Build likely still in progress
+            lock_path.unlink(missing_ok=True)
+            lock_path.touch(exist_ok=False)
+        except (OSError, FileExistsError):
+            return
     click.echo(f"  Building lean-{version} image in background for next time...")
     _spawn_background_bubble(
         ["images", "build", f"lean-{version}"],
@@ -1043,45 +1054,27 @@ def list_bubbles(as_json, verbose, show_clean):
         click.echo("No bubbles. Create one with: bubble owner/repo")
         return
 
+    # Build header and rows based on flags
+    header = f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}"
     if verbose:
-        if show_clean:
-            click.echo(
-                f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}"
-                f" {'DISK':<10} {'IPv4':<16} {'STATUS'}"
-            )
-            click.echo("-" * 110)
-        else:
-            click.echo(
-                f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}"
-                f" {'DISK':<10} {'IPv4':<16}"
-            )
-            click.echo("-" * 90)
-        for c in containers:
+        header += f" {'DISK':<10} {'IPv4':<16}"
+    if show_clean:
+        header += " STATUS"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for c in containers:
+        created = _format_age(c.created_at)
+        used = _format_age(c.last_used_at)
+        line = f"{c.name:<30} {c.state:<10} {created:<12} {used:<12}"
+        if verbose:
             disk = _format_bytes(c.disk_usage) if c.disk_usage else "-"
-            created = _format_age(c.created_at)
-            used = _format_age(c.last_used_at)
             ipv4 = c.ipv4 or "-"
-            line = f"{c.name:<30} {c.state:<10} {created:<12} {used:<12} {disk:<10} {ipv4:<16}"
-            if show_clean:
-                cs = clean_statuses.get(c.name)
-                line += f" {cs.summary}" if cs else ""
-            click.echo(line)
-    elif show_clean:
-        click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12} {'STATUS'}")
-        click.echo("-" * 80)
-        for c in containers:
-            created = _format_age(c.created_at)
-            used = _format_age(c.last_used_at)
+            line += f" {disk:<10} {ipv4:<16}"
+        if show_clean:
             cs = clean_statuses.get(c.name)
-            status = cs.summary if cs else ""
-            click.echo(f"{c.name:<30} {c.state:<10} {created:<12} {used:<12} {status}")
-    else:
-        click.echo(f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}")
-        click.echo("-" * 64)
-        for c in containers:
-            created = _format_age(c.created_at)
-            used = _format_age(c.last_used_at)
-            click.echo(f"{c.name:<30} {c.state:<10} {created:<12} {used:<12}")
+            line += f" {cs.summary}" if cs else ""
+        click.echo(line)
+    if not verbose and not show_clean:
         click.echo("\nUse -v for disk usage and network info, -c to check cleanness.")
 
 

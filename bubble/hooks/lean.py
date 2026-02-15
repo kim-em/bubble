@@ -73,8 +73,7 @@ class LeanHook(Hook):
     """Hook for Lean 4 projects (detected by lean-toolchain file)."""
 
     def __init__(self):
-        self._bare_repo_path: Path | None = None
-        self._ref: str | None = None
+        self._toolchain: str | None = None
         self._needs_cache: bool = False
 
     def name(self) -> str:
@@ -84,12 +83,10 @@ class LeanHook(Hook):
         """Check for lean-toolchain file at the given ref in the bare repo."""
         content = _read_lean_toolchain(bare_repo_path, ref)
         if content is not None:
-            self._bare_repo_path = bare_repo_path
-            self._ref = ref
+            self._toolchain = content
             self._needs_cache = _needs_mathlib_cache(bare_repo_path, ref)
             return True
-        self._bare_repo_path = None
-        self._ref = None
+        self._toolchain = None
         self._needs_cache = False
         return False
 
@@ -99,12 +96,10 @@ class LeanHook(Hook):
         For stable/RC versions (v4.X.Y, v4.X.Y-rcK): returns 'lean-v4.X.Y' or 'lean-v4.X.Y-rcK'.
         For nightlies or unrecognized: returns 'lean' (base image with elan only).
         """
-        if self._bare_repo_path and self._ref:
-            toolchain = _read_lean_toolchain(self._bare_repo_path, self._ref)
-            if toolchain:
-                version = _parse_lean_version(toolchain)
-                if version:
-                    return f"lean-{version}"
+        if self._toolchain:
+            version = _parse_lean_version(self._toolchain)
+            if version:
+                return f"lean-{version}"
         return "lean"
 
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
@@ -120,6 +115,8 @@ class LeanHook(Hook):
     def network_domains(self) -> list[str]:
         return [
             "releases.lean-lang.org",
+            "reservoir.lean-lang.org",
+            "reservoir.lean-cache.cloud",
             "mathlib4.lean-cache.cloud",
             "lakecache.blob.core.windows.net",
         ]

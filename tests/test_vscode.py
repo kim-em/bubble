@@ -39,8 +39,6 @@ class TestBubbleNameValidation:
 
 class TestAddSshConfig:
     def test_writes_proxy_command(self, tmp_ssh_dir):
-        # Prevent _ensure_include_directive from modifying real ~/.ssh/config
-        add_ssh_config.__wrapped__ = None  # not wrapped, just call it
         ssh_file = tmp_ssh_dir / "bubble"
         add_ssh_config("test-bubble")
         content = ssh_file.read_text()

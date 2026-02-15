@@ -79,13 +79,6 @@ def update_all_repos():
                 print(f"Warning: failed to update {repo_dir.name}: {e}")
 
 
-def ensure_repo(org_repo: str) -> Path:
-    """Ensure a bare repo exists, creating it if needed."""
-    path = bare_repo_path(org_repo)
-    if not path.exists():
-        init_bare_repo(org_repo)
-    return path
-
 
 def repo_is_known(org_repo: str) -> bool:
     """Check if a bare repo exists in the git store."""

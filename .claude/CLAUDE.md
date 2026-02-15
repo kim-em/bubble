@@ -50,7 +50,7 @@ The primary command is `bubble <target>`. A custom `BubbleGroup(click.Group)` ro
 Short names are resolved via `RepoRegistry`, which learns mappings automatically on first use. Local paths use the local `.git` as the `--reference` source for fast cloning, and support unpushed branches by fetching refs from the mounted local repo.
 
 ### Language Hooks
-The `hooks/` package provides a pluggable system for language-specific behavior. Each `Hook` subclass implements `detect()` (check bare repo for language markers), `image_name()`, `post_clone()`, `vscode_extensions()`, and `network_domains()`. Hook detection runs against the host bare repo via `git show <ref>:<file>` — no container needed.
+The `hooks/` package provides a pluggable system for language-specific behavior. Each `Hook` subclass implements `detect()` (check bare repo for language markers), `image_name()`, `post_clone()`, and `network_domains()`. Hook detection runs against the host bare repo via `git show <ref>:<file>` — no container needed.
 
 ### Runtime Abstraction
 `ContainerRuntime` (base.py) is an abstract interface. `IncusRuntime` is the only implementation today. Docker/Podman support is a stretch goal — the abstraction exists to make that possible without refactoring.
@@ -91,6 +91,10 @@ The `user` account has no sudo and a locked password. Network allowlisting is ap
 3. Implement `image_name()` to return the image to use
 4. Add image script in `images/scripts/<name>.sh` and entry in `builder.py`'s `IMAGES` dict
 5. Register the hook in `hooks/__init__.py`'s `discover_hooks()`
+
+## Running Tests
+
+Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest`).
 
 ## How to Add a New Command
 

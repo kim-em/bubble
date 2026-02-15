@@ -24,6 +24,7 @@ import platform
 import re
 import secrets
 import socket
+import subprocess
 import threading
 import time
 from collections import deque
@@ -246,7 +247,6 @@ def _handle_connection(
     conn: socket.socket,
     rate_limiter: RateLimiter,
     token_registry: TokenRegistry | None = None,
-    runtime_factory=None,
 ):
     """Handle a single relay connection."""
     try:
@@ -312,15 +312,12 @@ def _handle_connection(
         # Success — open the bubble
         logger.info("ACCEPT  container=%s  target=%s", log_container, log_target)
 
-        if runtime_factory:
-            try:
-                _open_bubble(target, runtime_factory)
-                _send_response(conn, "ok", f"Opening bubble for '{target}'...")
-            except Exception as e:
-                _send_response(conn, "error", f"Failed to open bubble: {e}")
-                logger.info("ERROR  container=%s  target=%s  %s", log_container, log_target, e)
-        else:
+        try:
+            _open_bubble(target)
             _send_response(conn, "ok", f"Opening bubble for '{target}'...")
+        except Exception as e:
+            _send_response(conn, "error", f"Failed to open bubble: {e}")
+            logger.info("ERROR  container=%s  target=%s  %s", log_container, log_target, e)
 
     except socket.timeout:
         logger.info("REJECT  timeout")
@@ -343,15 +340,13 @@ def _send_response(conn: socket.socket, status: str, message: str):
     conn.sendall(response.encode("utf-8") + b"\n")
 
 
-def _open_bubble(target: str, runtime_factory):
+def _open_bubble(target: str):
     """Open a bubble for the given target string.
 
     Uses subprocess to invoke the bubble CLI so we get the full open_cmd
     logic including VSCode, hooks, etc. Passes --no-clone to prevent
     cloning repos that don't exist in the git store (TOCTOU protection).
     """
-    import subprocess
-
     subprocess.Popen(
         ["bubble", "open", "--no-clone", "--no-interactive", target],
         stdout=subprocess.DEVNULL,
@@ -359,15 +354,15 @@ def _open_bubble(target: str, runtime_factory):
     )
 
 
-def _guarded_handle(semaphore, conn, rate_limiter, token_registry, runtime_factory):
+def _guarded_handle(semaphore, conn, rate_limiter, token_registry):
     """Wrapper that releases the handler semaphore after connection handling."""
     try:
-        _handle_connection(conn, rate_limiter, token_registry, runtime_factory)
+        _handle_connection(conn, rate_limiter, token_registry)
     finally:
         semaphore.release()
 
 
-def run_daemon(runtime_factory=None):
+def run_daemon():
     """Run the relay daemon.
 
     On macOS: listens on TCP (Unix sockets can't traverse Colima's virtio-fs).
@@ -420,7 +415,7 @@ def run_daemon(runtime_factory=None):
                 continue
             executor.submit(
                 _guarded_handle, handler_semaphore, conn,
-                rate_limiter, token_registry, runtime_factory,
+                rate_limiter, token_registry,
             )
     except KeyboardInterrupt:
         logger.info("Relay daemon stopped")
