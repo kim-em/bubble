@@ -1,13 +1,6 @@
 # bubble
 
-Containerized development environments powered by [Incus](https://linuxcontainers.org/incus/).
-
-## Why?
-
-- **Safety**: Run untrusted PRs in isolated containers with network allowlisting
-- **Convenience**: Spin up 5-10+ concurrent development sessions without managing multiple clones
-- **Speed**: Shared git objects mean new bubbles start in seconds, not minutes
-- **Language hooks**: Automatic detection of Lean 4 (and more to come) with pre-configured toolchains
+Containerized development environments for the Lean language, powered by [Incus](https://linuxcontainers.org/incus/).
 
 ## Quick Start
 
@@ -16,8 +9,7 @@ Containerized development environments powered by [Incus](https://linuxcontainer
 pipx install bubble        # or: uv tool install bubble
 # For development:         uv pip install -e '.[dev]'
 
-# Open a bubble for a GitHub PR — just paste the URL
-# (first run will set up Colima on macOS and build the base image automatically)
+# Open a bubble for a GitHub PR — just paste the URL, and you get a containerized VSCode window!
 bubble https://github.com/leanprover-community/mathlib4/pull/35219
 
 # Shorter forms work too
@@ -66,7 +58,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 **Shared git objects**: A bare mirror of each repo is maintained on the host. Containers clone via `git --reference`, sharing the immutable object store. This means creating a new bubble for a mathlib PR downloads only the few new commits, not the entire 1.5GB repo.
 
-**Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the `lean` image comes pre-loaded with recent stable and RC toolchains.
+**Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the container includes elan, pre-installed VS Code extensions, and auto-downloads the mathlib cache when needed.
 
 **Network allowlisting**: Containers can only reach allowed domains (GitHub by default, plus language-specific domains like `releases.lean-lang.org` for Lean). IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked. Configurable in `~/.bubble/config.toml`.
 
@@ -83,22 +75,28 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble <target>` | Open (or create) a bubble for a GitHub URL/repo |
 | `bubble list` | List all bubbles |
 | `bubble pause <name>` | Freeze a bubble |
-| `bubble destroy <name>` | Delete a bubble permanently (skips confirmation if clean) |
+| `bubble destroy <name>` | Delete a bubble permanently |
 | `bubble cleanup` | Destroy all clean bubbles (no unsaved work) |
 | `bubble images list\|build` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
 | `bubble automation install\|remove\|status` | Manage periodic jobs |
 | `bubble relay enable\|disable\|status` | Manage bubble-in-bubble relay |
+| `bubble doctor` | Diagnose and fix common issues |
 
 ## Images
 
+Images are built automatically on first use.
+
 | Image | Contents |
 |-------|----------|
-| `base` | Ubuntu 24.04, git, openssh-server, build-essential |
-| `lean` | base + elan + latest stable/RC toolchains |
+| `base` | Ubuntu 24.04, git, openssh-server, build-essential, pre-baked VS Code Server |
+| `lean` | base + elan, leantar, VS Code Lean 4 extension, auto-cache extension |
+| `lean-v4.X.Y` | lean + specific toolchain pre-installed (built lazily on demand) |
 
-Build images with `bubble images build base` or `bubble images build lean`.
+`base` and `lean` are static images you can rebuild with `bubble images build <name>`. Versioned `lean-v4.X.Y` images are built automatically in the background when a project uses a stable/RC toolchain not yet cached — the current bubble proceeds immediately with elan downloading the toolchain on demand, and the next bubble for that version starts instantly.
+
+For mathlib or mathlib-dependent projects, a VS Code terminal automatically runs `lake exe cache get` when the workspace opens.
 
 ## Configuration
 
@@ -119,7 +117,10 @@ colima_vm_type = "vz"    # macOS: Apple Virtualization.Framework
 [network]
 allowlist = [
   "github.com",
-  "*.githubusercontent.com",
+  "raw.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+  "objects.githubusercontent.com",
+  "codeload.githubusercontent.com",
 ]
 ```
 
