@@ -4,7 +4,7 @@ This file helps Claude Code sessions understand the bubble codebase.
 
 ## What This Project Is
 
-`bubble` provides containerized development environments via Incus containers. The primary interface is URL-based: `bubble <github-url>` creates (or re-attaches to) an isolated container with VSCode Remote SSH. Language-specific hooks (currently Lean 4) auto-detect the project type and select the right image.
+`bubble` provides containerized development environments via Incus containers. The primary interface is URL-based: `bubble <github-url>` creates (or re-attaches to) an isolated container and opens it in your preferred editor (VSCode Remote SSH by default, with Emacs, Neovim, and plain SSH also supported). Language-specific hooks (currently Lean 4) auto-detect the project type and select the right image. Bubbles can run locally or on a remote SSH host.
 
 ## Package Structure
 
@@ -19,9 +19,10 @@ bubble/
 ├── clean.py            # Container cleanness checking (safe to discard?)
 ├── lifecycle.py        # Registry tracking for active bubbles
 ├── network.py          # Network allowlisting via iptables inside containers
-├── vscode.py           # SSH config generation + `code --remote` launching
+├── vscode.py           # SSH config generation + editor launching (VSCode, Emacs, Neovim, shell)
 ├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
 ├── relay.py            # Bubble-in-bubble relay daemon (Unix socket, validation, rate limiting)
+├── remote.py           # Remote SSH host support: run bubbles on remote machines
 ├── hooks/
 │   ├── __init__.py     # Hook ABC, discover_hooks(), select_hook()
 │   └── lean.py         # LeanHook: detects lean-toolchain, uses lean image
@@ -50,7 +51,7 @@ The primary command is `bubble <target>`. A custom `BubbleGroup(click.Group)` ro
 Short names are resolved via `RepoRegistry`, which learns mappings automatically on first use. Local paths use the local `.git` as the `--reference` source for fast cloning, and support unpushed branches by fetching refs from the mounted local repo.
 
 ### Language Hooks
-The `hooks/` package provides a pluggable system for language-specific behavior. Each `Hook` subclass implements `detect()` (check bare repo for language markers), `image_name()`, `post_clone()`, and `network_domains()`. Hook detection runs against the host bare repo via `git show <ref>:<file>` — no container needed.
+The `hooks/` package provides a pluggable system for language-specific behavior. Each `Hook` subclass implements `detect()` (check bare repo for language markers), `image_name()`, `post_clone()`, `network_domains()`, and `shared_mounts()`. Hook detection runs against the host bare repo via `git show <ref>:<file>` — no container needed. The `shared_mounts()` method returns `(host_dir_name, container_path, env_var)` tuples for writable mounts shared across containers (e.g., Lean's mathlib cache at `~/.bubble/mathlib-cache/`).
 
 ### Runtime Abstraction
 `ContainerRuntime` (base.py) is an abstract interface. `IncusRuntime` is the only implementation today. Docker/Podman support is a stretch goal — the abstraction exists to make that possible without refactoring.
@@ -80,6 +81,12 @@ created → running ⇄ paused → destroyed
 
 ### Network Allowlisting
 Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Base allowlist comes from config.toml; hooks contribute additional domains (e.g., Lean adds `releases.lean-lang.org`).
+
+### Editor Selection
+The default editor is VSCode via Remote SSH, but users can choose Emacs (TRAMP), Neovim (over SSH), or a plain SSH shell. Set per-invocation with `--emacs`, `--neovim`, `--shell`, or `--editor <choice>`. Set the persistent default with `bubble editor <choice>` (stored as `editor` key in `config.toml`). The `open_editor()` function in `vscode.py` dispatches to the appropriate launcher.
+
+### Remote SSH Hosts
+Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (or a configured `[remote] default_host`) causes `bubble open` to SSH to the remote, run `bubble open --machine-readable` there, then set up a chained SSH ProxyCommand locally. The `--local` flag overrides a configured default. Remote bubble lifecycle commands (`pause`, `destroy`) auto-route to the correct host via the local registry. Code is in `remote.py`.
 
 ### Security Model
 The `user` account has no sudo and a locked password. Network allowlisting is applied on container creation. SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Each container mounts only its specific bare repo, not the entire git store.
@@ -111,6 +118,7 @@ Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest
 - `~/.bubble/relay.sock` — relay daemon Unix socket (when enabled)
 - `~/.bubble/relay-tokens.json` — relay auth tokens per container
 - `~/.bubble/relay.log` — relay request log
+- `~/.bubble/mathlib-cache/` — shared writable mathlib cache (mounted into Lean containers)
 - `~/.bubble/vscode-commit` — VS Code commit hash baked into current base image
 - `~/.ssh/config.d/bubble` — auto-managed SSH config
 
@@ -189,7 +197,13 @@ The `.github/workflows/publish.yml` workflow runs tests then publishes to PyPI a
 
 ### When to Release
 
-**Proactively tag a new minor/patch version** after completing work that changes user-visible behavior. Don't let changes accumulate unreleased — small frequent releases are preferred. If you've just made a meaningful change, bump the version and tag it.
+**Tag a release every time you push a new feature or significant bug fix.** Don't let changes accumulate unreleased — small frequent releases are preferred. After completing work that changes user-visible behavior:
+
+1. Bump `version` in `pyproject.toml` (patch for fixes, minor for features)
+2. Commit the version bump
+3. `git tag v0.X.Y && git push origin v0.X.Y`
+
+This is part of the normal workflow, not a separate step to remember later.
 
 ### Trusted Publisher Setup
 

@@ -35,8 +35,19 @@ bubble 123                   # opens PR #123 for the current repo
 # List your bubbles
 bubble list
 
-# SSH instead of VSCode
-bubble https://github.com/leanprover/lean4 --ssh
+# Use a different editor
+bubble leanprover/lean4 --shell            # drop into SSH session
+bubble leanprover/lean4 --emacs            # Emacs via TRAMP
+bubble leanprover/lean4 --neovim           # Neovim over SSH
+
+# Set default editor (instead of VSCode)
+bubble editor neovim
+
+# Run on a remote host
+bubble leanprover/lean4 --ssh myserver
+bubble leanprover/lean4 --ssh user@host:2222
+bubble remote set-default myserver         # all future bubbles go remote
+bubble leanprover/lean4 --local            # override remote default
 
 # Just create, don't open anything
 bubble leanprover/lean4 --no-interactive
@@ -68,7 +79,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 - **macOS**: Homebrew, then `brew install colima incus`
 - **Linux**: Incus installed natively ([install guide](https://linuxcontainers.org/incus/docs/main/installing/))
-- **VSCode** with [Remote - SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension
+- **Editor** (one of): [VSCode](https://code.visualstudio.com/) with Remote SSH extension (default), Emacs with TRAMP, or Neovim over SSH
 
 ## Commands
 
@@ -79,11 +90,13 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble pause <name>` | Freeze a bubble |
 | `bubble destroy <name>` | Delete a bubble permanently |
 | `bubble cleanup` | Destroy all clean bubbles (no unsaved work) |
-| `bubble images list\|build` | Manage base images |
+| `bubble editor [choice]` | Get or set the default editor (vscode/emacs/neovim/shell) |
+| `bubble images list\|build\|delete` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
 | `bubble automation install\|remove\|status` | Manage periodic jobs |
 | `bubble relay enable\|disable\|status` | Manage bubble-in-bubble relay |
+| `bubble remote set-default\|clear-default\|status` | Manage remote SSH host |
 | `bubble doctor` | Diagnose and fix common issues |
 
 ## Images
@@ -110,6 +123,9 @@ export BUBBLE_HOME=/data/bubble
 ```
 
 ```toml
+# Default editor: vscode, emacs, neovim, or shell
+editor = "vscode"
+
 [runtime]
 backend = "incus"
 colima_cpu = 24          # macOS: CPUs for the Colima VM
@@ -124,6 +140,9 @@ allowlist = [
   "objects.githubusercontent.com",
   "codeload.githubusercontent.com",
 ]
+
+[remote]
+default_host = ""        # e.g. "user@myserver" or "user@host:2222"
 ```
 
 ## Bubble-in-Bubble
