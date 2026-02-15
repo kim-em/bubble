@@ -67,12 +67,12 @@ def _build_check_script(initial_commit: str, repo_short: str) -> str:
     return f"""\
 CLEAN=true
 REASONS=""
-EXPECTED={q_repo}
+EXPECTED=$(echo {q_repo} | tr '[:upper:]' '[:lower:]')
 
 # Check 1: no unexpected non-hidden items in home
 ITEMS=$(ls /home/user/ 2>/dev/null || true)
 if [ -n "$EXPECTED" ]; then
-  if [ "$ITEMS" != "$EXPECTED" ]; then
+  if [ "$(echo "$ITEMS" | tr '[:upper:]' '[:lower:]')" != "$EXPECTED" ]; then
     CLEAN=false
     REASONS="${{REASONS}}extra_files;"
   fi
