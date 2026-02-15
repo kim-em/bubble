@@ -71,12 +71,20 @@ def _build_allowlist_script(domains: list[str]) -> str:
         "# Allow established connections",
         "iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT",
         "",
-        "# Allow DNS only to container's configured resolver",
+        "# Allow DNS to container's configured resolver (stub)",
         "RESOLVER=$(grep -m1 nameserver /etc/resolv.conf | awk '{print $2}')",
         'if [ -n "$RESOLVER" ]; then',
         "  iptables -A OUTPUT -d $RESOLVER -p udp --dport 53 -j ACCEPT",
         "  iptables -A OUTPUT -d $RESOLVER -p tcp --dport 53 -j ACCEPT",
         "fi",
+        "",
+        "# Allow DNS to upstream servers (systemd-resolved forwards to these)",
+        "for UPSTREAM in $(resolvectl dns 2>/dev/null"
+        " | awk -F: '{print $2}'"
+        " | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+'); do",
+        "  iptables -A OUTPUT -d $UPSTREAM -p udp --dport 53 -j ACCEPT",
+        "  iptables -A OUTPUT -d $UPSTREAM -p tcp --dport 53 -j ACCEPT",
+        "done",
         "",
         "# Resolve and allow each domain (IPv4 only)",
     ]

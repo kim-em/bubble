@@ -81,4 +81,8 @@ class LeanHook(Hook):
         return "lean"
 
     def network_domains(self) -> list[str]:
-        return ["releases.lean-lang.org"]
+        return [
+            "releases.lean-lang.org",
+            "mathlib4.lean-cache.cloud",
+            "lakecache.blob.core.windows.net",
+        ]
