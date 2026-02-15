@@ -32,7 +32,10 @@ DEFAULT_CONFIG = {
     "network": {
         "allowlist": [
             "github.com",
-            "*.githubusercontent.com",
+            "raw.githubusercontent.com",
+            "release-assets.githubusercontent.com",
+            "objects.githubusercontent.com",
+            "codeload.githubusercontent.com",
         ],
     },
     "relay": {

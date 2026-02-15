@@ -18,6 +18,7 @@ class IncusRuntime(ContainerRuntime):
             capture_output=capture,
             text=True,
             check=check,
+            stdin=subprocess.DEVNULL,
         )
         return result.stdout.strip() if capture else ""
 
@@ -114,7 +115,7 @@ class IncusRuntime(ContainerRuntime):
         args = ["exec", name, "--"]
         args.extend(command)
         cmd = ["incus"] + args
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if result.returncode != 0:
             error_detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(

@@ -90,14 +90,27 @@ def _build_allowlist_script(domains: list[str]) -> str:
     ]
 
     for domain in domains:
-        # Handle wildcard domains (*.example.com -> resolve example.com)
-        resolve_domain = domain.lstrip("*.")
-        lines.append(
-            f"for ip in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
-            f"| awk '{{print $1}}' | sort -u); do"
-        )
-        lines.append("  iptables -A OUTPUT -d $ip -j ACCEPT")
-        lines.append("done")
+        if domain.startswith("*."):
+            # Wildcard domains: resolve the base domain, warn if it has no A record
+            resolve_domain = domain[2:]
+            lines.append(f"IPS=$(getent ahostsv4 {resolve_domain} 2>/dev/null"
+                         " | awk '{print $1}' | sort -u)")
+            lines.append(f'if [ -z "$IPS" ]; then')
+            lines.append(f'  echo "Warning: wildcard domain {domain} did not resolve.'
+                         f' Use explicit subdomains instead." >&2')
+            lines.append("else")
+            lines.append("  for ip in $IPS; do")
+            lines.append("    iptables -A OUTPUT -d $ip -j ACCEPT")
+            lines.append("  done")
+            lines.append("fi")
+        else:
+            resolve_domain = domain
+            lines.append(
+                f"for ip in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
+                f"| awk '{{print $1}}' | sort -u); do"
+            )
+            lines.append("  iptables -A OUTPUT -d $ip -j ACCEPT")
+            lines.append("done")
 
     lines.extend(
         [

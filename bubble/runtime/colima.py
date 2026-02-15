@@ -5,7 +5,10 @@ import subprocess
 
 def is_colima_running() -> bool:
     try:
-        result = subprocess.run(["colima", "status"], capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            ["colima", "status"],
+            capture_output=True, text=True, check=False, stdin=subprocess.DEVNULL,
+        )
         return result.returncode == 0
     except FileNotFoundError:
         return False
@@ -22,7 +25,7 @@ def start_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
         f"--disk={disk}",
         f"--vm-type={vm_type}",
     ]
-    subprocess.run(args, check=True)
+    subprocess.run(args, check=True, stdin=subprocess.DEVNULL)
 
 
 def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):

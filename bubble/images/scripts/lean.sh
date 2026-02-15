@@ -13,6 +13,22 @@ echo 'export PATH="/home/user/.elan/bin:$PATH"' >> /etc/profile.d/elan.sh
 # Pre-install VS Code Lean 4 extension so it's ready on first connect
 apt-get update -qq && apt-get install -y -qq python3 unzip < /dev/null
 
+# Pre-install leantar (used by lake exe cache get for mathlib)
+echo "Installing leantar..."
+ARCH=$(uname -m)
+[ "$ARCH" = "arm64" ] && ARCH="aarch64"
+LEANTAR_VERSION=$(curl -sSf https://api.github.com/repos/digama0/leangz/releases/latest \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
+LEANTAR_URL="https://github.com/digama0/leangz/releases/download/v${LEANTAR_VERSION}/leantar-v${LEANTAR_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+CACHE_DIR="/home/user/.cache/mathlib"
+mkdir -p "$CACHE_DIR"
+curl -sSfL "$LEANTAR_URL" -o /tmp/leantar.tar.gz
+tar -xf /tmp/leantar.tar.gz -C "$CACHE_DIR" --strip-components=1
+mv "$CACHE_DIR/leantar" "$CACHE_DIR/leantar-${LEANTAR_VERSION}"
+rm -f /tmp/leantar.tar.gz
+chown -R user:user /home/user/.cache
+echo "  leantar ${LEANTAR_VERSION} installed to ${CACHE_DIR}/leantar-${LEANTAR_VERSION}"
+
 echo "Installing VS Code extensions for Lean 4..."
 python3 -c '
 import json, urllib.request, os, sys, subprocess, tempfile, glob, shutil
@@ -105,6 +121,70 @@ if manifest_entries:
     with open(os.path.join(EXTENSIONS_DIR, "extensions.json"), "w") as mf:
         json.dump(manifest_entries, mf)
     print(f"  Registered {len(manifest_entries)} extensions in extensions.json")
+'
+
+# Create bubble-lean-cache extension: opens a terminal to run lake exe cache get
+BUBBLE_EXT_DIR="/home/user/.vscode-server/extensions/bubble.lean-cache-0.1.0"
+mkdir -p "$BUBBLE_EXT_DIR"
+
+cat > "$BUBBLE_EXT_DIR/package.json" << 'EXTJSON'
+{
+    "name": "lean-cache",
+    "displayName": "Bubble Lean Cache",
+    "publisher": "bubble",
+    "version": "0.1.0",
+    "engines": { "vscode": "^1.80.0" },
+    "activationEvents": ["onStartupFinished"],
+    "main": "./extension.js"
+}
+EXTJSON
+
+cat > "$BUBBLE_EXT_DIR/extension.js" << 'EXTJS'
+const vscode = require('vscode');
+const fs = require('fs');
+const path = require('path');
+
+function activate() {
+    const marker = path.join(require('os').homedir(), '.bubble-fetch-cache');
+    if (!fs.existsSync(marker)) return;
+    try { fs.unlinkSync(marker); } catch (_) {}
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return;
+    const terminal = vscode.window.createTerminal({
+        name: 'Mathlib Cache',
+        cwd: folders[0].uri,
+    });
+    terminal.show();
+    terminal.sendText('lake exe cache get');
+}
+
+function deactivate() {}
+module.exports = { activate, deactivate };
+EXTJS
+
+# Register bubble extension in extensions.json
+python3 -c '
+import json, os
+ext_dir = "/home/user/.vscode-server/extensions"
+manifest_path = os.path.join(ext_dir, "extensions.json")
+entries = []
+if os.path.exists(manifest_path):
+    with open(manifest_path) as f:
+        entries = json.load(f)
+entries.append({
+    "identifier": {"id": "bubble.lean-cache"},
+    "version": "0.1.0",
+    "location": {
+        "$mid": 1,
+        "path": os.path.join(ext_dir, "bubble.lean-cache-0.1.0"),
+        "scheme": "file",
+    },
+    "relativeLocation": "bubble.lean-cache-0.1.0",
+    "metadata": {},
+})
+with open(manifest_path, "w") as f:
+    json.dump(entries, f)
+print("  Registered bubble.lean-cache extension")
 '
 
 # Fix ownership (script runs as root, extension dir must be owned by user)

@@ -138,6 +138,10 @@ Container                              Host
 - Relay daemon runs as launchd (macOS) or systemd (Linux) service
 - Code: `bubble/relay.py` (daemon + validation), `bubble/images/scripts/base.sh` (stub + client)
 
+## Testing Bubbles
+
+**Never run `bubble` with `--no-interactive` on the user's behalf.** When the user wants to test bubble, tell them the command and let them run it themselves. The user wants to see the live output in their terminal and interact with the result (VS Code window, SSH session). Running it non-interactively from a tool call hides the output and wastes time.
+
 ## VS Code Integration Notes
 
 ### Workspace Trust

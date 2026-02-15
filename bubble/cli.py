@@ -23,7 +23,7 @@ from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
 from .runtime.incus import IncusRuntime
 from .target import TargetParseError, parse_target
-from .vscode import add_ssh_config, open_vscode, remove_ssh_config
+from .vscode import SSH_CONFIG_FILE, add_ssh_config, open_vscode, remove_ssh_config
 
 
 def _is_command_available(cmd: str) -> bool:
@@ -652,9 +652,29 @@ def _provision_container(runtime, name, image_name, ref_path, mount_name, config
             )
 
 
+def _get_pr_metadata(owner: str, repo: str, pr_number: str) -> tuple[str, str, str] | None:
+    """Query GitHub API for PR head branch info. Returns (head_ref, head_repo, clone_url) or None."""
+    try:
+        result = subprocess.run(
+            [
+                "gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}",
+                "--jq", ".head.ref,.head.repo.full_name,.head.repo.clone_url",
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().splitlines()
+            if len(lines) == 3:
+                return lines[0], lines[1], lines[2]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
     """Clone the repo and checkout the appropriate ref. Returns the checkout branch name."""
     url = github_url(t.org_repo)
+    q_short = shlex.quote(short)
     click.echo(f"Cloning {t.org_repo} (using shared objects)...")
     runtime.exec(
         name,
@@ -663,26 +683,68 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
             "-",
             "user",
             "-c",
-            f"git clone --reference /shared/git/{mount_name} {url} /home/user/{short}",
+            f"git clone --reference /shared/git/{mount_name} {url} /home/user/{q_short}",
         ],
     )
 
     checkout_branch = ""
     if t.kind == "pr":
         click.echo(f"Checking out PR #{t.ref}...")
-        checkout_branch = f"pr-{t.ref}"
-        q_branch = shlex.quote(checkout_branch)
-        runtime.exec(
-            name,
-            [
-                "su",
-                "-",
-                "user",
-                "-c",
-                f"cd /home/user/{short} && git fetch origin pull/{t.ref}/head:{q_branch}"
-                f" && git checkout {q_branch}",
-            ],
-        )
+        pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
+        pr_checkout_ok = False
+        if pr_meta:
+            head_ref, head_repo, clone_url = pr_meta
+            is_fork = head_repo.lower() != t.org_repo.lower()
+            q_head = shlex.quote(head_ref)
+
+            try:
+                if is_fork:
+                    # Fork PR: add fork remote, fetch branch, checkout with tracking
+                    fork_owner = head_repo.split("/")[0]
+                    q_owner = shlex.quote(fork_owner)
+                    q_url = shlex.quote(clone_url)
+                    runtime.exec(
+                        name,
+                        [
+                            "su", "-", "user", "-c",
+                            f"cd /home/user/{q_short}"
+                            f" && (git remote add {q_owner} {q_url} 2>/dev/null"
+                            f" || git remote set-url {q_owner} {q_url})"
+                            f" && git fetch {q_owner}"
+                            f" +refs/heads/{q_head}:refs/remotes/{q_owner}/{q_head}"
+                            f" && git checkout -b {q_head} --track {q_owner}/{q_head}",
+                        ],
+                    )
+                else:
+                    # Same-repo PR: fetch branch, checkout with tracking
+                    runtime.exec(
+                        name,
+                        [
+                            "su", "-", "user", "-c",
+                            f"cd /home/user/{q_short}"
+                            f" && git fetch origin"
+                            f" +refs/heads/{q_head}:refs/remotes/origin/{q_head}"
+                            f" && git checkout -b {q_head} --track origin/{q_head}",
+                        ],
+                    )
+                checkout_branch = head_ref
+                pr_checkout_ok = True
+            except RuntimeError:
+                # Branch may have been deleted; fall through to pull ref fallback
+                pass
+
+        if not pr_checkout_ok:
+            # Fallback: gh unavailable or API error
+            checkout_branch = f"pr-{t.ref}"
+            q_branch = shlex.quote(checkout_branch)
+            runtime.exec(
+                name,
+                [
+                    "su", "-", "user", "-c",
+                    f"cd /home/user/{q_short} && git fetch origin"
+                    f" pull/{t.ref}/head:{q_branch} && git checkout {q_branch}",
+                ],
+            )
     elif t.kind == "branch":
         click.echo(f"Checking out branch '{t.ref}'...")
         checkout_branch = t.ref
@@ -690,7 +752,7 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
         try:
             runtime.exec(
                 name,
-                ["su", "-", "user", "-c", f"cd /home/user/{short} && git checkout {q_branch}"],
+                ["su", "-", "user", "-c", f"cd /home/user/{q_short} && git switch {q_branch}"],
             )
         except RuntimeError:
             if t.local_path:
@@ -701,8 +763,8 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
                         "-",
                         "user",
                         "-c",
-                        f"cd /home/user/{short} && git fetch /shared/git/{mount_name}"
-                        f" {q_branch}:{q_branch} && git checkout {q_branch}",
+                        f"cd /home/user/{q_short} && git fetch /shared/git/{mount_name}"
+                        f" {q_branch}:{q_branch} && git switch {q_branch}",
                     ],
                 )
             else:
@@ -712,7 +774,7 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
         q_commit = shlex.quote(t.ref)
         runtime.exec(
             name,
-            ["su", "-", "user", "-c", f"cd /home/user/{short} && git checkout {q_commit}"],
+            ["su", "-", "user", "-c", f"cd /home/user/{q_short} && git checkout {q_commit}"],
         )
 
     return checkout_branch
@@ -722,6 +784,7 @@ def _finalize_bubble(
     runtime, name, t, hook, image_name, checkout_branch, short, network, config, ssh, no_interactive
 ):
     """Post-clone setup: hooks, SSH, network, registration, and attach."""
+    q_short = shlex.quote(short)
     project_dir = f"/home/user/{short}"
     if hook:
         hook.post_clone(runtime, name, project_dir)
@@ -737,7 +800,7 @@ def _finalize_bubble(
     try:
         commit = runtime.exec(
             name,
-            ["su", "-", "user", "-c", f"cd /home/user/{short} && git rev-parse HEAD"],
+            ["su", "-", "user", "-c", f"cd /home/user/{q_short} && git rev-parse HEAD"],
         ).strip()
     except Exception:
         pass
@@ -1016,7 +1079,24 @@ def destroy(name, force):
                 click.echo(f"  - {r}")
             click.confirm(f"Permanently destroy bubble '{name}'?", abort=True)
 
-    runtime.delete(name, force=True)
+    import time
+
+    for attempt in range(3):
+        try:
+            runtime.delete(name, force=True)
+            break
+        except subprocess.CalledProcessError as e:
+            msg = ((e.stderr or "") + " " + (e.stdout or "")).strip()
+            if "not found" in msg.lower() or "does not exist" in msg.lower():
+                break  # Already gone, just clean up registry/ssh
+            if "busy" in msg.lower() and attempt < 2:
+                click.echo(f"Container busy, retrying ({attempt + 1}/3)...")
+                time.sleep(3 * (attempt + 1))
+                continue
+            click.echo(f"Failed to delete container: {msg}", err=True)
+            click.echo("Try 'bubble doctor' to diagnose and fix the issue.", err=True)
+            sys.exit(1)
+
     remove_ssh_config(name)
     unregister_bubble(name)
     click.echo(f"Bubble '{name}' destroyed.")
@@ -1411,6 +1491,181 @@ def relay_daemon_cmd():
     from .relay import run_daemon
 
     run_daemon()
+
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+
+def _save_terminal():
+    """Save terminal settings so subprocess calls can't corrupt them."""
+    try:
+        import termios
+        if sys.stdin.isatty():
+            return termios.tcgetattr(sys.stdin)
+    except (ImportError, termios.error):
+        pass
+    return None
+
+
+def _restore_terminal(saved):
+    """Restore terminal settings after a subprocess call."""
+    if saved is not None:
+        try:
+            import termios
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, saved)
+        except (ImportError, termios.error):
+            pass
+
+
+@main.command()
+def doctor():
+    """Diagnose and fix common bubble issues."""
+    import platform
+    import re
+
+    config = load_config()
+    issues = 0
+    fixed = 0
+    saved_tty = _save_terminal()
+
+    # 1. Check Colima (macOS only)
+    if platform.system() == "Darwin":
+        from .runtime.colima import is_colima_running
+
+        if is_colima_running():
+            _restore_terminal(saved_tty)
+            click.echo("Colima: running")
+        else:
+            _restore_terminal(saved_tty)
+            click.echo("Colima: not running")
+            issues += 1
+            if click.confirm("  Start Colima?"):
+                try:
+                    runtime_cfg = config.get("runtime", {})
+                    from .runtime.colima import start_colima
+
+                    start_colima(
+                        cpu=runtime_cfg.get("colima_cpu", 4),
+                        memory=runtime_cfg.get("colima_memory", 16),
+                        disk=runtime_cfg.get("colima_disk", 60),
+                        vm_type=runtime_cfg.get("colima_vm_type", "vz"),
+                    )
+                    _restore_terminal(saved_tty)
+                    click.echo("  Started.")
+                    fixed += 1
+                except Exception as e:
+                    click.echo(f"  Failed: {e}", err=True)
+
+    # Get runtime (don't ensure ready — doctor should work even when things are broken)
+    try:
+        runtime = get_runtime(config, ensure_ready=False)
+    except Exception as e:
+        click.echo(f"Cannot connect to runtime: {e}", err=True)
+        return
+
+    # 2. Check for stuck incus operations
+    click.echo("Checking for stuck operations...")
+    try:
+        result = subprocess.run(
+            ["incus", "operation", "list", "--format=json"],
+            capture_output=True, text=True, check=True, stdin=subprocess.DEVNULL,
+        )
+        _restore_terminal(saved_tty)
+        import json
+
+        all_ops = json.loads(result.stdout) if result.stdout.strip() else []
+        # websocket ops are active exec/console sessions (e.g. VS Code SSH), not stuck
+        stuck = [op for op in all_ops if op.get("class") != "websocket"]
+        if stuck:
+            click.echo(f"  Found {len(stuck)} stuck operation(s):")
+            for op in stuck:
+                desc = op.get("description", "unknown")
+                status = op.get("status", "unknown")
+                click.echo(f"    {desc} ({status})")
+            issues += len(stuck)
+            if click.confirm("  Cancel stuck operations?"):
+                cancelled = 0
+                for op in stuck:
+                    op_id = op.get("id", "")
+                    if not op_id:
+                        continue
+                    try:
+                        subprocess.run(
+                            ["incus", "operation", "delete", op_id],
+                            capture_output=True, check=True, timeout=10,
+                            stdin=subprocess.DEVNULL,
+                        )
+                        cancelled += 1
+                    except Exception:
+                        pass
+                if cancelled:
+                    click.echo(f"  Cancelled {cancelled} operation(s).")
+                    fixed += cancelled
+                else:
+                    click.echo("  Could not cancel operations.", err=True)
+        else:
+            click.echo("  No stuck operations.")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        click.echo("  Could not check operations (incus unavailable).")
+
+    # 3. Check registry vs actual containers
+    click.echo("Checking registry consistency...")
+    registry = load_registry()
+    registered = set(registry.get("bubbles", {}).keys())
+    containers = None
+    try:
+        containers = {c.name for c in runtime.list_containers(fast=True)}
+    except Exception:
+        click.echo("  Could not list containers (skipping consistency checks).")
+
+    if containers is not None:
+        # Stale registry entries (registered but no container)
+        stale = registered - containers
+        if stale:
+            click.echo(f"  {len(stale)} stale registry entries (no matching container):")
+            for name in sorted(stale):
+                click.echo(f"    {name}")
+            issues += len(stale)
+            if click.confirm("  Remove stale entries?"):
+                for name in stale:
+                    unregister_bubble(name)
+                    remove_ssh_config(name)
+                click.echo(f"  Removed {len(stale)} stale entries.")
+                fixed += len(stale)
+        else:
+            click.echo("  Registry is consistent.")
+
+        # 4. Check SSH config for orphaned entries
+        click.echo("Checking SSH config...")
+        ssh_config = SSH_CONFIG_FILE
+        orphaned_ssh = []
+        if ssh_config.exists():
+            for line in ssh_config.read_text().splitlines():
+                m = re.match(r"^Host bubble-(.+)$", line.strip())
+                if m:
+                    bubble_name = m.group(1)
+                    if bubble_name not in containers:
+                        orphaned_ssh.append(bubble_name)
+        if orphaned_ssh:
+            click.echo(f"  {len(orphaned_ssh)} orphaned SSH config entries:")
+            for name in orphaned_ssh:
+                click.echo(f"    bubble-{name}")
+            issues += len(orphaned_ssh)
+            if click.confirm("  Remove orphaned SSH entries?"):
+                for name in orphaned_ssh:
+                    remove_ssh_config(name)
+                click.echo(f"  Removed {len(orphaned_ssh)} entries.")
+                fixed += len(orphaned_ssh)
+        else:
+            click.echo("  SSH config is clean.")
+
+    # Summary
+    if issues == 0:
+        click.echo("\nNo issues found.")
+    else:
+        click.echo(f"\nFound {issues} issue(s), fixed {fixed}.")
 
 
 if __name__ == "__main__":
