@@ -14,7 +14,7 @@ import click
 
 from . import __version__
 from .clean import CleanStatus, check_clean, format_reasons
-from .config import ensure_dirs, load_config, repo_short_name, save_config
+from .config import DATA_DIR, ensure_dirs, load_config, repo_short_name, save_config
 from .git_store import bare_repo_path, fetch_ref, github_url, init_bare_repo, update_all_repos
 from .hooks import select_hook
 from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
@@ -641,7 +641,7 @@ def _background_build_lean_toolchain(version: str):
     )
 
 
-def _provision_container(runtime, name, image_name, ref_path, mount_name, config):
+def _provision_container(runtime, name, image_name, ref_path, mount_name, config, hook=None):
     """Launch container, wait for readiness, mount git repo, set up relay."""
     click.echo("  Launching container...", nl=False)
     runtime.launch(name, image_name)
@@ -661,6 +661,26 @@ def _provision_container(runtime, name, image_name, ref_path, mount_name, config
         runtime.add_disk(
             name, "shared-git", mount_source, f"/shared/git/{mount_name}", readonly=True
         )
+
+    # Add shared writable mounts from hook (e.g. mathlib cache)
+    if hook:
+        env_lines = []
+        for host_dir_name, container_path, env_var in hook.shared_mounts():
+            host_path = DATA_DIR / host_dir_name
+            host_path.mkdir(parents=True, exist_ok=True)
+            runtime.add_disk(
+                name, f"shared-{host_dir_name}", str(host_path), container_path
+            )
+            # Ensure container user can write to the shared mount
+            runtime.exec(name, ["chown", "user:user", container_path])
+            if env_var:
+                env_lines.append(f"export {env_var}={shlex.quote(container_path)}")
+        if env_lines:
+            # Set env vars globally via /etc/profile.d so all shells see them
+            script = "\\n".join(env_lines)
+            runtime.exec(name, [
+                "bash", "-c", f"printf '{script}\\n' > /etc/profile.d/bubble-shared.sh",
+            ])
 
     relay_enabled = config.get("relay", {}).get("enabled", False)
     if relay_enabled:
@@ -1044,7 +1064,7 @@ def open_cmd(target, shell, ssh_host, force_local, no_interactive, machine_reada
 
     # Provision, clone, and finalize
     short = repo_short_name(t.org_repo)
-    _provision_container(runtime, name, image_name, ref_path, mount_name, config)
+    _provision_container(runtime, name, image_name, ref_path, mount_name, config, hook=hook)
     checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
     _finalize_bubble(
         runtime,

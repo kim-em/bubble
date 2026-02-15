@@ -35,6 +35,16 @@ class Hook(ABC):
         """Additional domains this hook needs in the network allowlist."""
         return []
 
+    def shared_mounts(self) -> list[tuple[str, str, str]]:
+        """Host directories shared (writable) across containers.
+
+        Returns list of (host_dir_name, container_path, env_var) tuples.
+        host_dir_name is created under ~/.bubble/ on the host.
+        container_path is the mount point inside the container.
+        env_var is set to container_path in the user's environment.
+        """
+        return []
+
 
 def discover_hooks() -> list[Hook]:
     """Return all registered hooks in priority order."""

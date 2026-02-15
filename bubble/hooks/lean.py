@@ -102,6 +102,11 @@ class LeanHook(Hook):
                 return f"lean-{version}"
         return "lean"
 
+    def shared_mounts(self) -> list[tuple[str, str, str]]:
+        if self._needs_cache:
+            return [("mathlib-cache", "/shared/mathlib-cache", "MATHLIB_CACHE_DIR")]
+        return []
+
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
         """Set up auto mathlib cache download if needed."""
         if not self._needs_cache:
@@ -110,7 +115,7 @@ class LeanHook(Hook):
         runtime.exec(container, [
             "su", "-", "user", "-c", "touch ~/.bubble-fetch-cache",
         ])
-        click.echo("Mathlib cache will download when VS Code connects.")
+        click.echo("Mathlib cache will download when VS Code connects (shared cache).")
 
     def network_domains(self) -> list[str]:
         return [
