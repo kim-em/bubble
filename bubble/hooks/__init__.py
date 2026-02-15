@@ -31,10 +31,6 @@ class Hook(ABC):
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
         """Optional: run after the repo is cloned inside the container."""
 
-    def vscode_extensions(self) -> list[str]:
-        """VSCode extensions to auto-install on the remote host."""
-        return []
-
     def network_domains(self) -> list[str]:
         """Additional domains this hook needs in the network allowlist."""
         return []

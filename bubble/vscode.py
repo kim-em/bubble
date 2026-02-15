@@ -1,7 +1,5 @@
 """VSCode Remote SSH integration."""
 
-import json
-import platform
 import re
 import subprocess
 from pathlib import Path
@@ -80,39 +78,6 @@ def _ensure_include_directive():
     else:
         ssh_config.parent.mkdir(parents=True, exist_ok=True)
         ssh_config.write_text(include_line + "\n")
-
-
-def _vscode_settings_path() -> Path:
-    """Get the VSCode user settings.json path."""
-    if platform.system() == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "Code" / "User" / "settings.json"
-    return Path.home() / ".config" / "Code" / "User" / "settings.json"
-
-
-def ensure_vscode_extensions(extensions: list[str] | None = None):
-    """Ensure VSCode is configured to auto-install extensions on remote SSH hosts."""
-    if not extensions:
-        return
-
-    settings_path = _vscode_settings_path()
-    if not settings_path.exists():
-        return
-
-    try:
-        settings = json.loads(settings_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return
-
-    existing = settings.get("remote.SSH.defaultExtensions", [])
-    added = []
-    for ext in extensions:
-        if ext not in existing:
-            existing.append(ext)
-            added.append(ext)
-
-    if added:
-        settings["remote.SSH.defaultExtensions"] = existing
-        settings_path.write_text(json.dumps(settings, indent=4) + "\n")
 
 
 def open_vscode(bubble_name: str, remote_path: str = "/home/user"):

@@ -13,6 +13,9 @@ apt-get install -y -qq \
 useradd -m -s /bin/bash user
 passwd -l user
 
+# Disable VSCode workspace trust prompt (containers are sandboxed)
+su - user -c 'mkdir -p ~/.vscode-server/data/Machine && echo "{\"security.workspace.trust.enabled\":false}" > ~/.vscode-server/data/Machine/settings.json'
+
 # Configure SSH (key-based auth only)
 mkdir -p /run/sshd
 sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config

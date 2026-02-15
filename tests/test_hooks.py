@@ -92,10 +92,6 @@ class TestLeanHook:
         hook = LeanHook()
         assert hook.image_name() == "lean"
 
-    def test_vscode_extensions(self):
-        hook = LeanHook()
-        assert "leanprover.lean4" in hook.vscode_extensions()
-
     def test_network_domains(self):
         hook = LeanHook()
         assert "releases.lean-lang.org" in hook.network_domains()

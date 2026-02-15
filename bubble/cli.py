@@ -20,12 +20,7 @@ from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
 from .runtime.incus import IncusRuntime
 from .target import TargetParseError, parse_target
-from .vscode import (
-    add_ssh_config,
-    ensure_vscode_extensions,
-    open_vscode,
-    remove_ssh_config,
-)
+from .vscode import add_ssh_config, open_vscode, remove_ssh_config
 
 
 def _is_command_available(cmd: str) -> bool:
@@ -606,7 +601,6 @@ def _finalize_bubble(
     project_dir = f"/home/user/{short}"
     if hook:
         hook.post_clone(runtime, name, project_dir)
-        ensure_vscode_extensions(hook.vscode_extensions())
 
     if network:
         extra_domains = hook.network_domains() if hook else None

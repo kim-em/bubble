@@ -27,8 +27,5 @@ class LeanHook(Hook):
     def image_name(self) -> str:
         return "lean"
 
-    def vscode_extensions(self) -> list[str]:
-        return ["leanprover.lean4"]
-
     def network_domains(self) -> list[str]:
         return ["releases.lean-lang.org"]
