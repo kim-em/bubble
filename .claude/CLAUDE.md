@@ -103,6 +103,7 @@ The `user` account has no sudo and a locked password. Network allowlisting is ap
 - `~/.bubble/relay.sock` — relay daemon Unix socket (when enabled)
 - `~/.bubble/relay-tokens.json` — relay auth tokens per container
 - `~/.bubble/relay.log` — relay request log
+- `~/.bubble/vscode-commit` — VS Code commit hash baked into current base image
 - `~/.ssh/config.d/bubble` — auto-managed SSH config
 
 ## Automation
@@ -132,3 +133,26 @@ Container                              Host
 - Container identifies itself via `/bubble/container-id` file
 - Relay daemon runs as launchd (macOS) or systemd (Linux) service
 - Code: `bubble/relay.py` (daemon + validation), `bubble/images/scripts/base.sh` (stub + client)
+
+## VS Code Integration Notes
+
+### Workspace Trust
+The workspace trust dialog is a **local VS Code client** decision, not controlled by remote server settings. We pass `--disable-workspace-trust` when launching VS Code in `open_vscode()`. Writing to `.vscode-server/data/Machine/settings.json` or `User/settings.json` inside the container does NOT suppress the trust prompt.
+
+### Clearing Trust State for Testing
+VS Code stores trusted workspace URIs in a SQLite database. To clear bubble-related trust entries:
+```python
+import json, sqlite3
+db = "/Users/kim/Library/Application Support/Code/User/globalStorage/state.vscdb"
+conn = sqlite3.connect(db)
+cur = conn.cursor()
+cur.execute("SELECT value FROM ItemTable WHERE key = 'content.trust.model.key'")
+data = json.loads(cur.fetchone()[0])
+data["uriTrustInfo"] = [e for e in data["uriTrustInfo"] if "bubble-" not in e["uri"].get("authority", "")]
+cur.execute("UPDATE ItemTable SET value = ? WHERE key = 'content.trust.model.key'", [json.dumps(data)])
+conn.commit()
+```
+VS Code must be restarted after modifying this database.
+
+### Pre-baked VS Code Server
+The base image pre-installs the VS Code Server binary matching the host's `code --version` commit hash. On each `bubble open`, if the hash has changed (VS Code updated), a background `bubble images build base` is triggered. The current bubble proceeds immediately; the next one gets the pre-baked server.
