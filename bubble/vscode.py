@@ -85,7 +85,7 @@ def open_vscode(bubble_name: str, remote_path: str = "/home/user"):
     host = f"bubble-{bubble_name}"
     uri = f"vscode-remote://ssh-remote+{host}{remote_path}"
     try:
-        subprocess.run(["code", "--folder-uri", uri], check=True)
+        subprocess.run(["code", "--disable-workspace-trust", "--folder-uri", uri], check=True)
     except FileNotFoundError:
         print(f"VSCode CLI not found. Connect manually: Remote SSH → {host}")
         print(f"Or run: code --folder-uri {uri}")
