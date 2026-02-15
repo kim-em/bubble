@@ -18,7 +18,7 @@ from .config import ensure_dirs, load_config, repo_short_name, save_config
 from .git_store import bare_repo_path, fetch_ref, github_url, init_bare_repo, update_all_repos
 from .hooks import select_hook
 from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
-from .lifecycle import load_registry, register_bubble, unregister_bubble
+from .lifecycle import get_bubble_info, load_registry, register_bubble, unregister_bubble
 from .naming import deduplicate_name, generate_name
 from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
@@ -439,8 +439,14 @@ class BubbleGroup(click.Group):
                 formatter.write_dl(advanced)
 
     def parse_args(self, ctx, args):
-        """If the first arg isn't a known command, treat it as a target for 'open'."""
-        if args and args[0] not in self.commands and not args[0].startswith("-"):
+        """If no known command is found among args, prepend 'open'.
+
+        This supports both `bubble TARGET` and `bubble --ssh HOST TARGET`.
+        """
+        has_command = any(
+            not a.startswith("-") and a in self.commands for a in args
+        )
+        if args and not has_command:
             args = ["open"] + args
         return super().parse_args(ctx, args)
 
@@ -451,7 +457,7 @@ def main():
     """bubble: Open a containerized dev environment in VSCode.
 
     Run bubble TARGET to create (or reattach to) an isolated container and
-    open it in VSCode via Remote SSH. Use --ssh for a terminal session instead.
+    open it in VSCode via Remote SSH. Use --shell for a terminal session instead.
 
     \b
     Examples:
@@ -830,7 +836,8 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
 
 
 def _finalize_bubble(
-    runtime, name, t, hook, image_name, checkout_branch, short, network, config, ssh, no_interactive
+    runtime, name, t, hook, image_name, checkout_branch, short, network, config,
+    shell, no_interactive, machine_readable=False,
 ):
     """Post-clone setup: hooks, SSH, network, registration, and attach."""
     q_short = shlex.quote(short)
@@ -842,7 +849,8 @@ def _finalize_bubble(
         extra_domains = hook.network_domains() if hook else None
         _apply_network(runtime, name, config, extra_domains)
 
-    click.echo("Setting up SSH access...")
+    if not machine_readable:
+        click.echo("Setting up SSH access...")
     _setup_ssh(runtime, name)
 
     commit = ""
@@ -853,6 +861,7 @@ def _finalize_bubble(
         ).strip()
     except Exception:
         pass
+
     register_bubble(
         name,
         t.org_repo,
@@ -862,13 +871,72 @@ def _finalize_bubble(
         base_image=image_name,
     )
 
+    if machine_readable:
+        _machine_readable_output(
+            "created", name,
+            project_dir=project_dir,
+            org_repo=t.org_repo,
+            image=image_name,
+            branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
+        )
+        return
+
     _maybe_install_automation()
 
     click.echo(f"Bubble '{name}' created successfully.")
     click.echo(f"  SSH: ssh bubble-{name}")
 
     if not no_interactive:
-        if ssh:
+        if shell:
+            click.echo("Connecting via SSH...")
+            subprocess.run(["ssh", f"bubble-{name}"])
+        else:
+            click.echo("Opening VSCode...")
+            open_vscode(name, project_dir)
+
+
+def _machine_readable_output(status: str, name: str, **kwargs):
+    """Output JSON for --machine-readable mode."""
+    data = {"status": status, "name": name}
+    data.update({k: v for k, v in kwargs.items() if v is not None})
+    click.echo(json.dumps(data))
+
+
+def _open_remote(remote_host, target, shell, no_interactive, network, custom_name, config):
+    """Open a bubble on a remote host, then connect locally."""
+    from .remote import remote_open
+
+    try:
+        result = remote_open(
+            remote_host, target,
+            network=network,
+            custom_name=custom_name,
+        )
+    except RuntimeError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+
+    name = result["name"]
+    project_dir = result.get("project_dir", "/home/user")
+    org_repo = result.get("org_repo", "")
+
+    # Write local SSH config with chained ProxyCommand through the remote host
+    add_ssh_config(name, remote_host=remote_host)
+
+    # Register in local lifecycle registry with remote_host info
+    register_bubble(
+        name,
+        org_repo,
+        branch=result.get("branch", ""),
+        base_image=result.get("image", ""),
+        remote_host=remote_host.spec_string(),
+    )
+
+    click.echo(f"Bubble '{name}' ready on {remote_host.ssh_destination}.")
+    click.echo(f"  SSH: ssh bubble-{name}")
+
+    if not no_interactive:
+        if shell:
             click.echo("Connecting via SSH...")
             subprocess.run(["ssh", f"bubble-{name}"])
         else:
@@ -878,28 +946,58 @@ def _finalize_bubble(
 
 @main.command("open")
 @click.argument("target")
-@click.option("--ssh", is_flag=True, help="Drop into SSH session instead of VSCode")
+@click.option("--shell", is_flag=True, help="Drop into SSH session instead of VSCode")
+@click.option("--ssh", "ssh_host", type=str, default=None, metavar="HOST",
+              help="Run on remote host (host, user@host, or user@host:port)")
+@click.option("--local", "force_local", is_flag=True,
+              help="Force local execution (override default remote)")
 @click.option("--no-interactive", is_flag=True, help="Just create, don't attach")
+@click.option("--machine-readable", is_flag=True, hidden=True,
+              help="Output JSON (for remote orchestration)")
 @click.option("--network/--no-network", default=True, help="Apply network allowlist")
 @click.option("--name", "custom_name", type=str, help="Custom container name")
 @click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
 @click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
 )
-def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_clone):
+def open_cmd(target, shell, ssh_host, force_local, no_interactive, machine_readable,
+             network, custom_name, force_path, no_clone):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
         target = "./" + target
 
-    _maybe_rebuild_base_image()
-
     config = load_config()
+
+    # Resolve remote host: explicit --ssh > config default, --local overrides both
+    remote_host = None
+    if not force_local and not machine_readable:
+        if ssh_host:
+            from .remote import RemoteHost
+            remote_host = RemoteHost.parse(ssh_host)
+        else:
+            default = config.get("remote", {}).get("default_host", "")
+            if default:
+                from .remote import RemoteHost
+                remote_host = RemoteHost.parse(default)
+
+    if remote_host:
+        _open_remote(remote_host, target, shell, no_interactive, network, custom_name, config)
+        return
+
+    # Local flow
+    if not machine_readable:
+        _maybe_rebuild_base_image()
+
     runtime = get_runtime(config)
 
     # Check if target matches an existing container
     existing = _find_existing_container(runtime, target)
     if existing:
-        _reattach(runtime, existing, ssh, no_interactive)
+        if machine_readable:
+            project_dir = _detect_project_dir(runtime, existing)
+            _machine_readable_output("reattached", existing, project_dir=project_dir)
+            return
+        _reattach(runtime, existing, shell, no_interactive)
         return
 
     # Parse and register target
@@ -907,6 +1005,9 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
     try:
         t = parse_target(target, registry)
     except TargetParseError as e:
+        if machine_readable:
+            _machine_readable_output("error", "", message=str(e))
+            sys.exit(1)
         click.echo(str(e), err=True)
         sys.exit(1)
     registry.register(t.owner, t.repo)
@@ -922,7 +1023,12 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
         ref=t.ref,
     )
     if existing:
-        _reattach(runtime, existing, ssh, no_interactive)
+        if machine_readable:
+            project_dir = _detect_project_dir(runtime, existing)
+            _machine_readable_output("reattached", existing, project_dir=project_dir,
+                                     org_repo=t.org_repo)
+            return
+        _reattach(runtime, existing, shell, no_interactive)
         return
 
     # Resolve git source, detect language, and build image
@@ -933,7 +1039,8 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
     # Deduplicate and create
     existing_names = {c.name for c in runtime.list_containers()}
     name = deduplicate_name(name, existing_names)
-    click.echo(f"Creating bubble '{name}'...")
+    if not machine_readable:
+        click.echo(f"Creating bubble '{name}'...")
 
     # Provision, clone, and finalize
     short = repo_short_name(t.org_repo)
@@ -949,12 +1056,13 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
         short,
         network,
         config,
-        ssh,
+        shell,
         no_interactive,
+        machine_readable,
     )
 
 
-def _reattach(runtime: ContainerRuntime, name: str, ssh: bool, no_interactive: bool):
+def _reattach(runtime: ContainerRuntime, name: str, shell: bool, no_interactive: bool):
     """Re-attach to an existing container."""
     _ensure_running(runtime, name)
 
@@ -964,7 +1072,7 @@ def _reattach(runtime: ContainerRuntime, name: str, ssh: bool, no_interactive: b
 
     project_dir = _detect_project_dir(runtime, name)
 
-    if ssh:
+    if shell:
         click.echo(f"Connecting to '{name}' via SSH...")
         subprocess.run(["ssh", f"bubble-{name}"])
     else:
@@ -1087,6 +1195,18 @@ def list_bubbles(as_json, verbose, show_clean):
 @click.argument("name")
 def pause(name):
     """Pause (freeze) a bubble."""
+    # Auto-route to remote host if the bubble is registered there
+    info = get_bubble_info(name)
+    if info and info.get("remote_host"):
+        from .remote import RemoteHost, remote_command
+        host = RemoteHost.parse(info["remote_host"])
+        result = remote_command(host, ["pause", name])
+        if result.returncode != 0:
+            click.echo(f"Failed to pause on {host.ssh_destination}: {result.stderr}", err=True)
+            sys.exit(1)
+        click.echo(f"Bubble '{name}' paused on {host.ssh_destination}.")
+        return
+
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
     runtime.freeze(name)
@@ -1098,6 +1218,25 @@ def pause(name):
 @click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
 def destroy(name, force):
     """Destroy a bubble permanently."""
+    # Auto-route to remote host if the bubble is registered there
+    info = get_bubble_info(name)
+    if info and info.get("remote_host"):
+        from .remote import RemoteHost, remote_command
+        host = RemoteHost.parse(info["remote_host"])
+        if not force:
+            click.confirm(
+                f"Permanently destroy bubble '{name}' on {host.ssh_destination}?",
+                abort=True,
+            )
+        result = remote_command(host, ["destroy", "-f", name])
+        if result.returncode != 0:
+            click.echo(f"Failed to destroy on {host.ssh_destination}: {result.stderr}", err=True)
+            sys.exit(1)
+        remove_ssh_config(name)
+        unregister_bubble(name)
+        click.echo(f"Bubble '{name}' destroyed on {host.ssh_destination}.")
+        return
+
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
 
@@ -1567,6 +1706,67 @@ def _restore_terminal(saved):
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, saved)
         except (ImportError, termios.error):
             pass
+
+
+# ---------------------------------------------------------------------------
+# remote
+# ---------------------------------------------------------------------------
+
+
+@main.group("remote")
+def remote_group():
+    """Manage remote SSH host settings."""
+
+
+@remote_group.command("set-default")
+@click.argument("host")
+def remote_set_default(host):
+    """Set the default remote SSH host for new bubbles.
+
+    HOST can be: hostname, user@hostname, or user@hostname:port
+    """
+    from .remote import RemoteHost
+
+    # Validate the spec parses
+    parsed = RemoteHost.parse(host)
+    config = load_config()
+    if "remote" not in config:
+        config["remote"] = {}
+    config["remote"]["default_host"] = parsed.spec_string()
+    save_config(config)
+    click.echo(f"Default remote host set to: {parsed.spec_string()}")
+
+
+@remote_group.command("clear-default")
+def remote_clear_default():
+    """Clear the default remote SSH host."""
+    config = load_config()
+    if "remote" in config:
+        config["remote"]["default_host"] = ""
+        save_config(config)
+    click.echo("Default remote host cleared.")
+
+
+@remote_group.command("status")
+def remote_status():
+    """Show current remote host configuration."""
+    config = load_config()
+    default = config.get("remote", {}).get("default_host", "")
+    if default:
+        click.echo(f"Default remote host: {default}")
+    else:
+        click.echo("No default remote host configured.")
+
+    # Show remote bubbles from registry
+    registry = load_registry()
+    remote_bubbles = [
+        (name, info) for name, info in registry.get("bubbles", {}).items()
+        if info.get("remote_host")
+    ]
+    if remote_bubbles:
+        click.echo(f"\nRemote bubbles ({len(remote_bubbles)}):")
+        for name, info in remote_bubbles:
+            click.echo(f"  {name:<30} {info['remote_host']}")
 
 
 @main.command()

@@ -2,6 +2,7 @@
 
 import pytest
 
+from bubble.remote import RemoteHost
 from bubble.vscode import _BUBBLE_NAME_RE, add_ssh_config, remove_ssh_config
 
 
@@ -74,3 +75,38 @@ class TestRemoveSshConfig:
         remove_ssh_config("nonexistent")
         content_after = ssh_file.read_text()
         assert content_before == content_after
+
+
+class TestRemoteProxyCommand:
+    def test_chained_proxy_with_default_port(self, tmp_ssh_dir):
+        ssh_file = tmp_ssh_dir / "bubble"
+        host = RemoteHost(hostname="build-server", user="kim")
+        add_ssh_config("test-remote", remote_host=host)
+        content = ssh_file.read_text()
+        assert "Host bubble-test-remote" in content
+        assert "ProxyCommand ssh kim@build-server incus exec test-remote" in content
+        assert "nc localhost 22" in content
+        # Should NOT have -p flag for default port
+        assert "-p 22" not in content
+
+    def test_chained_proxy_with_custom_port(self, tmp_ssh_dir):
+        ssh_file = tmp_ssh_dir / "bubble"
+        host = RemoteHost(hostname="build-server", user="kim", port=2222)
+        add_ssh_config("test-remote", remote_host=host)
+        content = ssh_file.read_text()
+        assert "ProxyCommand ssh -p 2222 kim@build-server incus exec test-remote" in content
+
+    def test_chained_proxy_without_user(self, tmp_ssh_dir):
+        ssh_file = tmp_ssh_dir / "bubble"
+        host = RemoteHost(hostname="build-server")
+        add_ssh_config("test-remote", remote_host=host)
+        content = ssh_file.read_text()
+        assert "ProxyCommand ssh build-server incus exec test-remote" in content
+
+    def test_local_proxy_unchanged(self, tmp_ssh_dir):
+        """Without remote_host, ProxyCommand should use incus exec directly."""
+        ssh_file = tmp_ssh_dir / "bubble"
+        add_ssh_config("test-local")
+        content = ssh_file.read_text()
+        assert "ProxyCommand incus exec test-local" in content
+        assert "ssh " not in content.split("ProxyCommand")[1].split("\n")[0]  # no ssh in proxy

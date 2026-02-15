@@ -41,6 +41,9 @@ DEFAULT_CONFIG = {
     "relay": {
         "enabled": False,
     },
+    "remote": {
+        "default_host": "",
+    },
 }
 
 

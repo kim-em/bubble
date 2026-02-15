@@ -1,6 +1,7 @@
 """VSCode Remote SSH integration."""
 
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -20,19 +21,35 @@ SSH_CONFIG_FILE = SSH_CONFIG_DIR / "bubble"
 SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"
 
 
-def add_ssh_config(bubble_name: str, user: str = "user"):
+def add_ssh_config(bubble_name: str, user: str = "user", remote_host=None):
     """Add an SSH config entry for a bubble.
 
     Uses `incus exec` as ProxyCommand to avoid port forwarding issues on macOS.
+    When remote_host is provided, chains SSH through the remote host to reach
+    the container.
+
+    Args:
+        bubble_name: Container name.
+        user: User inside the container.
+        remote_host: Optional RemoteHost for chained ProxyCommand.
     """
     if not _BUBBLE_NAME_RE.match(bubble_name):
         raise ValueError(f"Invalid bubble name for SSH config: {bubble_name!r}")
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+    incus_cmd = f'incus exec {bubble_name} -- su - {user} -c "nc localhost 22"'
+
+    if remote_host is not None:
+        port_args = f"-p {remote_host.port} " if remote_host.port != 22 else ""
+        dest = shlex.quote(remote_host.ssh_destination)
+        proxy_cmd = f"ssh {port_args}{dest} {incus_cmd}"
+    else:
+        proxy_cmd = incus_cmd
+
     entry = f"""
 Host bubble-{bubble_name}
   User {user}
-  ProxyCommand incus exec {bubble_name} -- su - {user} -c "nc localhost 22"
+  ProxyCommand {proxy_cmd}
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
   LogLevel ERROR

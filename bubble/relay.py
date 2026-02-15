@@ -348,7 +348,7 @@ def _open_bubble(target: str):
     cloning repos that don't exist in the git store (TOCTOU protection).
     """
     subprocess.Popen(
-        ["bubble", "open", "--no-clone", "--no-interactive", target],
+        ["bubble", "open", "--local", "--no-clone", "--no-interactive", target],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

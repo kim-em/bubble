@@ -28,10 +28,11 @@ def register_bubble(
     commit: str = "",
     pr: int = 0,
     base_image: str = "base",
+    remote_host: str = "",
 ):
     """Record a bubble's creation in the registry."""
     registry = load_registry()
-    registry["bubbles"][name] = {
+    entry = {
         "org_repo": org_repo,
         "branch": branch,
         "commit": commit,
@@ -39,6 +40,9 @@ def register_bubble(
         "base_image": base_image,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if remote_host:
+        entry["remote_host"] = remote_host
+    registry["bubbles"][name] = entry
     _save_registry(registry)
 
 
