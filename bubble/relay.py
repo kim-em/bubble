@@ -384,11 +384,14 @@ def run_daemon():
     use_tcp = platform.system() == "Darwin"
 
     if use_tcp:
+        from .config import load_config
+
+        config = load_config()
+        port = config.get("relay", {}).get("port", 7653)
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", 0))
+        server.bind(("127.0.0.1", port))
         server.listen(5)
-        port = server.getsockname()[1]
         RELAY_PORT_FILE.write_text(str(port))
         os.chmod(str(RELAY_PORT_FILE), 0o600)
         listen_addr = f"127.0.0.1:{port}"
@@ -431,7 +434,5 @@ def run_daemon():
     finally:
         executor.shutdown(wait=False)
         server.close()
-        if use_tcp:
-            RELAY_PORT_FILE.unlink(missing_ok=True)
-        else:
+        if not use_tcp:
             RELAY_SOCK.unlink(missing_ok=True)
