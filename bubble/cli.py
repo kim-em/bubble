@@ -3,6 +3,7 @@
 import json
 import platform
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from . import __version__
 from .config import DATA_DIR, ensure_dirs, load_config, repo_short_name, save_config
 from .git_store import bare_repo_path, ensure_repo, fetch_ref, github_url, update_all_repos
 from .hooks import select_hook
+from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
 from .lifecycle import load_registry, register_bubble, unregister_bubble
 from .naming import deduplicate_name, generate_name
 from .repo_registry import RepoRegistry
@@ -468,6 +470,23 @@ def help_cmd(ctx, command):
 # ---------------------------------------------------------------------------
 
 
+def _maybe_rebuild_base_image():
+    """If VS Code has updated since the base image was built, rebuild in background."""
+    commit = get_vscode_commit()
+    if not commit:
+        return
+    if VSCODE_COMMIT_FILE.exists() and VSCODE_COMMIT_FILE.read_text().strip() == commit:
+        return
+    bubble_cmd = shutil.which("bubble")
+    if bubble_cmd:
+        subprocess.Popen(
+            [bubble_cmd, "images", "build", "base"],
+            stdout=open("/tmp/bubble-vscode-rebuild.log", "w"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+
 def _generate_bubble_name(t, custom_name: str | None) -> str:
     """Generate a container name from a parsed target."""
     if custom_name:
@@ -716,6 +735,8 @@ def open_cmd(target, ssh, no_interactive, network, custom_name, force_path, no_c
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
         target = "./" + target
+
+    _maybe_rebuild_base_image()
 
     config = load_config()
     runtime = get_runtime(config)

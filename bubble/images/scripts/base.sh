@@ -16,6 +16,21 @@ passwd -l user
 # Disable VSCode workspace trust prompt (containers are sandboxed)
 su - user -c 'mkdir -p ~/.vscode-server/data/Machine && echo "{\"security.workspace.trust.enabled\":false}" > ~/.vscode-server/data/Machine/settings.json'
 
+# Pre-install VS Code Server if commit hash was provided at build time
+if [ -n "${VSCODE_COMMIT:-}" ]; then
+    echo "Installing VS Code Server (commit: $VSCODE_COMMIT)..."
+    ARCH=$(dpkg --print-architecture)
+    case "$ARCH" in
+        amd64) VSCODE_ARCH="x64" ;;
+        arm64) VSCODE_ARCH="arm64" ;;
+        *) VSCODE_ARCH="$ARCH" ;;
+    esac
+    SERVER_URL="https://update.code.visualstudio.com/commit:${VSCODE_COMMIT}/server-linux-${VSCODE_ARCH}/stable"
+    SERVER_DIR="/home/user/.vscode-server/cli/servers/Stable-${VSCODE_COMMIT}/server"
+    su - user -c "mkdir -p '$SERVER_DIR' && curl -sSL '$SERVER_URL' | tar xz -C '$SERVER_DIR' --strip-components=1" \
+        || echo "Warning: failed to pre-install VS Code Server"
+fi
+
 # Configure SSH (key-based auth only)
 mkdir -p /run/sshd
 sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
