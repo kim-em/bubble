@@ -7,12 +7,11 @@ Supports:
 """
 
 import platform
-import shutil
+import plistlib
 import subprocess
 import textwrap
 from pathlib import Path
 
-PLIST_DIR = Path(__file__).parent.parent / "config"
 LAUNCHD_LABELS = {
     "git-update": "com.bubble.git-update",
     "image-refresh": "com.bubble.image-refresh",
@@ -53,35 +52,81 @@ def is_automation_installed() -> dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
-# macOS: launchd
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 
-def _install_launchd_job(label: str) -> str | None:
-    """Install a single launchd job. Returns description or None."""
+def _bubble_path() -> str:
+    """Find the bubble executable path."""
+    import shutil as _shutil
+
+    path = _shutil.which("bubble")
+    return path if path else "bubble"
+
+
+# ---------------------------------------------------------------------------
+# macOS: launchd
+# ---------------------------------------------------------------------------
+
+# Job definitions: label -> (args_suffix, extra_plist_keys)
+_LAUNCHD_JOBS = {
+    "com.bubble.git-update": {
+        "args": ["git", "update"],
+        "extra": {
+            "StartInterval": 3600,
+            "RunAtLoad": False,
+        },
+        "log": "/tmp/bubble-git-update.log",
+    },
+    "com.bubble.image-refresh": {
+        "args": ["images", "build", "base"],
+        "extra": {
+            "StartCalendarInterval": {"Hour": 3, "Weekday": 0},
+            "RunAtLoad": False,
+        },
+        "log": "/tmp/bubble-image-refresh.log",
+    },
+}
+
+_RELAY_JOB = {
+    "args": ["relay", "daemon"],
+    "extra": {
+        "KeepAlive": True,
+        "RunAtLoad": True,
+    },
+    "log": "/tmp/bubble-relay-daemon.log",
+}
+
+
+def _write_launchd_plist(label: str, job: dict) -> str:
+    """Generate and install a launchd plist. Returns the installed path."""
     launch_agents = Path.home() / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True, exist_ok=True)
-
-    plist_name = f"{label}.plist"
-    src = PLIST_DIR / plist_name
-    dst = launch_agents / plist_name
+    dst = launch_agents / f"{label}.plist"
 
     if dst.exists():
         subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
 
-    if src.exists():
-        shutil.copy2(src, dst)
-        subprocess.run(["launchctl", "load", str(dst)], capture_output=True)
-        return f"launchd: {label}"
+    bubble = _bubble_path()
+    plist = {
+        "Label": label,
+        "ProgramArguments": [bubble] + job["args"],
+        "StandardOutPath": job["log"],
+        "StandardErrorPath": job["log"],
+    }
+    plist.update(job["extra"])
 
-    return None
+    with open(dst, "wb") as f:
+        plistlib.dump(plist, f)
+
+    subprocess.run(["launchctl", "load", str(dst)], capture_output=True)
+    return str(dst)
 
 
 def _remove_launchd_job(label: str) -> str | None:
     """Remove a single launchd job. Returns description or None."""
     launch_agents = Path.home() / "Library" / "LaunchAgents"
-    plist_name = f"{label}.plist"
-    dst = launch_agents / plist_name
+    dst = launch_agents / f"{label}.plist"
 
     if dst.exists():
         subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
@@ -93,10 +138,9 @@ def _remove_launchd_job(label: str) -> str | None:
 
 def _install_launchd() -> list[str]:
     installed = []
-    for label in LAUNCHD_LABELS.values():
-        result = _install_launchd_job(label)
-        if result:
-            installed.append(result)
+    for label, job in _LAUNCHD_JOBS.items():
+        _write_launchd_plist(label, job)
+        installed.append(f"launchd: {label}")
     return installed
 
 
@@ -123,14 +167,6 @@ def _check_launchd() -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 
 SYSTEMD_DIR = Path.home() / ".config" / "systemd" / "user"
-
-
-def _bubble_path() -> str:
-    """Find the bubble executable path."""
-    result = subprocess.run(["which", "bubble"], capture_output=True, text=True)
-    if result.returncode == 0:
-        return result.stdout.strip()
-    return "bubble"
 
 
 def _install_systemd() -> list[str]:
@@ -270,7 +306,8 @@ def remove_relay_daemon() -> str:
 
 
 def _install_relay_launchd() -> str:
-    return _install_launchd_job(RELAY_LABEL) or ""
+    _write_launchd_plist(RELAY_LABEL, _RELAY_JOB)
+    return f"launchd: {RELAY_LABEL}"
 
 
 def _remove_relay_launchd() -> str:
