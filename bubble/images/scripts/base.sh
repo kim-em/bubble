@@ -14,7 +14,11 @@ useradd -m -s /bin/bash user
 passwd -l user
 
 # Disable VSCode workspace trust prompt (containers are sandboxed)
-su - user -c 'mkdir -p ~/.vscode-server/data/Machine && echo "{\"security.workspace.trust.enabled\":false}" > ~/.vscode-server/data/Machine/settings.json'
+su - user -c '
+mkdir -p ~/.vscode-server/data/Machine ~/.vscode-server/data/User
+echo "{\"security.workspace.trust.enabled\":false}" > ~/.vscode-server/data/Machine/settings.json
+echo "{\"security.workspace.trust.enabled\":false}" > ~/.vscode-server/data/User/settings.json
+'
 
 # Pre-install VS Code Server if commit hash was provided at build time
 if [ -n "${VSCODE_COMMIT:-}" ]; then
