@@ -164,3 +164,29 @@ VS Code must be restarted after modifying this database.
 
 ### Pre-baked VS Code Server
 The base image pre-installs the VS Code Server binary matching the host's `code --version` commit hash. On each `bubble open`, if the hash has changed (VS Code updated), a background `bubble images build base` is triggered. The current bubble proceeds immediately; the next one gets the pre-baked server.
+
+## PyPI Publishing
+
+The package is published to PyPI as **`dev-bubble`** (the CLI command is still `bubble`). Users install with `pipx install dev-bubble` or `uv tool install dev-bubble`.
+
+### Releasing a New Version
+
+When making changes that warrant a release (new features, bug fixes, improvements), create a new version tag:
+
+1. Bump `version` in `pyproject.toml` (use semver: patch for fixes, minor for features)
+2. Commit the version bump
+3. Tag and push:
+   ```bash
+   git tag v0.X.Y
+   git push origin v0.X.Y
+   ```
+
+The `.github/workflows/publish.yml` workflow runs tests then publishes to PyPI automatically via trusted publishing (no API tokens needed).
+
+### When to Release
+
+**Proactively tag a new minor/patch version** after completing work that changes user-visible behavior. Don't let changes accumulate unreleased — small frequent releases are preferred. If you've just made a meaningful change, bump the version and tag it.
+
+### Trusted Publisher Setup
+
+PyPI is configured to trust GitHub Actions from `kim-em/bubble` with the `publish.yml` workflow and `pypi` environment. No secrets or API tokens are stored in the repository.

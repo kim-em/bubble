@@ -5,9 +5,11 @@ Containerized development environments for the Lean language, powered by [Incus]
 ## Quick Start
 
 ```bash
-# Install (use pipx or uv to avoid PEP 668 issues with system Python)
-pipx install bubble        # or: uv tool install bubble
-# For development:         uv pip install -e '.[dev]'
+# Install
+uv tool install git+https://github.com/kim-em/bubble.git
+
+# Also available on PyPI: uv tool install dev-bubble
+# For development: uv pip install -e '.[dev]'
 
 # Open a bubble for a GitHub PR — just paste the URL, and you get a containerized VSCode window!
 bubble https://github.com/leanprover-community/mathlib4/pull/35219
@@ -137,7 +139,7 @@ bubble leanprover/lean4/pull/456
 bubble mathlib4
 ```
 
-The relay only allows opening repos already cloned in `~/.bubble/git/` — it cannot trigger cloning of new repos. Requests are rate-limited (3/min, 10/10min, 20/hour per container), logged to `~/.bubble/relay.log`, and local paths are rejected. Existing bubbles need to be recreated after enabling the relay to get the relay socket.
+The relay only allows opening repos already cloned in `~/.bubble/git/` — it cannot trigger cloning of new repos. Local paths are rejected. Existing bubbles need to be recreated after enabling the relay to get the relay socket.
 
 ## Security
 

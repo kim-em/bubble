@@ -3,17 +3,37 @@ requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bubble"
+name = "dev-bubble"
 version = "0.2.0"
-description = "Containerized development environments"
+description = "Containerized development environments powered by Incus"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 requires-python = ">=3.10"
+authors = [{name = "Kim Morrison", email = "kim@tqft.net"}]
+keywords = ["containers", "development", "incus", "lean", "vscode"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
 dependencies = [
     "click>=8.0",
     "tomli>=2.0; python_version < '3.11'",
     "tomli-w>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/kim-em/bubble"
+Repository = "https://github.com/kim-em/bubble"
+Issues = "https://github.com/kim-em/bubble/issues"
 
 [project.scripts]
 bubble = "bubble.cli:main"
