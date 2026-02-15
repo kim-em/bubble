@@ -897,7 +897,7 @@ def pause(name):
 
 @main.command()
 @click.argument("name")
-@click.option("--force", is_flag=True, help="Force destroy even if running")
+@click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
 def destroy(name, force):
     """Destroy a bubble permanently."""
     config = load_config()
