@@ -1,15 +1,22 @@
 """Learned repo name registry for short name resolution."""
 
 import json
+from importlib import resources
 from pathlib import Path
 
 from .config import REPOS_FILE
+
+# Load built-in defaults once at import time.
+_ref = resources.files(__package__).joinpath("default_repos.json")
+_DEFAULT_REPOS: dict[str, str] = json.loads(_ref.read_text(encoding="utf-8"))
 
 
 class RepoRegistry:
     """Maps short repo names to full owner/repo pairs.
 
     Repos are learned on first use and stored in ~/.bubble/repos.json.
+    Built-in defaults (default_repos.json) provide fallback resolution
+    for well-known Lean ecosystem repos.
     """
 
     def __init__(self, path: Path | None = None):
@@ -41,7 +48,8 @@ class RepoRegistry:
         entry = self._repos.get(lower)
         if entry:
             return f"{entry['owner']}/{entry['repo']}"
-        return None
+        # Fall back to built-in defaults.
+        return _DEFAULT_REPOS.get(lower)
 
     def register(self, owner: str, repo: str):
         """Record a repo usage. Auto-learns short name mapping."""

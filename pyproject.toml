@@ -45,6 +45,9 @@ cloud = ["hcloud>=2.0"]
 [tool.setuptools.packages.find]
 include = ["bubble*"]
 
+[tool.setuptools.package-data]
+bubble = ["default_repos.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
