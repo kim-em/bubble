@@ -101,16 +101,33 @@ def tmp_data_dir(tmp_path, monkeypatch):
     config_file = data_dir / "config.toml"
     repos_file = data_dir / "repos.json"
 
+    cloud_state_file = data_dir / "cloud.json"
+    cloud_key_file = data_dir / "cloud_key"
+    cloud_known_hosts = data_dir / "known_hosts"
+
     # Patch the canonical config module
     monkeypatch.setattr(config, "DATA_DIR", data_dir)
     monkeypatch.setattr(config, "CONFIG_FILE", config_file)
     monkeypatch.setattr(config, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(config, "GIT_DIR", git_dir)
     monkeypatch.setattr(config, "REPOS_FILE", repos_file)
+    monkeypatch.setattr(config, "CLOUD_STATE_FILE", cloud_state_file)
+    monkeypatch.setattr(config, "CLOUD_KEY_FILE", cloud_key_file)
+    monkeypatch.setattr(config, "CLOUD_KNOWN_HOSTS", cloud_known_hosts)
 
     # Also patch modules that do `from .config import X` (separate bindings)
     monkeypatch.setattr(lifecycle, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(git_store, "GIT_DIR", git_dir)
+
+    # Patch cloud module if imported
+    try:
+        import bubble.cloud as cloud_mod
+        monkeypatch.setattr(cloud_mod, "CLOUD_STATE_FILE", cloud_state_file)
+        monkeypatch.setattr(cloud_mod, "CLOUD_KEY_FILE", cloud_key_file)
+        monkeypatch.setattr(cloud_mod, "CLOUD_KNOWN_HOSTS", cloud_known_hosts)
+        monkeypatch.setattr(cloud_mod, "DATA_DIR", data_dir)
+    except ImportError:
+        pass
 
     return data_dir
 

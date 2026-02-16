@@ -23,6 +23,7 @@ bubble/
 ├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
 ├── relay.py            # Bubble-in-bubble relay daemon (Unix socket, validation, rate limiting)
 ├── remote.py           # Remote SSH host support: run bubbles on remote machines
+├── cloud.py            # Hetzner Cloud auto-provisioning (provision, destroy, start, stop)
 ├── hooks/
 │   ├── __init__.py     # Hook ABC, discover_hooks(), select_hook()
 │   └── lean.py         # LeanHook: detects lean-toolchain, uses lean image
@@ -88,6 +89,19 @@ The default editor is VSCode via Remote SSH, but users can choose Emacs (TRAMP),
 ### Remote SSH Hosts
 Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (or a configured `[remote] default_host`) causes `bubble open` to SSH to the remote, run `bubble open --machine-readable` there, then set up a chained SSH ProxyCommand locally. The `--local` flag overrides a configured default. Remote bubble lifecycle commands (`pause`, `destroy`) auto-route to the correct host via the local registry. Code is in `remote.py`.
 
+### Hetzner Cloud Support
+`bubble open --cloud <target>` auto-provisions a Hetzner Cloud server as a remote host. A single server runs Incus and hosts multiple containers, reusing the existing `remote.py` infrastructure. Code is in `cloud.py`.
+
+**Flow:** `--cloud` flag → `cloud.get_cloud_remote_host(config)` → loads `~/.bubble/cloud.json` for existing server → if stopped, auto-starts → returns `RemoteHost(hostname=ipv4, user="root")` → existing `_open_remote()` flow handles the rest.
+
+**Provisioning:** `bubble cloud provision --type ccx43` creates a server with cloud-init that installs Incus via Zabbly, runs `incus admin init --auto`, and installs an idle auto-shutdown timer. Bubble generates its own ed25519 SSH keypair at `~/.bubble/cloud_key` (isolated from `~/.ssh/`).
+
+**Idle auto-shutdown:** A systemd timer checks every 5 minutes for SSH connections and CPU load. After 15 minutes with no SSH connections and low CPU, the server shuts down (stops Hetzner billing). Containers survive shutdown — they're still on disk when the server restarts. Running containers do NOT prevent shutdown; only active SSH sessions and high CPU load do.
+
+**Priority chain for remote host resolution:** `--local` > `--ssh HOST` > `--cloud` > `[cloud] default` > `[remote] default_host`
+
+**State:** `~/.bubble/cloud.json` tracks server ID, IP, SSH key ID. Token comes from `HETZNER_TOKEN` env var (never stored).
+
 ### Security Model
 The `user` account has no sudo and a locked password. Network allowlisting is applied on container creation. SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Each container mounts only its specific bare repo, not the entire git store.
 
@@ -120,6 +134,9 @@ Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest
 - `~/.bubble/relay.log` — relay request log
 - `~/.bubble/mathlib-cache/` — shared writable mathlib cache (mounted into Lean containers)
 - `~/.bubble/vscode-commit` — VS Code commit hash baked into current base image
+- `~/.bubble/cloud.json` — Hetzner Cloud server state (ID, IP, SSH key ID)
+- `~/.bubble/cloud_key` — SSH private key for cloud server (ed25519, mode 0600)
+- `~/.bubble/known_hosts` — SSH known_hosts for cloud server (isolated from ~/.ssh/)
 - `~/.ssh/config.d/bubble` — auto-managed SSH config
 
 ## Automation

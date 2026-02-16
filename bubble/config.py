@@ -17,6 +17,9 @@ CONFIG_FILE = DATA_DIR / "config.toml"
 REGISTRY_FILE = DATA_DIR / "registry.json"
 GIT_DIR = DATA_DIR / "git"
 REPOS_FILE = DATA_DIR / "repos.json"
+CLOUD_STATE_FILE = DATA_DIR / "cloud.json"
+CLOUD_KEY_FILE = DATA_DIR / "cloud_key"
+CLOUD_KNOWN_HOSTS = DATA_DIR / "known_hosts"
 
 DEFAULT_CONFIG = {
     "editor": "vscode",
@@ -45,6 +48,13 @@ DEFAULT_CONFIG = {
     },
     "remote": {
         "default_host": "",
+    },
+    "cloud": {
+        "provider": "hetzner",
+        "server_type": "",
+        "location": "fsn1",
+        "server_name": "bubble-cloud",
+        "default": False,
     },
 }
 

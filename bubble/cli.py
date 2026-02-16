@@ -1097,8 +1097,10 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
 @click.option("--neovim", is_flag=True, help="Open Neovim over SSH (shortcut for --editor neovim)")
 @click.option("--ssh", "ssh_host", type=str, default=None, metavar="HOST",
               help="Run on remote host (host, user@host, or user@host:port)")
+@click.option("--cloud", "cloud", is_flag=True,
+              help="Run on auto-provisioned Hetzner Cloud server")
 @click.option("--local", "force_local", is_flag=True,
-              help="Force local execution (override default remote)")
+              help="Force local execution (override default remote/cloud)")
 @click.option("--no-interactive", is_flag=True, help="Just create, don't attach")
 @click.option("--machine-readable", is_flag=True, hidden=True,
               help="Output JSON (for remote orchestration)")
@@ -1108,8 +1110,8 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
 @click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
 )
-def open_cmd(target, editor_choice, shell, emacs, neovim, ssh_host, force_local, no_interactive,
-             machine_readable, network, custom_name, force_path, no_clone):
+def open_cmd(target, editor_choice, shell, emacs, neovim, ssh_host, cloud, force_local,
+             no_interactive, machine_readable, network, custom_name, force_path, no_clone):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
         target = "./" + target
@@ -1128,12 +1130,15 @@ def open_cmd(target, editor_choice, shell, emacs, neovim, ssh_host, force_local,
     else:
         editor = config.get("editor", "vscode")
 
-    # Resolve remote host: explicit --ssh > config default, --local overrides both
+    # Priority: --local > --ssh > --cloud > [cloud] default > [remote] default_host
     remote_host = None
     if not force_local and not machine_readable:
         if ssh_host:
             from .remote import RemoteHost
             remote_host = RemoteHost.parse(ssh_host)
+        elif cloud or config.get("cloud", {}).get("default", False):
+            from .cloud import get_cloud_remote_host
+            remote_host = get_cloud_remote_host(config)
         else:
             default = config.get("remote", {}).get("default_host", "")
             if default:
@@ -1928,6 +1933,119 @@ def remote_status():
         click.echo(f"\nRemote bubbles ({len(remote_bubbles)}):")
         for name, info in remote_bubbles:
             click.echo(f"  {name:<30} {info['remote_host']}")
+
+
+# ---------------------------------------------------------------------------
+# cloud
+# ---------------------------------------------------------------------------
+
+
+@main.group("cloud")
+def cloud_group():
+    """Manage Hetzner Cloud server for remote bubbles."""
+
+
+@cloud_group.command("provision")
+@click.option("--type", "server_type", type=str, default=None,
+              help="Server type (e.g. ccx43, cx53)")
+@click.option("--location", type=str, default=None,
+              help="Datacenter location (default: fsn1)")
+def cloud_provision(server_type, location):
+    """Provision a Hetzner Cloud server for bubble.
+
+    Creates a server with Incus pre-installed. The server auto-shuts down
+    after 15 minutes of idle (no SSH connections + low CPU), stopping
+    hourly billing. It auto-starts again on next 'bubble open --cloud'.
+
+    \b
+    Common server types:
+      ccx43   16 dedicated vCPU, 64GB RAM (~EUR 0.13/hr)
+      cx53    16 shared vCPU, 32GB RAM (~EUR 0.024/hr)
+      cx33     4 shared vCPU,  8GB RAM (~EUR 0.008/hr)
+    """
+    from .cloud import provision_server
+    config = load_config()
+    provision_server(config, server_type=server_type, location=location)
+
+
+@cloud_group.command("destroy")
+@click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
+def cloud_destroy(force):
+    """Destroy the cloud server permanently."""
+    from .cloud import destroy_server
+    destroy_server(force=force)
+
+
+@cloud_group.command("stop")
+def cloud_stop():
+    """Power off the cloud server (stops hourly billing).
+
+    Containers are preserved on disk and will be available after restart.
+    """
+    from .cloud import stop_server
+    stop_server()
+
+
+@cloud_group.command("start")
+def cloud_start():
+    """Power on the cloud server and wait for SSH."""
+    from .cloud import start_server
+    start_server()
+
+
+@cloud_group.command("status")
+def cloud_status():
+    """Show cloud server info and status."""
+    from .cloud import get_server_status
+    status = get_server_status()
+    if not status:
+        click.echo("No cloud server provisioned.")
+        click.echo("Set one up with: bubble cloud provision --type ccx43")
+        return
+
+    click.echo(f"  Server:   {status.get('server_name', '?')}")
+    click.echo(f"  ID:       {status.get('server_id', '?')}")
+    click.echo(f"  IP:       {status.get('ipv4', '?')}")
+    click.echo(f"  Type:     {status.get('server_type', '?')}")
+    click.echo(f"  Location: {status.get('location', '?')}")
+    click.echo(f"  Status:   {status.get('status', 'unknown')}")
+    if status.get("server_type_description"):
+        click.echo(f"  Specs:    {status['server_type_description']}")
+
+
+@cloud_group.command("ssh")
+@click.argument("args", nargs=-1)
+def cloud_ssh_cmd(args):
+    """SSH directly to the cloud server."""
+    from .cloud import cloud_ssh
+    cloud_ssh(list(args) if args else None)
+
+
+@cloud_group.command("default")
+@click.argument("setting", required=False, type=click.Choice(["on", "off"]))
+def cloud_default(setting):
+    """Set whether cloud is the default for all 'bubble open'.
+
+    When on, all bubbles go to cloud unless --local is used.
+    Shows current setting if no argument given.
+    """
+    config = load_config()
+    if setting is None:
+        current = config.get("cloud", {}).get("default", False)
+        state = "on" if current else "off"
+        click.echo(f"Cloud default: {state}")
+        if current:
+            click.echo("All 'bubble open' commands use cloud. Use --local to override.")
+        else:
+            click.echo("Use --cloud flag or: bubble cloud default on")
+        return
+    config.setdefault("cloud", {})["default"] = (setting == "on")
+    save_config(config)
+    if setting == "on":
+        click.echo("Cloud set as default. All 'bubble open' will use cloud.")
+        click.echo("Override with: bubble open --local <target>")
+    else:
+        click.echo("Cloud default disabled. Use --cloud flag for cloud bubbles.")
 
 
 @main.command()
