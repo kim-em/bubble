@@ -112,6 +112,134 @@ def _install_incus_snap():
     _post_install_incus()
 
 
+def _user_can_sudo() -> bool:
+    """Check if current user is likely able to use sudo (in wheel or sudo group)."""
+    import getpass
+    import grp
+
+    try:
+        username = getpass.getuser()
+        user_groups = [g.gr_name for g in grp.getgrall() if username in g.gr_mem]
+        return "wheel" in user_groups or "sudo" in user_groups
+    except Exception:
+        return False
+
+
+def _nixos_incus_snippet(username: str) -> str:
+    """Return the NixOS configuration snippet for enabling Incus."""
+    return (
+        "    virtualisation.incus.enable = true;\n"
+        "    networking.nftables.enable = true;\n"
+        f'    users.users.{username}.extraGroups = [ "incus-admin" ];'
+    )
+
+
+def _install_incus_nixos():
+    """Install Incus on NixOS by editing configuration.nix or providing guidance."""
+    import getpass
+
+    username = getpass.getuser()
+    config_path = Path("/etc/nixos/configuration.nix")
+    snippet = _nixos_incus_snippet(username)
+
+    # Case 1: No sudo — tell the user to ask their admin
+    if not _user_can_sudo():
+        click.echo("Incus is required but not installed.")
+        click.echo("  Your system administrator needs to add to the NixOS configuration:")
+        click.echo()
+        click.echo(snippet)
+        click.echo()
+        click.echo("  Then rebuild: sudo nixos-rebuild switch")
+        click.echo("  And initialize: sudo incus admin init --minimal")
+        sys.exit(1)
+
+    # Case 2: Has sudo + configuration.nix exists — offer to auto-edit
+    if config_path.exists():
+        content = config_path.read_text()
+
+        if "virtualisation.incus.enable" in content:
+            click.echo("Incus appears configured in NixOS but is not available.")
+            click.echo("  Try running: sudo nixos-rebuild switch")
+            sys.exit(1)
+
+        click.echo("Incus is required but not installed.")
+        click.echo(f"  Will add to {config_path}:")
+        click.echo()
+        click.echo(snippet)
+        click.echo()
+
+        if click.confirm(
+            "  Edit configuration.nix and run nixos-rebuild switch? (requires sudo)",
+            default=True,
+        ):
+            # Insert before the last closing brace
+            last_brace = content.rfind("}")
+            if last_brace == -1:
+                click.echo(f"  Error: could not find closing '}}' in {config_path}", err=True)
+                click.echo(f"  Edit {config_path} manually.")
+                sys.exit(1)
+
+            insert = (
+                "\n"
+                "  # bubble: containerized dev environments\n"
+                "  virtualisation.incus.enable = true;\n"
+                "  networking.nftables.enable = true;\n"
+                f'  users.users.{username}.extraGroups = [ "incus-admin" ];\n'
+            )
+            new_content = content[:last_brace] + insert + content[last_brace:]
+
+            click.echo(f"  Backing up to {config_path}.bak...")
+            subprocess.run(
+                ["sudo", "cp", str(config_path), str(config_path) + ".bak"],
+                check=True,
+            )
+            subprocess.run(
+                ["sudo", "tee", str(config_path)],
+                input=new_content.encode(),
+                capture_output=True,
+                check=True,
+            )
+
+            click.echo("  Running nixos-rebuild switch (this may take a few minutes)...")
+            try:
+                subprocess.run(["sudo", "nixos-rebuild", "switch"], check=True)
+            except subprocess.CalledProcessError:
+                click.echo()
+                click.echo("  nixos-rebuild failed.", err=True)
+                click.echo(f"  Your original configuration is backed up at {config_path}.bak")
+                click.echo(f"  To restore: sudo cp {config_path}.bak {config_path}")
+                sys.exit(1)
+
+            _post_install_nixos()
+        else:
+            click.echo(f"  Edit {config_path} manually, then run: sudo nixos-rebuild switch")
+            sys.exit(1)
+
+    # Case 3: Has sudo but no configuration.nix (flake setup)
+    else:
+        click.echo("Incus is required but not installed.")
+        click.echo("  Add to your NixOS configuration:")
+        click.echo()
+        click.echo(snippet)
+        click.echo()
+        click.echo("  Then run: sudo nixos-rebuild switch")
+        click.echo("  And then: sudo incus admin init --minimal")
+        sys.exit(1)
+
+
+def _post_install_nixos():
+    """Post-install steps for Incus on NixOS."""
+    click.echo("Initializing Incus...")
+    subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
+
+    click.echo()
+    click.echo("Incus installed successfully.")
+    click.echo("NOTE: You need to log out and back in for group membership to take effect.")
+    click.echo("  Or run: newgrp incus-admin")
+    click.echo("  Then re-run your bubble command.")
+    sys.exit(0)
+
+
 def _post_install_incus():
     """Common post-install steps for Incus on Linux."""
     # Initialize with minimal defaults
@@ -169,15 +297,7 @@ def _ensure_dependencies():
     elif system == "Linux":
         if not _is_command_available("incus"):
             if _is_nixos():
-                click.echo("Incus is required but not installed.")
-                click.echo("  Add to your NixOS configuration:")
-                click.echo()
-                click.echo("    virtualisation.incus.enable = true;")
-                click.echo("    networking.nftables.enable = true;")
-                click.echo('    users.users.YOUR_USER.extraGroups = ["incus-admin"];')
-                click.echo()
-                click.echo("  Then run: sudo nixos-rebuild switch")
-                sys.exit(1)
+                _install_incus_nixos()
             else:
                 click.echo("Incus is required but not installed.")
                 has_snap = _is_command_available("snap")

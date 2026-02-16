@@ -13,13 +13,18 @@ class IncusRuntime(ContainerRuntime):
     def _run(self, args: list[str], check: bool = True, capture: bool = True) -> str:
         """Run an incus command."""
         cmd = ["incus"] + args
-        result = subprocess.run(
-            cmd,
-            capture_output=capture,
-            text=True,
-            check=check,
-            stdin=subprocess.DEVNULL,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=capture,
+                text=True,
+                check=check,
+                stdin=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            from ..cli import _ensure_dependencies
+
+            _ensure_dependencies()
         return result.stdout.strip() if capture else ""
 
     def _run_json(self, args: list[str]) -> dict | list:
