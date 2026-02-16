@@ -19,7 +19,6 @@ from bubble.cloud import (
     _save_state,
     _ssh_cmd_base,
 )
-from bubble.config import CLOUD_STATE_FILE
 from bubble.remote import RemoteHost
 
 
@@ -55,7 +54,7 @@ class TestCloudState:
 
     def test_state_file_is_json(self, tmp_data_dir):
         _save_state({"provider": "hetzner", "server_id": 42})
-        content = CLOUD_STATE_FILE.read_text()
+        content = (tmp_data_dir / "cloud.json").read_text()
         data = json.loads(content)
         assert data["server_id"] == 42
 
