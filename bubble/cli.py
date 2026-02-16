@@ -670,11 +670,11 @@ def _provision_container(runtime, name, image_name, ref_path, mount_name, config
         for host_dir_name, container_path, env_var in hook.shared_mounts():
             host_path = DATA_DIR / host_dir_name
             host_path.mkdir(parents=True, exist_ok=True)
+            # Make world-writable so container user can write regardless of UID mapping
+            host_path.chmod(0o777)
             runtime.add_disk(
-                name, f"shared-{host_dir_name}", str(host_path), container_path
+                name, f"shared-{host_dir_name}", str(host_path), container_path,
             )
-            # Ensure container user can write to the shared mount
-            runtime.exec(name, ["chown", "user:user", container_path])
             if env_var:
                 env_lines.append(f"export {env_var}={shlex.quote(container_path)}")
         if env_lines:
