@@ -102,12 +102,20 @@ def open_editor(
     bubble_name: str,
     remote_path: str = "/home/user",
     workspace_file: str | None = None,
+    command: list[str] | None = None,
 ):
-    """Open the specified editor connected to a bubble."""
+    """Open the specified editor connected to a bubble.
+
+    If command is provided (only valid with editor="shell"), runs that command
+    via SSH instead of opening an interactive session.
+    """
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
     elif editor == "shell":
-        subprocess.run(["ssh", f"bubble-{bubble_name}"])
+        ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
+        if command:
+            ssh_cmd += command
+        subprocess.run(ssh_cmd)
 
 
 def open_vscode(

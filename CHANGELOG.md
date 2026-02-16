@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2 — 2026-02-17
+- `--command` option: run a command inside a bubble via SSH (`bubble --command "lake build" FLT`)
+- NixOS container networking: static IPv4 assignment and DNS proxy when nftables blocks bridge DHCP/DNS
+- Auto-detect and inject host git identity into containers
+- Auto-initialize Incus (`incus admin init --auto`) when no storage pool exists
+- Stream remote bubble creation progress to local terminal
+- Improved `IncusError` with stderr details in error messages
+- Fix `remote_open` potential deadlock by draining stderr concurrently
+- Dynamic version from `bubble.__version__` in pyproject.toml
+
 ## 0.5.1 — 2026-02-16
 - Auto-build for lean4 repo: `cmake --preset release && make -C build/release -j$(nproc)` runs in VS Code terminal on connect
 - Open `lean.code-workspace` automatically when working on the lean4 repo

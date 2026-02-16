@@ -7,6 +7,17 @@ from datetime import datetime, timezone
 from .base import ContainerInfo, ContainerRuntime
 
 
+class IncusError(subprocess.CalledProcessError):
+    """CalledProcessError subclass that includes stderr in its message."""
+
+    def __str__(self):
+        detail = (self.stderr or self.stdout or "").strip()
+        base = f"incus {' '.join(self.cmd[1:])} failed (exit {self.returncode})"
+        if detail:
+            return f"{base}: {detail}"
+        return base
+
+
 class IncusRuntime(ContainerRuntime):
     """Container runtime using Incus."""
 
@@ -33,6 +44,8 @@ class IncusRuntime(ContainerRuntime):
                 check=check,
                 stdin=subprocess.DEVNULL,
             )
+        except subprocess.CalledProcessError as e:
+            raise IncusError(e.returncode, e.cmd, e.output, e.stderr) from None
         return result.stdout.strip() if capture else ""
 
     def _run_json(self, args: list[str]) -> dict | list:

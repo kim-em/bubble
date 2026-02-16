@@ -338,6 +338,38 @@ def _ensure_dependencies():
                     click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
                     sys.exit(1)
 
+        # Incus is installed — check it's initialized (has a storage pool)
+        _ensure_incus_initialized()
+
+
+def _ensure_incus_initialized():
+    """Check that Incus has a storage pool; run 'incus admin init --auto' if not."""
+    try:
+        result = subprocess.run(
+            ["incus", "storage", "list", "--format=json"],
+            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            pools = json.loads(result.stdout) if result.stdout.strip() else []
+            if pools:
+                return  # Already initialized
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        return  # Can't check — proceed optimistically
+
+    click.echo("Incus is installed but not initialized (no storage pool).")
+    click.echo("  Running: incus admin init --auto")
+    try:
+        subprocess.run(
+            ["incus", "admin", "init", "--auto"],
+            check=True, timeout=30, stdin=subprocess.DEVNULL,
+        )
+        click.echo("  Incus initialized.")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        detail = getattr(e, "stderr", "") or ""
+        click.echo(f"  Failed to initialize Incus: {detail}".strip(), err=True)
+        click.echo("  Run manually: incus admin init --auto", err=True)
+        sys.exit(1)
+
 
 def _colima_host_ip() -> str:
     """Get the host IP as seen from the Colima VM.
@@ -440,6 +472,35 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
             Path(tmp_keys).unlink(missing_ok=True)
 
     add_ssh_config(name)
+
+
+def _get_host_git_identity() -> tuple[str, str]:
+    """Read git user.name and user.email from host's git config."""
+    name = email = ""
+    for key in ("user.name", "user.email"):
+        try:
+            val = subprocess.run(
+                ["git", "config", key],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+        except subprocess.CalledProcessError:
+            val = ""
+        if key == "user.name":
+            name = val
+        else:
+            email = val
+    return name, email
+
+
+def _setup_git_config(runtime: ContainerRuntime, name: str, git_name: str, git_email: str):
+    """Inject git identity into a container."""
+    cmds = []
+    if git_name:
+        cmds.append(f"git config --global user.name {shlex.quote(git_name)}")
+    if git_email:
+        cmds.append(f"git config --global user.email {shlex.quote(git_email)}")
+    if cmds:
+        runtime.exec(name, ["su", "-", "user", "-c", " && ".join(cmds)])
 
 
 def _apply_network(
@@ -575,7 +636,8 @@ class BubbleGroup(click.Group):
         has_command = any(
             not a.startswith("-") and a in self.commands for a in args
         )
-        if args and not has_command:
+        has_non_option = any(not a.startswith("-") for a in args)
+        if args and has_non_option and not has_command:
             args = ["open"] + args
         return super().parse_args(ctx, args)
 
@@ -1013,7 +1075,8 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
 
 def _finalize_bubble(
     runtime, name, t, hook, image_name, checkout_branch, short, network, config,
-    editor, no_interactive, machine_readable=False,
+    editor, no_interactive, machine_readable=False, git_name="", git_email="",
+    command=None,
 ):
     """Post-clone setup: hooks, SSH, registration, and attach."""
     q_short = shlex.quote(short)
@@ -1024,6 +1087,7 @@ def _finalize_bubble(
     if not machine_readable:
         click.echo("Setting up SSH access...")
     _setup_ssh(runtime, name)
+    _setup_git_config(runtime, name, git_name, git_email)
 
     commit = ""
     try:
@@ -1066,7 +1130,8 @@ def _finalize_bubble(
             click.echo("Connecting via SSH...")
         else:
             click.echo("Opening VSCode...")
-        open_editor(editor, name, project_dir, workspace_file=workspace_file)
+        open_editor(editor, name, project_dir, workspace_file=workspace_file,
+                    command=command)
 
 
 def _machine_readable_output(status: str, name: str, **kwargs):
@@ -1076,7 +1141,8 @@ def _machine_readable_output(status: str, name: str, **kwargs):
     click.echo(json.dumps(data))
 
 
-def _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config):
+def _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config,
+                 git_name="", git_email="", command=None):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
 
@@ -1085,6 +1151,8 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
             remote_host, target,
             network=network,
             custom_name=custom_name,
+            git_name=git_name,
+            git_email=git_email,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -1115,7 +1183,8 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
             click.echo("Connecting via SSH...")
         else:
             click.echo("Opening VSCode...")
-        open_editor(editor, name, project_dir, workspace_file=workspace_file)
+        open_editor(editor, name, project_dir, workspace_file=workspace_file,
+                    command=command)
 
 
 @main.command("open")
@@ -1134,20 +1203,38 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
               help="Output JSON (for remote orchestration)")
 @click.option("--network/--no-network", default=True, help="Apply network allowlist")
 @click.option("--name", "custom_name", type=str, help="Custom container name")
+@click.option("--command", "command", type=str, default=None,
+              help="Run a command via SSH instead of interactive shell")
 @click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
 @click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
 )
+@click.option("--git-name", type=str, default=None, hidden=True, help="Git user.name for container")
+@click.option("--git-email", type=str, default=None, hidden=True, help="Git user.email for container")
 def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
-             no_interactive, machine_readable, network, custom_name, force_path, no_clone):
+             no_interactive, machine_readable, network, custom_name, command, force_path,
+             no_clone, git_name, git_email):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
         target = "./" + target
 
     config = load_config()
 
+    # Auto-detect git identity from host if not explicitly provided
+    if git_name is None or git_email is None:
+        auto_name, auto_email = _get_host_git_identity()
+        if git_name is None:
+            git_name = auto_name
+        if git_email is None:
+            git_email = auto_email
+
+    # Parse --command into a list
+    command_args = shlex.split(command) if command else None
+
     # Resolve editor: shortcut flags > --editor > config > vscode
-    if shell:
+    if command_args:
+        editor = "shell"
+    elif shell:
         editor = "shell"
     elif editor_choice is not None:
         editor = editor_choice
@@ -1173,7 +1260,8 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
                 remote_host = RemoteHost.parse(default)
 
     if remote_host:
-        _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config)
+        _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config,
+                     git_name=git_name, git_email=git_email, command=command_args)
         return
 
     # Local flow
@@ -1190,7 +1278,7 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
             _machine_readable_output("reattached", existing,
                                      project_dir=project_dir)
             return
-        _reattach(runtime, existing, editor, no_interactive)
+        _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
 
     # Parse and register target
@@ -1221,7 +1309,7 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
             _machine_readable_output("reattached", existing, project_dir=project_dir,
                                      org_repo=t.org_repo)
             return
-        _reattach(runtime, existing, editor, no_interactive)
+        _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
 
     # Resolve git source, detect language, and build image
@@ -1279,6 +1367,9 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
             editor,
             no_interactive,
             machine_readable,
+            git_name=git_name,
+            git_email=git_email,
+            command=command_args,
         )
     except Exception:
         # Clean up partially-provisioned container on failure
@@ -1291,7 +1382,8 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
         raise
 
 
-def _reattach(runtime: ContainerRuntime, name: str, editor: str, no_interactive: bool):
+def _reattach(runtime: ContainerRuntime, name: str, editor: str, no_interactive: bool,
+              command=None):
     """Re-attach to an existing container."""
     _ensure_running(runtime, name)
 
@@ -1305,7 +1397,7 @@ def _reattach(runtime: ContainerRuntime, name: str, editor: str, no_interactive:
         click.echo(f"Connecting to '{name}' via SSH...")
     else:
         click.echo(f"Opening VSCode for '{name}'...")
-    open_editor(editor, name, project_dir)
+    open_editor(editor, name, project_dir, command=command)
 
 
 def _format_bytes(n: int) -> str:

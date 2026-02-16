@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dev-bubble"
-version = "0.5.1"
+dynamic = ["version"]
 description = "Containerized development environments powered by Incus"
 readme = "README.md"
 license = "Apache-2.0"
@@ -41,6 +41,9 @@ bubble = "bubble.cli:main"
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
 cloud = ["hcloud>=2.0"]
+
+[tool.setuptools.dynamic]
+version = {attr = "bubble.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["bubble*"]

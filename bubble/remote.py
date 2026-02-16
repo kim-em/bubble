@@ -263,20 +263,20 @@ def ensure_remote_bubble(host: RemoteHost) -> None:
         # Clean up tarball on remote
         _ssh_run(host, ["rm", "-f", remote_tarball], check=False, timeout=10)
 
-        # Write version marker
-        _ssh_run(
-            host,
-            ["sh", "-c", f"echo {shlex.quote(__version__)} > {REMOTE_DIR}/.version"],
-            timeout=10,
-        )
-
-        # Verify deployment
+        # Verify deployment before writing version marker
         result = remote_bubble(host, ["--version"], timeout=15)
         if result.returncode != 0:
             raise RuntimeError(
                 f"Bubble deployment verification failed on {host.ssh_destination}.\n"
                 f"stderr: {result.stderr}"
             )
+
+        # Write version marker only after verification succeeds
+        _ssh_run(
+            host,
+            ["sh", "-c", f"echo {shlex.quote(__version__)} > {REMOTE_DIR}/.version"],
+            timeout=10,
+        )
 
         click_mod.echo(f"Deployed bubble {__version__} to {host.ssh_destination}.")
     finally:
@@ -325,11 +325,14 @@ def remote_open(
     target: str,
     network: bool = True,
     custom_name: str | None = None,
+    git_name: str = "",
+    git_email: str = "",
 ) -> dict:
     """Open a bubble on a remote host.
 
     Deploys bubble to the remote if needed, runs `bubble open` remotely
     with --machine-readable, and returns the parsed JSON result.
+    Streams progress output to the local terminal as it arrives.
     """
     import click as click_mod
 
@@ -340,33 +343,76 @@ def remote_open(
         args.append("--no-network")
     if custom_name:
         args += ["--name", custom_name]
+    if git_name:
+        args += ["--git-name", git_name]
+    if git_email:
+        args += ["--git-email", git_email]
     args.append(target)
 
     click_mod.echo(f"Creating bubble on {host.ssh_destination}...")
-    result = remote_bubble(host, args, timeout=600)
 
-    if result.returncode != 0:
-        # Strip ANSI escapes from error output to prevent terminal injection
-        stderr = _sanitize_output(result.stderr.strip())
-        stdout = _sanitize_output(result.stdout.strip())
+    # Build the SSH command
+    remote_parts = [
+        f"PYTHONPATH={REMOTE_DIR}",
+        "python3",
+        "-m",
+        "bubble",
+    ] + args
+    quoted_cmd = " ".join(shlex.quote(a) for a in remote_parts)
+    ssh_cmd = host.ssh_cmd([quoted_cmd])
+
+    # Stream stdout line-by-line so the user sees progress, while collecting
+    # all lines for JSON parsing at the end. Read stderr in a separate thread
+    # to avoid deadlock if the stderr buffer fills while we drain stdout.
+    import threading
+
+    proc = subprocess.Popen(
+        ssh_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    stderr_chunks = []
+
+    def _drain_stderr():
+        stderr_chunks.append(proc.stderr.read())
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
+
+    stdout_lines = []
+    for line in proc.stdout:
+        stripped = line.rstrip("\n")
+        if not stripped:
+            continue
+        stdout_lines.append(stripped)
+        # Don't echo the final JSON result line
+        if not stripped.startswith("{"):
+            click_mod.echo(f"  {_sanitize_output(stripped)}")
+
+    proc.wait(timeout=600)
+    stderr_thread.join(timeout=5)
+    stderr_output = stderr_chunks[0] if stderr_chunks else ""
+
+    if proc.returncode != 0:
+        stderr = _sanitize_output(stderr_output.strip())
+        stdout = _sanitize_output("\n".join(stdout_lines))
         msg = stderr or stdout or "Unknown error"
         raise RuntimeError(f"Remote bubble open failed: {msg}")
 
-    # Parse JSON from the last non-empty line of stdout.
-    # Earlier lines may contain SSH banners, MOTD, or progress output.
-    stdout_lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
     if not stdout_lines:
         raise RuntimeError(
             f"Empty output from remote bubble.\n"
-            f"stderr: {_sanitize_output(result.stderr)}"
+            f"stderr: {_sanitize_output(stderr_output)}"
         )
     try:
         data = json.loads(stdout_lines[-1])
     except json.JSONDecodeError:
         raise RuntimeError(
             f"Failed to parse remote bubble output.\n"
-            f"stdout: {_sanitize_output(result.stdout)}\n"
-            f"stderr: {_sanitize_output(result.stderr)}"
+            f"stdout: {_sanitize_output(chr(10).join(stdout_lines))}\n"
+            f"stderr: {_sanitize_output(stderr_output)}"
         )
 
     if data.get("status") == "error":

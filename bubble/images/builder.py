@@ -20,19 +20,150 @@ IMAGES = {
 }
 
 
+def _get_bridge_dns_ip() -> str | None:
+    """Get the IPv4 address of the default incus bridge (for DNS proxy workaround)."""
+    cidr = _get_bridge_cidr()
+    if cidr:
+        return cidr.split("/")[0]
+    return None
+
+
+def _get_bridge_cidr() -> str | None:
+    """Get the full CIDR of the incus bridge (e.g. '10.228.152.1/24')."""
+    try:
+        result = subprocess.run(
+            ["incus", "network", "get", "incusbr0", "ipv4.address"],
+            capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            cidr = result.stdout.strip()
+            if "/" in cidr:
+                return cidr
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def _container_has_ipv4(runtime: ContainerRuntime, name: str) -> bool:
+    """Check if the container has an IPv4 address on eth0."""
+    try:
+        output = runtime.exec(name, ["ip", "-4", "addr", "show", "eth0"])
+        return "inet " in output
+    except Exception:
+        return False
+
+
+def _fix_ipv4_static(runtime: ContainerRuntime, name: str) -> bool:
+    """Assign a static IPv4 when DHCP fails (e.g. NixOS nftables blocking bridge DHCP).
+
+    Picks an address in the bridge subnet and configures it directly.
+    Returns True if IPv4 was successfully configured.
+    """
+    cidr = _get_bridge_cidr()
+    if not cidr:
+        return False
+
+    gateway = cidr.split("/")[0]
+    prefix = cidr.split("/")[1]
+    # Use .200 in the bridge subnet to avoid collisions with DHCP range
+    parts = gateway.rsplit(".", 1)
+    static_ip = f"{parts[0]}.200"
+
+    try:
+        runtime.exec(name, [
+            "bash", "-c",
+            f"ip addr replace {static_ip}/{prefix} dev eth0 && "
+            f"ip route replace default via {gateway}",
+        ])
+        # Verify connectivity to gateway
+        runtime.exec(name, ["ping", "-c1", "-W2", gateway])
+        return True
+    except Exception:
+        return False
+
+
+def _fix_dns_with_proxy(runtime: ContainerRuntime, name: str) -> bool:
+    """Work around broken DNS by adding an incus proxy device for DNS.
+
+    On some systems (e.g. NixOS with nftables), the firewall blocks DNS
+    responses from dnsmasq on the bridge back to containers. An incus proxy
+    device bypasses the kernel network stack entirely.
+
+    Returns True if the fix was applied and DNS works.
+    """
+    dns_ip = _get_bridge_dns_ip()
+    if not dns_ip:
+        return False
+
+    try:
+        # Stop systemd-resolved so we can bind to 127.0.0.53:53
+        runtime.exec(name, ["systemctl", "stop", "systemd-resolved"])
+        runtime.exec(name, ["bash", "-c", "echo nameserver 127.0.0.53 > /etc/resolv.conf"])
+        runtime.add_device(
+            name, "dns-proxy", "proxy",
+            connect=f"udp:{dns_ip}:53",
+            listen="udp:127.0.0.53:53",
+            bind="container",
+        )
+        runtime.add_device(
+            name, "dns-proxy-tcp", "proxy",
+            connect=f"tcp:{dns_ip}:53",
+            listen="tcp:127.0.0.53:53",
+            bind="container",
+        )
+        # Verify it works
+        runtime.exec(name, ["timeout", "3", "getent", "hosts", "github.com"])
+        return True
+    except Exception:
+        # Clean up on failure
+        try:
+            runtime.exec(name, ["systemctl", "start", "systemd-resolved"])
+        except Exception:
+            pass
+        return False
+
+
 def _wait_for_container(runtime: ContainerRuntime, name: str, timeout: int = 60):
-    """Wait for a container to be ready, including DNS."""
+    """Wait for a container to be ready, including network (IPv4 + DNS).
+
+    Handles systems where the firewall blocks bridge DHCP and/or DNS
+    (common on NixOS with nftables and bridge-nf-call-iptables=1).
+    """
+    # Phase 1: wait for container to be exec-able
     for _ in range(timeout):
         try:
             runtime.exec(name, ["true"])
-            try:
-                runtime.exec(name, ["getent", "hosts", "github.com"])
-                return
-            except Exception:
-                time.sleep(1)
+            break
         except Exception:
             time.sleep(1)
-    raise RuntimeError(f"Container '{name}' not ready after {timeout}s")
+    else:
+        raise RuntimeError(f"Container '{name}' not exec-able after {timeout}s")
+
+    # Phase 2: wait for IPv4 + DNS (give DHCP a chance first)
+    for i in range(min(timeout, 15)):
+        try:
+            runtime.exec(name, ["timeout", "3", "getent", "hosts", "github.com"])
+            return  # Everything works
+        except Exception:
+            time.sleep(1)
+
+    # Phase 3: DHCP/DNS didn't come up — apply workarounds
+    if not _container_has_ipv4(runtime, name):
+        if _fix_ipv4_static(runtime, name):
+            print("  IPv4 configured statically (DHCP blocked by firewall).")
+
+    if _fix_dns_with_proxy(runtime, name):
+        print("  DNS fixed via proxy (firewall blocking bridge DNS responses).")
+        return
+
+    # Final check
+    try:
+        runtime.exec(name, ["timeout", "3", "getent", "hosts", "github.com"])
+        return
+    except Exception:
+        pass
+
+    raise RuntimeError(f"Container '{name}' network not ready after {timeout}s")
 
 
 def get_vscode_commit() -> str | None:
@@ -65,6 +196,12 @@ def build_image(runtime: ContainerRuntime, image_name: str):
 
     build_name = f"{image_name}-builder"
     print(f"Building {image_name} image...")
+
+    # Clean up any leftover builder from a previous failed attempt
+    try:
+        runtime.delete(build_name, force=True)
+    except Exception:
+        pass
 
     # Launch from parent
     runtime.launch(build_name, parent)
@@ -104,6 +241,12 @@ def build_lean_toolchain_image(runtime: ContainerRuntime, version: str):
     safe_version = version.replace(".", "-")
     build_name = f"lean-tc-{safe_version}-builder"
     print(f"Building {alias} image...")
+
+    # Clean up any leftover builder from a previous failed attempt
+    try:
+        runtime.delete(build_name, force=True)
+    except Exception:
+        pass
 
     runtime.launch(build_name, "lean")
     try:
