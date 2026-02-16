@@ -100,6 +100,7 @@ class LeanHook(Hook):
     def __init__(self):
         self._toolchain: str | None = None
         self._needs_cache: bool = False
+        self._is_lean4: bool = False
         self._git_deps: list[GitDependency] = []
 
     def name(self) -> str:
@@ -110,13 +111,19 @@ class LeanHook(Hook):
         content = _read_lean_toolchain(bare_repo_path, ref)
         if content is not None:
             self._toolchain = content
-            self._git_deps = _parse_git_dependencies(bare_repo_path, ref)
-            self._needs_cache = bare_repo_path.name == "mathlib4.git" or any(
-                d.name == "mathlib" for d in self._git_deps
-            )
+            self._is_lean4 = bare_repo_path.name == "lean4.git"
+            if self._is_lean4:
+                self._git_deps = []
+                self._needs_cache = False
+            else:
+                self._git_deps = _parse_git_dependencies(bare_repo_path, ref)
+                self._needs_cache = bare_repo_path.name == "mathlib4.git" or any(
+                    d.name == "mathlib" for d in self._git_deps
+                )
             return True
         self._toolchain = None
         self._needs_cache = False
+        self._is_lean4 = False
         self._git_deps = []
         return False
 
@@ -140,8 +147,17 @@ class LeanHook(Hook):
     def git_dependencies(self) -> list[GitDependency]:
         return self._git_deps
 
+    def workspace_file(self, project_dir: str) -> str | None:
+        if self._is_lean4:
+            return f"{project_dir}/lean.code-workspace"
+        return None
+
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
         """Pre-populate Lake dependencies, then set up auto build command."""
+        if self._is_lean4:
+            self._setup_lean4_build(runtime, container)
+            return
+
         if self._git_deps:
             self._populate_lake_packages(runtime, container, project_dir)
 
@@ -163,6 +179,21 @@ class LeanHook(Hook):
             ],
         )
         click.echo(msg)
+
+    def _setup_lean4_build(self, runtime: ContainerRuntime, container: str):
+        """Set up auto-build for the lean4 repo itself (cmake is in base image)."""
+        cmd = "cmake --preset release && make -C build/release -j$(nproc)"
+        runtime.exec(
+            container,
+            [
+                "su",
+                "-",
+                "user",
+                "-c",
+                f"printf '%s' {shlex.quote(cmd)} > ~/.bubble-fetch-cache",
+            ],
+        )
+        click.echo("Lean 4 build will start when VS Code connects.")
 
     def _populate_lake_packages(
         self, runtime: ContainerRuntime, container: str, project_dir: str

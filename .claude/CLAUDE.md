@@ -226,6 +226,8 @@ The `.github/workflows/publish.yml` workflow runs tests then publishes to PyPI a
 
 This is part of the normal workflow, not a separate step to remember later.
 
+**Prefer patch versions.** Use patch bumps (0.X.Y → 0.X.Y+1) for most changes, including small features. Reserve minor bumps (0.X → 0.X+1) for large architectural changes or breaking changes. When in doubt, use a patch bump.
+
 ### Trusted Publisher Setup
 
 PyPI is configured to trust GitHub Actions from `kim-em/bubble` with the `publish.yml` workflow and `pypi` environment. No secrets or API tokens are stored in the repository.

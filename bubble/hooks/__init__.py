@@ -65,6 +65,10 @@ class Hook(ABC):
         """
         return []
 
+    def workspace_file(self, project_dir: str) -> str | None:
+        """Return absolute path to a .code-workspace file to open, or None."""
+        return None
+
 
 def discover_hooks() -> list[Hook]:
     """Return all registered hooks in priority order."""

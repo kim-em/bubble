@@ -479,6 +479,8 @@ def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
         return "/home/user"
 
 
+
+
 def _maybe_install_automation():
     """Install automation jobs on first use if not already present."""
     from .automation import install_automation, is_automation_installed
@@ -1033,10 +1035,13 @@ def _finalize_bubble(
         base_image=image_name,
     )
 
+    workspace_file = hook.workspace_file(project_dir) if hook else None
+
     if machine_readable:
         _machine_readable_output(
             "created", name,
             project_dir=project_dir,
+            workspace_file=workspace_file,
             org_repo=t.org_repo,
             image=image_name,
             branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
@@ -1055,7 +1060,7 @@ def _finalize_bubble(
             click.echo("Connecting via SSH...")
         else:
             click.echo(f"Opening {editor}...")
-        open_editor(editor, name, project_dir)
+        open_editor(editor, name, project_dir, workspace_file=workspace_file)
 
 
 def _machine_readable_output(status: str, name: str, **kwargs):
@@ -1081,6 +1086,7 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
 
     name = result["name"]
     project_dir = result.get("project_dir", "/home/user")
+    workspace_file = result.get("workspace_file")
     org_repo = result.get("org_repo", "")
 
     # Write local SSH config with chained ProxyCommand through the remote host
@@ -1105,7 +1111,7 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
             click.echo("Connecting via SSH...")
         else:
             click.echo(f"Opening {editor}...")
-        open_editor(editor, name, project_dir)
+        open_editor(editor, name, project_dir, workspace_file=workspace_file)
 
 
 @main.command("open")
@@ -1180,7 +1186,8 @@ def open_cmd(target, editor_choice, shell, emacs, neovim, ssh_host, cloud, force
     if existing:
         if machine_readable:
             project_dir = _detect_project_dir(runtime, existing)
-            _machine_readable_output("reattached", existing, project_dir=project_dir)
+            _machine_readable_output("reattached", existing,
+                                     project_dir=project_dir)
             return
         _reattach(runtime, existing, editor, no_interactive)
         return

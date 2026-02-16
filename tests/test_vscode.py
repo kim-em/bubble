@@ -1,9 +1,11 @@
 """Tests for VSCode SSH config generation and bubble name validation."""
 
+import subprocess
+
 import pytest
 
 from bubble.remote import RemoteHost
-from bubble.vscode import _BUBBLE_NAME_RE, add_ssh_config, remove_ssh_config
+from bubble.vscode import _BUBBLE_NAME_RE, add_ssh_config, open_vscode, remove_ssh_config
 
 
 class TestBubbleNameValidation:
@@ -110,3 +112,42 @@ class TestRemoteProxyCommand:
         content = ssh_file.read_text()
         assert "ProxyCommand incus exec test-local" in content
         assert "ssh " not in content.split("ProxyCommand")[1].split("\n")[0]  # no ssh in proxy
+
+
+class TestOpenVscodeWorkspace:
+    def test_folder_uri_without_workspace(self, monkeypatch):
+        """Without workspace file, uses --folder-uri."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_vscode("test-bubble", "/home/user/lean4")
+        assert len(calls) == 1
+        assert "--folder-uri" in calls[0]
+        assert "--file-uri" not in calls[0]
+
+    def test_file_uri_with_workspace(self, monkeypatch):
+        """With workspace file, uses --file-uri."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_vscode(
+            "test-bubble", "/home/user/lean4",
+            workspace_file="/home/user/lean4/lean.code-workspace",
+        )
+        assert len(calls) == 1
+        assert "--file-uri" in calls[0]
+        assert "--folder-uri" not in calls[0]
+
+    def test_workspace_uri_format(self, monkeypatch):
+        """Workspace file URI has correct format."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_vscode(
+            "test-bubble", "/home/user/lean4",
+            workspace_file="/home/user/lean4/lean.code-workspace",
+        )
+        uri = calls[0][-1]
+        assert uri == (
+            "vscode-remote://ssh-remote+bubble-test-bubble"
+            "/home/user/lean4/lean.code-workspace"
+        )
+
+

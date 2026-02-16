@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1 — 2026-02-16
+- Auto-build for lean4 repo: `cmake --preset release && make -C build/release -j$(nproc)` runs in VS Code terminal on connect
+- Open `lean.code-workspace` automatically when working on the lean4 repo
+- Add cmake to base image
+
 ## 0.5.0 — 2026-02-16
 - Pre-populate Lake dependencies via git alternates: parse `lake-manifest.json`, mirror dependency repos on host, and clone them into `.lake/packages/` with shared objects — eliminates slow GitHub clones during `lake build`
 - File locking on bare repo operations to prevent corruption from concurrent `bubble open` runs

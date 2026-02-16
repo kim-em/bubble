@@ -97,10 +97,15 @@ def _ensure_include_directive():
         ssh_config.write_text(include_line + "\n")
 
 
-def open_editor(editor: str, bubble_name: str, remote_path: str = "/home/user"):
+def open_editor(
+    editor: str,
+    bubble_name: str,
+    remote_path: str = "/home/user",
+    workspace_file: str | None = None,
+):
     """Open the specified editor connected to a bubble."""
     if editor == "vscode":
-        open_vscode(bubble_name, remote_path)
+        open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
     elif editor == "emacs":
         open_emacs(bubble_name, remote_path)
     elif editor == "neovim":
@@ -109,15 +114,35 @@ def open_editor(editor: str, bubble_name: str, remote_path: str = "/home/user"):
         subprocess.run(["ssh", f"bubble-{bubble_name}"])
 
 
-def open_vscode(bubble_name: str, remote_path: str = "/home/user"):
+def open_vscode(
+    bubble_name: str,
+    remote_path: str = "/home/user",
+    workspace_file: str | None = None,
+):
     """Open VSCode connected to a bubble via Remote SSH."""
     host = f"bubble-{bubble_name}"
-    uri = f"vscode-remote://ssh-remote+{host}{remote_path}"
+    if workspace_file:
+        uri = f"vscode-remote://ssh-remote+{host}{workspace_file}"
+        flag = "--file-uri"
+    else:
+        uri = f"vscode-remote://ssh-remote+{host}{remote_path}"
+        flag = "--folder-uri"
     try:
-        subprocess.run(["code", "--disable-workspace-trust", "--folder-uri", uri], check=True)
+        subprocess.run(["code", "--disable-workspace-trust", flag, uri], check=True)
+    except subprocess.CalledProcessError:
+        if workspace_file:
+            # Fall back to opening the folder if --file-uri fails
+            folder_uri = f"vscode-remote://ssh-remote+{host}{remote_path}"
+            try:
+                subprocess.run(
+                    ["code", "--disable-workspace-trust", "--folder-uri", folder_uri],
+                    check=True,
+                )
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                pass
     except FileNotFoundError:
         print(f"VSCode CLI not found. Connect manually: Remote SSH → {host}")
-        print(f"Or run: code --folder-uri {uri}")
+        print(f"Or run: code {flag} {uri}")
 
 
 def open_emacs(bubble_name: str, remote_path: str = "/home/user"):
