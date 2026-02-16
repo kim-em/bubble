@@ -2,6 +2,7 @@
 
 import json
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -108,14 +109,19 @@ class LeanHook(Hook):
         return []
 
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
-        """Set up auto mathlib cache download if needed."""
-        if not self._needs_cache:
-            return
-        # Write marker for the bubble-lean-cache VS Code extension to pick up
+        """Set up auto build command for VS Code terminal."""
+        if self._needs_cache:
+            cmd = "lake exe cache get && lake build"
+            msg = "Mathlib cache download and build will start when VS Code connects."
+        else:
+            cmd = "lake build"
+            msg = "Build will start when VS Code connects."
+        # Write command for the bubble-lean-cache VS Code extension to pick up
         runtime.exec(container, [
-            "su", "-", "user", "-c", "touch ~/.bubble-fetch-cache",
+            "su", "-", "user", "-c",
+            f"printf '%s' {shlex.quote(cmd)} > ~/.bubble-fetch-cache",
         ])
-        click.echo("Mathlib cache will download when VS Code connects (shared cache).")
+        click.echo(msg)
 
     def network_domains(self) -> list[str]:
         return [

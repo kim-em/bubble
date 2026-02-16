@@ -123,7 +123,7 @@ if manifest_entries:
     print(f"  Registered {len(manifest_entries)} extensions in extensions.json")
 '
 
-# Create bubble-lean-cache extension: opens a terminal to run lake exe cache get
+# Create bubble-lean-cache extension: opens a terminal to run build commands
 BUBBLE_EXT_DIR="/home/user/.vscode-server/extensions/bubble.lean-cache-0.1.0"
 mkdir -p "$BUBBLE_EXT_DIR"
 
@@ -147,15 +147,18 @@ const path = require('path');
 function activate() {
     const marker = path.join(require('os').homedir(), '.bubble-fetch-cache');
     if (!fs.existsSync(marker)) return;
-    try { fs.unlinkSync(marker); } catch (_) {}
+    let cmd;
+    try { cmd = fs.readFileSync(marker, 'utf8').trim(); } catch (_) { return; }
+    if (!cmd) return;
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) return;
+    try { fs.unlinkSync(marker); } catch (_) {}
     const terminal = vscode.window.createTerminal({
-        name: 'Mathlib Cache',
+        name: 'Build',
         cwd: folders[0].uri,
     });
     terminal.show();
-    terminal.sendText('lake exe cache get && lake build && lake test');
+    terminal.sendText(cmd);
 }
 
 function deactivate() {}
