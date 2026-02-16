@@ -15,7 +15,14 @@ import click
 from . import __version__
 from .clean import CleanStatus, check_clean, format_reasons
 from .config import DATA_DIR, ensure_dirs, load_config, repo_short_name, save_config
-from .git_store import bare_repo_path, fetch_ref, github_url, init_bare_repo, update_all_repos
+from .git_store import (
+    bare_repo_path,
+    ensure_rev_available,
+    fetch_ref,
+    github_url,
+    init_bare_repo,
+    update_all_repos,
+)
 from .hooks import select_hook
 from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
 from .lifecycle import get_bubble_info, load_registry, register_bubble, unregister_bubble
@@ -763,8 +770,10 @@ def _background_build_lean_toolchain(version: str):
     )
 
 
-def _provision_container(runtime, name, image_name, ref_path, mount_name, config, hook=None):
-    """Launch container, wait for readiness, mount git repo, set up relay."""
+def _provision_container(
+    runtime, name, image_name, ref_path, mount_name, config, hook=None, dep_mounts=None,
+):
+    """Launch container, wait for readiness, mount git repos, set up relay."""
     click.echo("  Launching container...", nl=False)
     runtime.launch(name, image_name)
     click.echo(" done.")
@@ -783,6 +792,17 @@ def _provision_container(runtime, name, image_name, ref_path, mount_name, config
         runtime.add_disk(
             name, "shared-git", mount_source, f"/shared/git/{mount_name}", readonly=True
         )
+
+    # Mount dependency bare repos for Lake pre-population via alternates
+    if dep_mounts:
+        for repo_name, dep_path in dep_mounts.items():
+            if str(dep_path) == mount_source:
+                continue  # Don't double-mount the main repo
+            device_name = f"dep-{repo_name}".replace(".", "-").replace("_", "-")[:63]
+            runtime.add_disk(
+                name, device_name, str(dep_path),
+                f"/shared/git/{repo_name}.git", readonly=True,
+            )
 
     # Add shared writable mounts from hook (e.g. mathlib cache)
     if hook:
@@ -1201,6 +1221,29 @@ def open_cmd(target, editor_choice, shell, emacs, neovim, ssh_host, cloud, force
     ref_path, mount_name = _resolve_ref_source(t, no_clone)
     hook, image_name = _detect_and_build_image(runtime, ref_path, t)
 
+    # Pre-fetch dependency bare repos for Lake pre-population
+    dep_mounts = {}  # repo_name -> host_path
+    if hook:
+        deps = hook.git_dependencies()
+        if deps:
+            if not machine_readable:
+                click.echo("  Preparing Lake dependency mirrors...")
+            for dep in deps:
+                try:
+                    dep_path = init_bare_repo(dep.org_repo)
+                    if not ensure_rev_available(dep.org_repo, dep.rev):
+                        if not machine_readable:
+                            click.echo(
+                                f"  Warning: rev {dep.rev[:12]} not found"
+                                f" for {dep.name}, skipping"
+                            )
+                        continue
+                    repo_name = dep.org_repo.split("/")[-1]
+                    dep_mounts[repo_name] = dep_path
+                except Exception as e:
+                    if not machine_readable:
+                        click.echo(f"  Warning: could not prepare {dep.name}: {e}")
+
     # Deduplicate and create
     existing_names = {c.name for c in runtime.list_containers()}
     name = deduplicate_name(name, existing_names)
@@ -1209,7 +1252,10 @@ def open_cmd(target, editor_choice, shell, emacs, neovim, ssh_host, cloud, force
 
     # Provision, clone, and finalize
     short = repo_short_name(t.org_repo)
-    _provision_container(runtime, name, image_name, ref_path, mount_name, config, hook=hook)
+    _provision_container(
+        runtime, name, image_name, ref_path, mount_name, config,
+        hook=hook, dep_mounts=dep_mounts,
+    )
     checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
     _finalize_bubble(
         runtime,

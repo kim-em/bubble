@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 — 2026-02-16
+- Pre-populate Lake dependencies via git alternates: parse `lake-manifest.json`, mirror dependency repos on host, and clone them into `.lake/packages/` with shared objects — eliminates slow GitHub clones during `lake build`
+- File locking on bare repo operations to prevent corruption from concurrent `bubble open` runs
+- Fetch tags in bare repo mirrors (fixes deps pinned to tag-only commits)
+- Input validation for manifest-sourced package names and revisions
+
 ## 0.4.1 — 2026-02-16
 - Hetzner Cloud support: `bubble open --cloud` auto-provisions remote servers with idle auto-shutdown
 - Built-in default repo mappings for Lean ecosystem (mathlib4, lean4, etc.)

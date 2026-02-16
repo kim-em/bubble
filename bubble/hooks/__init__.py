@@ -1,9 +1,21 @@
 """Language/framework hook system for bubble containers."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..runtime.base import ContainerRuntime
+
+
+@dataclass
+class GitDependency:
+    """A git dependency to pre-populate in the container via alternates."""
+
+    name: str  # Lake package name (e.g., "Qq")
+    url: str  # Original GitHub URL
+    rev: str  # Commit SHA from manifest
+    sub_dir: str | None  # Subdirectory within repo (rare)
+    org_repo: str  # "owner/repo" extracted from URL
 
 
 class Hook(ABC):
@@ -42,6 +54,14 @@ class Hook(ABC):
         host_dir_name is created under ~/.bubble/ on the host.
         container_path is the mount point inside the container.
         env_var is set to container_path in the user's environment.
+        """
+        return []
+
+    def git_dependencies(self) -> list[GitDependency]:
+        """Git repos this project depends on, for pre-population via alternates.
+
+        Returns list of GitDependency objects parsed from the project manifest.
+        Only populated after detect() returns True.
         """
         return []
 

@@ -8,11 +8,15 @@ from pathlib import Path
 
 import click
 
+from ..git_store import parse_github_url
 from ..runtime.base import ContainerRuntime
-from . import Hook
+from . import GitDependency, Hook
 
 # Matches stable releases (v4.16.0) and release candidates (v4.16.0-rc2)
 _STABLE_OR_RC_RE = re.compile(r"^v\d+\.\d+\.\d+(-rc\d+)?$")
+
+# Allowlist for Lake package names and repo names (prevents path traversal)
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _read_lean_toolchain(bare_repo_path: Path, ref: str) -> str | None:
@@ -50,10 +54,8 @@ def _parse_lean_version(toolchain_str: str) -> str | None:
     return None
 
 
-def _needs_mathlib_cache(bare_repo_path: Path, ref: str) -> bool:
-    """Check if project needs mathlib cache (is mathlib or depends on it)."""
-    if bare_repo_path.name == "mathlib4.git":
-        return True
+def _parse_git_dependencies(bare_repo_path: Path, ref: str) -> list[GitDependency]:
+    """Parse git dependencies from lake-manifest.json in the bare repo."""
     try:
         result = subprocess.run(
             ["git", "-C", str(bare_repo_path), "show", f"{ref}:lake-manifest.json"],
@@ -62,12 +64,34 @@ def _needs_mathlib_cache(bare_repo_path: Path, ref: str) -> bool:
             check=True,
         )
         manifest = json.loads(result.stdout)
-        for pkg in manifest.get("packages", []):
-            if pkg.get("name") == "mathlib":
-                return True
     except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError):
-        pass
-    return False
+        return []
+
+    deps = []
+    for pkg in manifest.get("packages", []):
+        if pkg.get("type") != "git":
+            continue
+        url = pkg.get("url", "")
+        name = pkg.get("name", "")
+        rev = pkg.get("rev", "")
+        org_repo = parse_github_url(url)
+        if not org_repo:
+            continue  # Skip non-GitHub deps
+        # Validate name and rev to prevent path traversal and option injection
+        if not name or not _SAFE_NAME_RE.match(name):
+            continue
+        if not rev or not re.match(r"^[0-9a-f]{40}$", rev):
+            continue
+        deps.append(
+            GitDependency(
+                name=name,
+                url=url,
+                rev=rev,
+                sub_dir=pkg.get("subDir"),
+                org_repo=org_repo,
+            )
+        )
+    return deps
 
 
 class LeanHook(Hook):
@@ -76,6 +100,7 @@ class LeanHook(Hook):
     def __init__(self):
         self._toolchain: str | None = None
         self._needs_cache: bool = False
+        self._git_deps: list[GitDependency] = []
 
     def name(self) -> str:
         return "Lean 4"
@@ -85,10 +110,14 @@ class LeanHook(Hook):
         content = _read_lean_toolchain(bare_repo_path, ref)
         if content is not None:
             self._toolchain = content
-            self._needs_cache = _needs_mathlib_cache(bare_repo_path, ref)
+            self._git_deps = _parse_git_dependencies(bare_repo_path, ref)
+            self._needs_cache = bare_repo_path.name == "mathlib4.git" or any(
+                d.name == "mathlib" for d in self._git_deps
+            )
             return True
         self._toolchain = None
         self._needs_cache = False
+        self._git_deps = []
         return False
 
     def image_name(self) -> str:
@@ -108,8 +137,14 @@ class LeanHook(Hook):
             return [("mathlib-cache", "/shared/mathlib-cache", "MATHLIB_CACHE_DIR")]
         return []
 
+    def git_dependencies(self) -> list[GitDependency]:
+        return self._git_deps
+
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
-        """Set up auto build command for VS Code terminal."""
+        """Pre-populate Lake dependencies, then set up auto build command."""
+        if self._git_deps:
+            self._populate_lake_packages(runtime, container, project_dir)
+
         if self._needs_cache:
             cmd = "lake exe cache get && lake build"
             msg = "Mathlib cache download and build will start when VS Code connects."
@@ -117,11 +152,91 @@ class LeanHook(Hook):
             cmd = "lake build"
             msg = "Build will start when VS Code connects."
         # Write command for the bubble-lean-cache VS Code extension to pick up
-        runtime.exec(container, [
-            "su", "-", "user", "-c",
-            f"printf '%s' {shlex.quote(cmd)} > ~/.bubble-fetch-cache",
-        ])
+        runtime.exec(
+            container,
+            [
+                "su",
+                "-",
+                "user",
+                "-c",
+                f"printf '%s' {shlex.quote(cmd)} > ~/.bubble-fetch-cache",
+            ],
+        )
         click.echo(msg)
+
+    def _populate_lake_packages(
+        self, runtime: ContainerRuntime, container: str, project_dir: str
+    ):
+        """Clone each dependency into .lake/packages/<name>/ using alternates."""
+        q_dir = shlex.quote(project_dir)
+
+        # Create .lake/packages/ directory
+        runtime.exec(
+            container,
+            ["su", "-", "user", "-c", f"mkdir -p {q_dir}/.lake/packages"],
+        )
+
+        populated = 0
+        for dep in self._git_deps:
+            repo_name = dep.org_repo.split("/")[-1]
+            # All values are validated (_SAFE_NAME_RE, hex SHA, parse_github_url)
+            # but quote everything for defense in depth
+            q_bare = shlex.quote(f"/shared/git/{repo_name}.git")
+            q_name = shlex.quote(dep.name)
+            q_url = shlex.quote(dep.url)
+            q_rev = shlex.quote(dep.rev)
+            q_pkg = shlex.quote(f"{project_dir}/.lake/packages/{dep.name}")
+
+            try:
+                # Clone from mounted bare repo with --reference for alternates.
+                # Since source and reference are the same, zero objects are copied.
+                runtime.exec(
+                    container,
+                    [
+                        "su",
+                        "-",
+                        "user",
+                        "-c",
+                        f"git clone --reference {q_bare}"
+                        f" file://{q_bare}"
+                        f" {q_pkg}",
+                    ],
+                )
+
+                # Fix remote URL to match what the manifest expects
+                runtime.exec(
+                    container,
+                    [
+                        "su",
+                        "-",
+                        "user",
+                        "-c",
+                        f"git -C {q_pkg} remote set-url origin {q_url}",
+                    ],
+                )
+
+                # Checkout the exact revision from the manifest
+                # rev is validated as a 40-char hex SHA, so no option injection risk
+                runtime.exec(
+                    container,
+                    [
+                        "su",
+                        "-",
+                        "user",
+                        "-c",
+                        f"git -C {q_pkg} checkout {q_rev}",
+                    ],
+                )
+
+                populated += 1
+            except RuntimeError as e:
+                # Non-fatal: Lake will clone this dep normally when needed
+                click.echo(f"  Warning: could not pre-populate {dep.name}: {e}")
+
+        if populated:
+            click.echo(
+                f"  Pre-populated {populated}/{len(self._git_deps)} Lake dependencies."
+            )
 
     def network_domains(self) -> list[str]:
         return [
