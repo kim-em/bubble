@@ -464,7 +464,7 @@ def _apply_network(
             apply_allowlist(runtime, name, domains)
             click.echo("  Network allowlist applied.")
         except Exception as e:
-            click.echo(f"  Warning: could not apply network allowlist: {e}")
+            raise click.ClickException(f"Failed to apply network allowlist: {e}")
 
 
 def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
@@ -637,13 +637,15 @@ def _spawn_background_bubble(args: list[str], log_path: str):
     else:
         cmd = [sys.executable, "-m", "bubble"] + args
     log_file = open(log_path, "w")
-    subprocess.Popen(
-        cmd,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    log_file.close()
+    try:
+        subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    finally:
+        log_file.close()
 
 
 def _maybe_rebuild_base_image():
@@ -772,8 +774,9 @@ def _background_build_lean_toolchain(version: str):
 
 def _provision_container(
     runtime, name, image_name, ref_path, mount_name, config, hook=None, dep_mounts=None,
+    network=False,
 ):
-    """Launch container, wait for readiness, mount git repos, set up relay."""
+    """Launch container, wait for readiness, apply network allowlist, mount git repos, set up relay."""
     click.echo("  Launching container...", nl=False)
     runtime.launch(name, image_name)
     click.echo(" done.")
@@ -786,6 +789,11 @@ def _provision_container(
         click.echo(" done.")
     except RuntimeError:
         click.echo(" timeout (continuing anyway).")
+
+    # Apply network allowlist early, before clone or any hook code runs
+    if network:
+        extra_domains = hook.network_domains() if hook else None
+        _apply_network(runtime, name, config, extra_domains)
 
     mount_source = str(ref_path)
     if Path(mount_source).exists():
@@ -810,8 +818,8 @@ def _provision_container(
         for host_dir_name, container_path, env_var in hook.shared_mounts():
             host_path = DATA_DIR / host_dir_name
             host_path.mkdir(parents=True, exist_ok=True)
-            # Make world-writable so container user can write regardless of UID mapping
-            host_path.chmod(0o777)
+            # Make group-writable so container user can write with UID mapping
+            host_path.chmod(0o770)
             runtime.add_disk(
                 name, f"shared-{host_dir_name}", str(host_path), container_path,
             )
@@ -1001,15 +1009,11 @@ def _finalize_bubble(
     runtime, name, t, hook, image_name, checkout_branch, short, network, config,
     editor, no_interactive, machine_readable=False,
 ):
-    """Post-clone setup: hooks, SSH, network, registration, and attach."""
+    """Post-clone setup: hooks, SSH, registration, and attach."""
     q_short = shlex.quote(short)
     project_dir = f"/home/user/{short}"
     if hook:
         hook.post_clone(runtime, name, project_dir)
-
-    if network:
-        extra_domains = hook.network_domains() if hook else None
-        _apply_network(runtime, name, config, extra_domains)
 
     if not machine_readable:
         click.echo("Setting up SSH access...")
@@ -1250,25 +1254,35 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
 
     # Provision, clone, and finalize
     short = repo_short_name(t.org_repo)
-    _provision_container(
-        runtime, name, image_name, ref_path, mount_name, config,
-        hook=hook, dep_mounts=dep_mounts,
-    )
-    checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
-    _finalize_bubble(
-        runtime,
-        name,
-        t,
-        hook,
-        image_name,
-        checkout_branch,
-        short,
-        network,
-        config,
-        editor,
-        no_interactive,
-        machine_readable,
-    )
+    try:
+        _provision_container(
+            runtime, name, image_name, ref_path, mount_name, config,
+            hook=hook, dep_mounts=dep_mounts, network=network,
+        )
+        checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
+        _finalize_bubble(
+            runtime,
+            name,
+            t,
+            hook,
+            image_name,
+            checkout_branch,
+            short,
+            network,
+            config,
+            editor,
+            no_interactive,
+            machine_readable,
+        )
+    except Exception:
+        # Clean up partially-provisioned container on failure
+        if not machine_readable:
+            click.echo(f"  Cleaning up failed container '{name}'...")
+        try:
+            runtime.delete(name, force=True)
+        except Exception:
+            pass
+        raise
 
 
 def _reattach(runtime: ContainerRuntime, name: str, editor: str, no_interactive: bool):

@@ -1,9 +1,25 @@
 """Container lifecycle management: registry tracking."""
 
+import fcntl
 import json
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .config import REGISTRY_FILE
+
+
+@contextmanager
+def _registry_lock():
+    """Acquire an exclusive file lock for the registry to prevent concurrent modifications."""
+    REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = REGISTRY_FILE.with_suffix(".lock")
+    fd = lock_path.open("w")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
 
 
 def load_registry() -> dict:
@@ -31,19 +47,20 @@ def register_bubble(
     remote_host: str = "",
 ):
     """Record a bubble's creation in the registry."""
-    registry = load_registry()
-    entry = {
-        "org_repo": org_repo,
-        "branch": branch,
-        "commit": commit,
-        "pr": pr,
-        "base_image": base_image,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if remote_host:
-        entry["remote_host"] = remote_host
-    registry["bubbles"][name] = entry
-    _save_registry(registry)
+    with _registry_lock():
+        registry = load_registry()
+        entry = {
+            "org_repo": org_repo,
+            "branch": branch,
+            "commit": commit,
+            "pr": pr,
+            "base_image": base_image,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if remote_host:
+            entry["remote_host"] = remote_host
+        registry["bubbles"][name] = entry
+        _save_registry(registry)
 
 
 def get_bubble_info(name: str) -> dict | None:
@@ -54,6 +71,7 @@ def get_bubble_info(name: str) -> dict | None:
 
 def unregister_bubble(name: str):
     """Remove a bubble from the registry."""
-    registry = load_registry()
-    registry["bubbles"].pop(name, None)
-    _save_registry(registry)
+    with _registry_lock():
+        registry = load_registry()
+        registry["bubbles"].pop(name, None)
+        _save_registry(registry)

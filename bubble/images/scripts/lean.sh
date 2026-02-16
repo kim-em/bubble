@@ -18,16 +18,21 @@ echo "Installing leantar..."
 ARCH=$(uname -m)
 [ "$ARCH" = "arm64" ] && ARCH="aarch64"
 LEANTAR_VERSION=$(curl -sSf https://api.github.com/repos/digama0/leangz/releases/latest \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
-LEANTAR_URL="https://github.com/digama0/leangz/releases/download/v${LEANTAR_VERSION}/leantar-v${LEANTAR_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
-CACHE_DIR="/home/user/.cache/mathlib"
-mkdir -p "$CACHE_DIR"
-curl -sSfL "$LEANTAR_URL" -o /tmp/leantar.tar.gz
-tar -xf /tmp/leantar.tar.gz -C "$CACHE_DIR" --strip-components=1
-mv "$CACHE_DIR/leantar" "$CACHE_DIR/leantar-${LEANTAR_VERSION}"
-rm -f /tmp/leantar.tar.gz
-chown -R user:user /home/user/.cache
-echo "  leantar ${LEANTAR_VERSION} installed to ${CACHE_DIR}/leantar-${LEANTAR_VERSION}"
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))") \
+  || true
+if [ -z "$LEANTAR_VERSION" ]; then
+  echo "Warning: could not determine leantar version (GitHub API may be rate-limited). Skipping leantar install."
+else
+  LEANTAR_URL="https://github.com/digama0/leangz/releases/download/v${LEANTAR_VERSION}/leantar-v${LEANTAR_VERSION}-${ARCH}-unknown-linux-musl.tar.gz"
+  CACHE_DIR="/home/user/.cache/mathlib"
+  mkdir -p "$CACHE_DIR"
+  curl -sSfL "$LEANTAR_URL" -o /tmp/leantar.tar.gz
+  tar -xf /tmp/leantar.tar.gz -C "$CACHE_DIR" --strip-components=1
+  mv "$CACHE_DIR/leantar" "$CACHE_DIR/leantar-${LEANTAR_VERSION}"
+  rm -f /tmp/leantar.tar.gz
+  chown -R user:user /home/user/.cache
+  echo "  leantar ${LEANTAR_VERSION} installed to ${CACHE_DIR}/leantar-${LEANTAR_VERSION}"
+fi
 
 echo "Installing VS Code extensions for Lean 4..."
 python3 -c '

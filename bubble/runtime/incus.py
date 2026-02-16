@@ -25,12 +25,25 @@ class IncusRuntime(ContainerRuntime):
             from ..cli import _ensure_dependencies
 
             _ensure_dependencies()
+            # _ensure_dependencies exits if incus not found; if we get here, retry
+            result = subprocess.run(
+                cmd,
+                capture_output=capture,
+                text=True,
+                check=check,
+                stdin=subprocess.DEVNULL,
+            )
         return result.stdout.strip() if capture else ""
 
     def _run_json(self, args: list[str]) -> dict | list:
         """Run an incus command and parse JSON output."""
         output = self._run(args + ["--format=json"])
-        return json.loads(output) if output else {}
+        if not output:
+            return {}
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Invalid JSON from incus {' '.join(args)}: {e}")
 
     def is_available(self) -> bool:
         try:
