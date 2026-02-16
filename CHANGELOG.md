@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.4 — 2026-02-17
+- Auto-install missing Homebrew dependencies (colima, incus) on remote hosts without TTY
+
 ## 0.5.3 — 2026-02-17
 - Auto-discover Python >= 3.10 on remote hosts (probes multiple paths when `python3` is too old)
 - Fix Homebrew not found on macOS SSH sessions with minimal PATH

@@ -313,7 +313,11 @@ def _ensure_dependencies():
             click.echo(
                 f"{names} {'is' if len(missing) == 1 else 'are'} required but not installed."
             )
-            if click.confirm(f"  Install via Homebrew? ({cmd})", default=True):
+            # Auto-install if no TTY (remote/non-interactive), otherwise confirm
+            if not sys.stdin.isatty() or click.confirm(
+                f"  Install via Homebrew? ({cmd})", default=True
+            ):
+                click.echo(f"  Installing: {cmd}")
                 subprocess.run(["brew", "install"] + missing, check=True)
             else:
                 click.echo(f"  To install manually: {cmd}")
