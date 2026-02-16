@@ -728,13 +728,16 @@ def _detect_and_build_image(runtime, ref_path, t):
     else:
         image_name = "base"
 
+    pending_toolchain_build = None
     if not runtime.image_exists(image_name):
         if image_name.startswith("lean-v"):
             # Toolchain-specific image doesn't exist yet — fall back to base lean
-            # and build the toolchain image in the background for next time
+            # and build the toolchain image in the background for next time.
+            # Defer the background build until after the lean image is ready,
+            # otherwise the background process races with the main build.
             version = image_name[len("lean-"):]
             click.echo(f"  Toolchain {version} image not cached, using base lean image (building {image_name} in background for next time)")
-            _background_build_lean_toolchain(version)
+            pending_toolchain_build = version
             image_name = "lean"
         if not runtime.image_exists(image_name):
             click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
@@ -745,6 +748,9 @@ def _detect_and_build_image(runtime, ref_path, t):
     elif image_name.startswith("lean-v"):
         version = image_name[len("lean-"):]
         click.echo(f"  Using cached toolchain image ({version})")
+
+    if pending_toolchain_build:
+        _background_build_lean_toolchain(pending_toolchain_build)
 
     return hook, image_name
 
