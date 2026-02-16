@@ -1,6 +1,7 @@
 """CLI entry point for bubble."""
 
 import json
+import os
 import platform
 import shlex
 import shutil
@@ -41,6 +42,21 @@ def _is_command_available(cmd: str) -> bool:
         return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
+
+
+def _ensure_homebrew_in_path():
+    """Add Homebrew's bin directory to PATH if brew exists but isn't on PATH.
+
+    On macOS, non-interactive SSH sessions may have a minimal PATH that
+    doesn't include /usr/local/bin (Intel) or /opt/homebrew/bin (Apple Silicon).
+    """
+    if _is_command_available("brew"):
+        return
+    for brew_path in ["/opt/homebrew/bin", "/usr/local/bin"]:
+        brew_bin = Path(brew_path) / "brew"
+        if brew_bin.exists():
+            os.environ["PATH"] = brew_path + ":" + os.environ.get("PATH", "")
+            return
 
 
 def _is_nixos() -> bool:
@@ -273,6 +289,8 @@ def _ensure_dependencies():
     system = platform.system()
 
     if system == "Darwin":
+        _ensure_homebrew_in_path()
+
         # Check Homebrew
         if not _is_command_available("brew"):
             click.echo("Homebrew is required but not installed.")

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.3 — 2026-02-17
+- Auto-discover Python >= 3.10 on remote hosts (probes multiple paths when `python3` is too old)
+- Fix Homebrew not found on macOS SSH sessions with minimal PATH
+
 ## 0.5.2 — 2026-02-17
 - `--command` option: run a command inside a bubble via SSH (`bubble --command "lake build" FLT`)
 - NixOS container networking: static IPv4 assignment and DNS proxy when nftables blocks bridge DHCP/DNS

@@ -179,28 +179,69 @@ def _ssh_run(
     )
 
 
-def _check_remote_python(host: RemoteHost) -> None:
-    """Verify Python 3.10+ is available on the remote host."""
-    try:
-        result = _ssh_run(host, ["python3", "--version"])
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        raise RuntimeError(
-            f"Cannot reach {host.ssh_destination} or python3 is not available.\n"
-            f"Ensure you can SSH to the host and python3 >= 3.10 is installed."
-        )
-
-    version_str = result.stdout.strip()
-    # Parse "Python 3.X.Y"
+def _parse_python_version(version_str: str) -> tuple[int, int] | None:
+    """Parse 'Python 3.X.Y' into (major, minor), or None."""
     try:
         parts = version_str.split()[1].split(".")
-        major, minor = int(parts[0]), int(parts[1])
-        if major < 3 or (major == 3 and minor < 10):
-            raise RuntimeError(
-                f"Remote Python version {version_str} is too old. "
-                f"bubble requires Python >= 3.10."
-            )
+        return int(parts[0]), int(parts[1])
     except (IndexError, ValueError):
-        pass  # If we can't parse, proceed optimistically
+        return None
+
+
+# Cache: host spec -> python binary path
+_remote_python_cache: dict[str, str] = {}
+
+_PYTHON_CANDIDATES = [
+    "python3",
+    "/usr/local/bin/python3",
+    "/opt/homebrew/bin/python3",
+    "python3.14",
+    "python3.13",
+    "python3.12",
+    "python3.11",
+    "python3.10",
+]
+
+
+def _find_remote_python(host: RemoteHost) -> str:
+    """Find a Python >= 3.10 on the remote host.
+
+    Probes multiple common paths since on macOS, `python3` may resolve to the
+    Xcode-bundled 3.9 while a newer version exists at /usr/local/bin/python3.
+    Caches the result per host.
+    """
+    cache_key = host.spec_string()
+    if cache_key in _remote_python_cache:
+        return _remote_python_cache[cache_key]
+
+    best_bin = None
+    best_ver = (0, 0)
+
+    for candidate in _PYTHON_CANDIDATES:
+        try:
+            result = _ssh_run(host, [candidate, "--version"], check=False, timeout=5)
+            if result.returncode != 0:
+                continue
+            ver = _parse_python_version(result.stdout.strip())
+            if ver and (ver[0] > 3 or (ver[0] == 3 and ver[1] >= 10)):
+                if ver > best_ver:
+                    best_bin = candidate
+                    best_ver = ver
+                    # If we found one via the default name, good enough
+                    if candidate == "python3":
+                        break
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+
+    if not best_bin:
+        raise RuntimeError(
+            f"No Python >= 3.10 found on {host.ssh_destination}.\n"
+            f"Checked: {', '.join(_PYTHON_CANDIDATES)}\n"
+            f"Install Python 3.10+ and ensure it's on PATH."
+        )
+
+    _remote_python_cache[cache_key] = best_bin
+    return best_bin
 
 
 def _check_remote_version(host: RemoteHost) -> bool:
@@ -237,8 +278,8 @@ def ensure_remote_bubble(host: RemoteHost) -> None:
 
     click_mod.echo(f"Deploying bubble {__version__} to {host.ssh_destination}...")
 
-    # Verify remote has Python 3.10+
-    _check_remote_python(host)
+    # Find a suitable Python on the remote
+    _find_remote_python(host)
 
     # Create bundle tarball
     bundle_path = _create_bundle()
@@ -291,11 +332,12 @@ def remote_bubble(
 ) -> subprocess.CompletedProcess:
     """Run a bubble command on the remote host via SSH.
 
-    Invokes: ssh host PYTHONPATH=/tmp/bubble-remote python3 -m bubble <args>
+    Invokes: ssh host PYTHONPATH=/tmp/bubble-remote <python> -m bubble <args>
     """
+    python_bin = _find_remote_python(host)
     remote_parts = [
         f"PYTHONPATH={REMOTE_DIR}",
-        "python3",
+        python_bin,
         "-m",
         "bubble",
     ] + args
@@ -352,9 +394,10 @@ def remote_open(
     click_mod.echo(f"Creating bubble on {host.ssh_destination}...")
 
     # Build the SSH command
+    python_bin = _find_remote_python(host)
     remote_parts = [
         f"PYTHONPATH={REMOTE_DIR}",
-        "python3",
+        python_bin,
         "-m",
         "bubble",
     ] + args
