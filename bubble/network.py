@@ -87,6 +87,9 @@ def _build_allowlist_script(domains: list[str]) -> str:
         "done",
         "",
         "# Resolve and allow each domain (IPv4 only)",
+        "# Use /24 CIDR blocks instead of individual IPs because CDN domains",
+        "# (e.g. *.githubusercontent.com) rotate IPs within their allocation.",
+        "# A point-in-time resolution may miss IPs returned later.",
     ]
 
     for domain in domains:
@@ -99,17 +102,21 @@ def _build_allowlist_script(domains: list[str]) -> str:
             lines.append(f'  echo "Warning: wildcard domain {domain} did not resolve.'
                          f' Use explicit subdomains instead." >&2')
             lines.append("else")
-            lines.append("  for ip in $IPS; do")
-            lines.append("    iptables -A OUTPUT -d $ip -j ACCEPT")
+            lines.append("  for cidr in $(echo \"$IPS\""
+                         " | awk -F. '{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}'"
+                         " | sort -u); do")
+            lines.append("    iptables -A OUTPUT -d $cidr -j ACCEPT")
             lines.append("  done")
             lines.append("fi")
         else:
             resolve_domain = domain
             lines.append(
-                f"for ip in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
-                f"| awk '{{print $1}}' | sort -u); do"
+                f"for cidr in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
+                f"| awk '{{print $1}}' | sort -u"
+                f" | awk -F. '{{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}}'"
+                f" | sort -u); do"
             )
-            lines.append("  iptables -A OUTPUT -d $ip -j ACCEPT")
+            lines.append("  iptables -A OUTPUT -d $cidr -j ACCEPT")
             lines.append("done")
 
     lines.extend(
