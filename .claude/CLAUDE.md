@@ -4,7 +4,7 @@ This file helps Claude Code sessions understand the bubble codebase.
 
 ## What This Project Is
 
-`bubble` provides containerized development environments via Incus containers. The primary interface is URL-based: `bubble <github-url>` creates (or re-attaches to) an isolated container and opens it in your preferred editor (VSCode Remote SSH by default, with Emacs, Neovim, and plain SSH also supported). Language-specific hooks (currently Lean 4) auto-detect the project type and select the right image. Bubbles can run locally or on a remote SSH host.
+`bubble` provides containerized development environments via Incus containers. The primary interface is URL-based: `bubble <github-url>` creates (or re-attaches to) an isolated container and opens it in VSCode via Remote SSH (or a plain SSH shell with `--shell`). Language-specific hooks (currently Lean 4) auto-detect the project type and select the right image. Bubbles can run locally or on a remote SSH host.
 
 ## Package Structure
 
@@ -19,7 +19,7 @@ bubble/
 ├── clean.py            # Container cleanness checking (safe to discard?)
 ├── lifecycle.py        # Registry tracking for active bubbles
 ├── network.py          # Network allowlisting via iptables inside containers
-├── vscode.py           # SSH config generation + editor launching (VSCode, Emacs, Neovim, shell)
+├── vscode.py           # SSH config generation + editor launching (VSCode, SSH shell)
 ├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
 ├── relay.py            # Bubble-in-bubble relay daemon (Unix socket, validation, rate limiting)
 ├── remote.py           # Remote SSH host support: run bubbles on remote machines
@@ -84,7 +84,7 @@ created → running ⇄ paused → destroyed
 Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Base allowlist comes from config.toml; hooks contribute additional domains (e.g., Lean adds `releases.lean-lang.org`).
 
 ### Editor Selection
-The default editor is VSCode via Remote SSH, but users can choose Emacs (TRAMP), Neovim (over SSH), or a plain SSH shell. Set per-invocation with `--emacs`, `--neovim`, `--shell`, or `--editor <choice>`. Set the persistent default with `bubble editor <choice>` (stored as `editor` key in `config.toml`). The `open_editor()` function in `vscode.py` dispatches to the appropriate launcher.
+The default editor is VSCode via Remote SSH. Use `--shell` for a plain SSH session. The `open_editor()` function in `vscode.py` dispatches to the appropriate launcher.
 
 ### Remote SSH Hosts
 Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (or a configured `[remote] default_host`) causes `bubble open` to SSH to the remote, run `bubble open --machine-readable` there, then set up a chained SSH ProxyCommand locally. The `--local` flag overrides a configured default. Remote bubble lifecycle commands (`pause`, `destroy`) auto-route to the correct host via the local registry. Code is in `remote.py`.

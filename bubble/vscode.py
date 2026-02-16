@@ -106,10 +106,6 @@ def open_editor(
     """Open the specified editor connected to a bubble."""
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
-    elif editor == "emacs":
-        open_emacs(bubble_name, remote_path)
-    elif editor == "neovim":
-        open_neovim(bubble_name, remote_path)
     elif editor == "shell":
         subprocess.run(["ssh", f"bubble-{bubble_name}"])
 
@@ -145,13 +141,3 @@ def open_vscode(
         print(f"Or run: code {flag} {uri}")
 
 
-def open_emacs(bubble_name: str, remote_path: str = "/home/user"):
-    """SSH into a bubble and launch Emacs."""
-    host = f"bubble-{bubble_name}"
-    subprocess.run(["ssh", "-t", host, f"cd {shlex.quote(remote_path)} && emacs -nw ."])
-
-
-def open_neovim(bubble_name: str, remote_path: str = "/home/user"):
-    """SSH into a bubble and launch Neovim."""
-    host = f"bubble-{bubble_name}"
-    subprocess.run(["ssh", "-t", host, f"cd {shlex.quote(remote_path)} && nvim ."])

@@ -35,13 +35,8 @@ bubble 123                   # opens PR #123 for the current repo
 # List your bubbles
 bubble list
 
-# Use a different editor
-bubble leanprover/lean4 --shell            # drop into SSH session
-bubble leanprover/lean4 --emacs            # Emacs via TRAMP
-bubble leanprover/lean4 --neovim           # Neovim over SSH
-
-# Set default editor (instead of VSCode)
-bubble editor neovim
+# Drop into SSH session instead of VSCode
+bubble leanprover/lean4 --shell
 
 # Run on a remote host
 bubble leanprover/lean4 --ssh myserver
@@ -79,7 +74,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 - **macOS**: Homebrew, then `brew install colima incus`
 - **Linux**: Incus installed natively ([install guide](https://linuxcontainers.org/incus/docs/main/installing/))
-- **Editor** (one of): [VSCode](https://code.visualstudio.com/) with Remote SSH extension (default), Emacs with TRAMP, or Neovim over SSH
+- **Editor**: [VSCode](https://code.visualstudio.com/) with Remote SSH extension (or `--shell` for plain SSH)
 
 ## Commands
 
@@ -90,7 +85,6 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble pause <name>` | Freeze a bubble |
 | `bubble destroy <name>` | Delete a bubble permanently |
 | `bubble cleanup` | Destroy all clean bubbles (no unsaved work) |
-| `bubble editor [choice]` | Get or set the default editor (vscode/emacs/neovim/shell) |
 | `bubble images list\|build\|delete` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
@@ -123,9 +117,6 @@ export BUBBLE_HOME=/data/bubble
 ```
 
 ```toml
-# Default editor: vscode, emacs, neovim, or shell
-editor = "vscode"
-
 [runtime]
 backend = "incus"
 colima_cpu = 24          # macOS: CPUs for the Colima VM

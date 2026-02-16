@@ -7,8 +7,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
     git curl build-essential cmake openssh-server \
-    ca-certificates netcat-openbsd iptables \
-    emacs-nox neovim < /dev/null
+    ca-certificates netcat-openbsd iptables < /dev/null
 
 # Create user (no sudo, no password)
 useradd -m -s /bin/bash user
