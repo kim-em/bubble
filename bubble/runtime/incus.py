@@ -160,8 +160,15 @@ class IncusRuntime(ContainerRuntime):
         except subprocess.CalledProcessError:
             return False
 
-    def image_delete(self, alias: str):
-        self._run(["image", "delete", alias])
+    def image_delete(self, alias_or_fingerprint: str):
+        self._run(["image", "delete", alias_or_fingerprint])
+
+    def image_delete_all(self):
+        images = self.list_images()
+        for img in images:
+            fingerprint = img.get("fingerprint", "")
+            if fingerprint:
+                self._run(["image", "delete", fingerprint])
 
     def list_images(self) -> list[dict]:
         data = self._run_json(["image", "list"])

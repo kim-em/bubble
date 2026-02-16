@@ -155,7 +155,7 @@ function activate() {
         cwd: folders[0].uri,
     });
     terminal.show();
-    terminal.sendText('lake exe cache get');
+    terminal.sendText('lake exe cache get && lake build && lake test');
 }
 
 function deactivate() {}

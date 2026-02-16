@@ -72,6 +72,10 @@ class MockRuntime(ContainerRuntime):
         self.calls.append(("image_delete", alias))
         self._images.discard(alias)
 
+    def image_delete_all(self):
+        self.calls.append(("image_delete_all",))
+        self._images.clear()
+
     def list_images(self) -> list[dict]:
         self.calls.append(("list_images",))
         return []

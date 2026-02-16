@@ -1614,14 +1614,44 @@ def images_build(image_name):
 
 
 @images_group.command("delete")
-@click.argument("image_name")
-def images_delete(image_name):
-    """Delete an image by alias (e.g. base, lean, lean-v4.16.0)."""
+@click.argument("image_name", required=False)
+@click.option("--all", "delete_all", is_flag=True, help="Delete all images.")
+def images_delete(image_name, delete_all):
+    """Delete an image by alias or fingerprint, or --all to delete all images."""
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
-    if not runtime.image_exists(image_name):
-        click.echo(f"Image '{image_name}' not found.", err=True)
+    if delete_all:
+        images = runtime.list_images()
+        if not images:
+            click.echo("No images to delete.")
+            return
+        runtime.image_delete_all()
+        click.echo(f"Deleted {len(images)} image(s).")
+        return
+    if not image_name:
+        click.echo("Specify an image name or use --all.", err=True)
         sys.exit(1)
+    # Try alias first, then fingerprint prefix
+    if not runtime.image_exists(image_name):
+        # Check if it matches a fingerprint prefix
+        images = runtime.list_images()
+        matches = [
+            img for img in images if img.get("fingerprint", "").startswith(image_name)
+        ]
+        if len(matches) == 1:
+            fp = matches[0]["fingerprint"]
+            runtime.image_delete(fp)
+            click.echo(f"Deleted image '{image_name}'.")
+            return
+        elif len(matches) > 1:
+            click.echo(
+                f"Ambiguous fingerprint prefix '{image_name}' matches {len(matches)} images.",
+                err=True,
+            )
+            sys.exit(1)
+        else:
+            click.echo(f"Image '{image_name}' not found.", err=True)
+            sys.exit(1)
     runtime.image_delete(image_name)
     click.echo(f"Deleted image '{image_name}'.")
 

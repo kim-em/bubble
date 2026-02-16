@@ -72,8 +72,12 @@ class ContainerRuntime(ABC):
         """Check if an image with the given alias exists."""
 
     @abstractmethod
-    def image_delete(self, alias: str):
-        """Delete an image."""
+    def image_delete(self, alias_or_fingerprint: str):
+        """Delete an image by alias or fingerprint."""
+
+    @abstractmethod
+    def image_delete_all(self):
+        """Delete all images."""
 
     @abstractmethod
     def list_images(self) -> list[dict]:
