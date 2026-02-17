@@ -86,8 +86,10 @@ class TestRemoteProxyCommand:
         add_ssh_config("test-remote", remote_host=host)
         content = ssh_file.read_text()
         assert "Host bubble-test-remote" in content
-        assert "ProxyCommand ssh kim@build-server incus exec test-remote" in content
+        assert "ProxyCommand ssh kim@build-server" in content
         assert "nc localhost 22" in content
+        # Remote command should be single-quoted to survive shell hops
+        assert "'incus exec test-remote" in content
         # Should NOT have -p flag for default port
         assert "-p 22" not in content
 
@@ -96,14 +98,16 @@ class TestRemoteProxyCommand:
         host = RemoteHost(hostname="build-server", user="kim", port=2222)
         add_ssh_config("test-remote", remote_host=host)
         content = ssh_file.read_text()
-        assert "ProxyCommand ssh -p 2222 kim@build-server incus exec test-remote" in content
+        assert "ProxyCommand ssh -p 2222 kim@build-server" in content
+        assert "'incus exec test-remote" in content
 
     def test_chained_proxy_without_user(self, tmp_ssh_dir):
         ssh_file = tmp_ssh_dir / "bubble"
         host = RemoteHost(hostname="build-server")
         add_ssh_config("test-remote", remote_host=host)
         content = ssh_file.read_text()
-        assert "ProxyCommand ssh build-server incus exec test-remote" in content
+        assert "ProxyCommand ssh build-server" in content
+        assert "'incus exec test-remote" in content
 
     def test_local_proxy_unchanged(self, tmp_ssh_dir):
         """Without remote_host, ProxyCommand should use incus exec directly."""

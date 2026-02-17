@@ -22,6 +22,7 @@ class RemoteHost:
     hostname: str
     user: str | None = None
     port: int = 22
+    ssh_options: list[str] | None = None  # extra SSH flags, e.g. ["-o", "..."]
 
     @classmethod
     def parse(cls, spec: str) -> "RemoteHost":
@@ -81,6 +82,8 @@ class RemoteHost:
     def ssh_cmd(self, command: list[str]) -> list[str]:
         """Build SSH command: ['ssh', '-p', port, destination] + command."""
         cmd = ["ssh"]
+        if self.ssh_options:
+            cmd += self.ssh_options
         if self.port != 22:
             cmd += ["-p", str(self.port)]
         cmd.append(self.ssh_destination)
@@ -90,6 +93,8 @@ class RemoteHost:
     def scp_cmd(self, local_path: str, remote_path: str) -> list[str]:
         """Build SCP command to copy a file to the remote."""
         cmd = ["scp", "-q"]
+        if self.ssh_options:
+            cmd += self.ssh_options
         if self.port != 22:
             cmd += ["-P", str(self.port)]
         cmd += [local_path, f"{self.ssh_destination}:{remote_path}"]
@@ -101,6 +106,39 @@ class RemoteHost:
         if self.port != 22:
             s += f":{self.port}"
         return s
+
+
+def apply_cloud_ssh_options(host: "RemoteHost") -> None:
+    """If *host* matches the cloud server IP, add cloud SSH options (mutates host).
+
+    This is needed because the registry stores only ``"root@<ip>"`` for cloud
+    bubbles, losing the cloud-specific SSH key and known_hosts settings.
+    Call this after ``RemoteHost.parse(info["remote_host"])`` for any command
+    that needs to reach a cloud host (list, pause, pop, etc.).
+    """
+    from .config import CLOUD_KEY_FILE, CLOUD_KNOWN_HOSTS, CLOUD_STATE_FILE
+
+    if not CLOUD_STATE_FILE.exists():
+        return
+    try:
+        import json as _json
+
+        state = _json.loads(CLOUD_STATE_FILE.read_text())
+    except (ValueError, OSError):
+        return
+    cloud_ip = state.get("ipv4", "")
+    if cloud_ip and host.hostname == cloud_ip:
+        cloud_options = [
+            "-i",
+            str(CLOUD_KEY_FILE),
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            f"UserKnownHostsFile={CLOUD_KNOWN_HOSTS}",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+        ]
+        host.ssh_options = (host.ssh_options or []) + cloud_options
 
 
 REMOTE_DIR = "/tmp/bubble-remote"
@@ -471,7 +509,7 @@ def remote_command(
 ) -> subprocess.CompletedProcess:
     """Run an arbitrary bubble command on the remote host.
 
-    Used for pause, destroy, list, etc. Ensures bubble is deployed first.
+    Used for pause, pop, list, etc. Ensures bubble is deployed first.
     """
     ensure_remote_bubble(host)
     return remote_bubble(host, args, timeout=timeout)

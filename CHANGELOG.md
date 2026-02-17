@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.7 — 2026-02-17
+- Remote-aware `bubble list`: shows cloud and SSH-remote bubbles from registry
+- `--cloud` flag queries cloud server for live container status
+- `--ssh HOST` flag queries SSH host for live container status
+- `--local` flag shows only local bubbles
+- Fix cloud SSH options lost after registry round-trip (affected `pause`/`destroy`)
+- Fix probe servers sending scary root-password emails from Hetzner
+- SSH config generation supports custom ssh_options from RemoteHost
+
 ## 0.5.6 — 2026-02-17
 - Auto-install QEMU on Intel Macs (needed by Colima; Apple Silicon uses Virtualization.Framework)
 - Skip `--vm-type` flag on Colima versions that don't support it (e.g. Colima 0.10+)

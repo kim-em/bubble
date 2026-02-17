@@ -40,9 +40,16 @@ def add_ssh_config(bubble_name: str, user: str = "user", remote_host=None):
     incus_cmd = f'incus exec {bubble_name} -- su - {user} -c "nc localhost 22"'
 
     if remote_host is not None:
-        port_args = f"-p {remote_host.port} " if remote_host.port != 22 else ""
-        dest = shlex.quote(remote_host.ssh_destination)
-        proxy_cmd = f"ssh {port_args}{dest} {incus_cmd}"
+        ssh_parts = ["ssh"]
+        if remote_host.ssh_options:
+            ssh_parts += remote_host.ssh_options
+        if remote_host.port != 22:
+            ssh_parts += ["-p", str(remote_host.port)]
+        ssh_parts.append(remote_host.ssh_destination)
+        # incus_cmd must be passed as a single argument so inner quotes
+        # (e.g. "nc localhost 22") survive the local shell → SSH → remote
+        # shell chain.
+        proxy_cmd = " ".join(shlex.quote(p) for p in ssh_parts) + " " + shlex.quote(incus_cmd)
     else:
         proxy_cmd = incus_cmd
 

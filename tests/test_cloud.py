@@ -153,14 +153,31 @@ class TestRemoteHostConstruction:
 class TestProvisionValidation:
     """Test provision_server input validation (no actual API calls)."""
 
-    def test_no_server_type_errors(self, tmp_data_dir):
-        from click import ClickException
+    def test_default_server_type(self, tmp_data_dir):
+        """When no server_type is configured, cx43 is used as default."""
+        from unittest.mock import MagicMock, patch
 
         from bubble.cloud import provision_server
 
         config = {"cloud": {"server_type": "", "location": "fsn1"}}
-        with pytest.raises(ClickException, match="No server type configured"):
-            provision_server(config)
+        with patch("bubble.cloud._get_client") as mock_client, \
+             patch("bubble.cloud._ensure_ssh_key", return_value=("/tmp/key", "ssh-ed25519 AAAA")):
+            client = MagicMock()
+            mock_client.return_value = client
+            # Make SSH key creation succeed
+            ssh_key = MagicMock()
+            ssh_key.data_model.id = 1
+            client.ssh_keys.create.return_value = ssh_key
+            # Make server creation fail so we don't need full setup
+            from hcloud._exceptions import APIException
+            client.servers.create.side_effect = APIException(
+                code="test", message="test error", details={}
+            )
+            with pytest.raises(Exception):
+                provision_server(config)
+            # Verify cx43 was used as the server type
+            call_kwargs = client.servers.create.call_args
+            assert call_kwargs.kwargs["server_type"].name == "cx43"
 
     def test_existing_server_errors(self, tmp_data_dir):
         from click import ClickException

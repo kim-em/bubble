@@ -622,7 +622,7 @@ def _find_existing_container(
 # ---------------------------------------------------------------------------
 
 
-BASIC_COMMANDS = {"open", "list", "pause", "destroy"}
+BASIC_COMMANDS = {"open", "list", "pause", "pop"}
 
 
 class BubbleGroup(click.Group):
@@ -1165,6 +1165,39 @@ def _machine_readable_output(status: str, name: str, **kwargs):
     click.echo(json.dumps(data))
 
 
+def _inject_local_ssh_keys(remote_host, container_name: str):
+    """Inject local SSH public keys into a remote container's authorized_keys.
+
+    The remote `bubble open` only injects the remote host's keys. For the
+    chained ProxyCommand (local → remote → container) to work, the local
+    machine's keys must also be present.
+    """
+    from .remote import _ssh_run
+
+    ssh_dir = Path.home() / ".ssh"
+    pub_keys = []
+    for key_file in ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]:
+        key_path = ssh_dir / key_file
+        if key_path.exists():
+            pub_keys.append(key_path.read_text().strip())
+    if not pub_keys:
+        return
+
+    keys_str = "\\n".join(pub_keys)
+    # Append local keys to the container's authorized_keys via incus exec
+    _ssh_run(
+        remote_host,
+        [
+            "incus", "exec", container_name, "--",
+            "su", "-", "user", "-c",
+            f'mkdir -p ~/.ssh && chmod 700 ~/.ssh '
+            f'&& printf "{keys_str}\\n" >> ~/.ssh/authorized_keys '
+            f'&& chmod 600 ~/.ssh/authorized_keys',
+        ],
+        timeout=15,
+    )
+
+
 def _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config,
                  git_name="", git_email="", command=None):
     """Open a bubble on a remote host, then connect locally."""
@@ -1186,6 +1219,9 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
     project_dir = result.get("project_dir", "/home/user")
     workspace_file = result.get("workspace_file")
     org_repo = result.get("org_repo", "")
+
+    # Inject local SSH keys into the container so the chained ProxyCommand works
+    _inject_local_ssh_keys(remote_host, name)
 
     # Write local SSH config with chained ProxyCommand through the remote host
     add_ssh_config(name, remote_host=remote_host)
@@ -1460,18 +1496,108 @@ def _format_age(dt: "datetime | None") -> str:  # noqa: F821
 # ---------------------------------------------------------------------------
 
 
+def _parse_iso(s: str | None):
+    """Parse an ISO datetime string, returning None on failure."""
+    if not s:
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_cloud_host(hostname: str) -> bool:
+    """Check if a hostname matches the cloud server IP."""
+    from .cloud import _load_state
+
+    state = _load_state()
+    return bool(state and state.get("ipv4") == hostname)
+
+
+def _remote_entries_from_registry() -> list[dict]:
+    """Build list entries for remote bubbles from the registry.
+
+    Returns a list of dicts with keys: name, state, location, created_at,
+    last_used_at, remote_host_spec.  State defaults to ``"unknown"``.
+    """
+    registry = load_registry()
+    entries = []
+    for name, info in registry.get("bubbles", {}).items():
+        host_spec = info.get("remote_host", "")
+        if not host_spec:
+            continue
+        from .remote import RemoteHost
+
+        try:
+            host = RemoteHost.parse(host_spec)
+        except ValueError:
+            continue
+        location = "cloud" if _is_cloud_host(host.hostname) else host_spec
+        entries.append({
+            "name": name,
+            "state": "unknown",
+            "location": location,
+            "created_at": _parse_iso(info.get("created_at")),
+            "last_used_at": None,
+            "remote_host_spec": host_spec,
+        })
+    return entries
+
+
+def _query_remote_list(host_spec: str, is_cloud: bool, verbose: bool = False,
+                       timeout: int = 15) -> list[dict] | None:
+    """Query a remote host for its bubble list via SSH.
+
+    For cloud hosts, checks the Hetzner API first and skips SSH when the
+    server is off.  Returns parsed JSON list or *None* on failure.
+    """
+    if is_cloud:
+        try:
+            from .cloud import get_server_status
+
+            status = get_server_status()
+            if not status or status.get("status") != "running":
+                return None
+        except Exception:
+            return None
+
+    from .remote import RemoteHost, apply_cloud_ssh_options, remote_bubble
+
+    try:
+        host = RemoteHost.parse(host_spec)
+        if is_cloud:
+            apply_cloud_ssh_options(host)
+        args = ["list", "--json"]
+        if verbose:
+            args.append("-v")
+        result = remote_bubble(host, args, timeout=timeout)
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
 @main.command("list")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.option("-v", "--verbose", is_flag=True, help="Include disk usage and IPv4 (slower)")
 @click.option("-c", "--clean", "show_clean", is_flag=True, help="Check cleanness status (slower)")
-def list_bubbles(as_json, verbose, show_clean):
+@click.option("--cloud", "query_cloud", is_flag=True, help="Query cloud server for live status")
+@click.option("--ssh", "ssh_host", default=None, help="Query SSH host for live status")
+@click.option("--local", "local_only", is_flag=True, help="Show only local bubbles")
+def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only):
     """List all bubbles."""
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
 
+    # --- Local containers ---
     containers = runtime.list_containers(fast=not verbose)
 
-    # Check cleanness for running containers if requested
     clean_statuses = {}
     if show_clean:
         for c in containers:
@@ -1480,58 +1606,180 @@ def list_bubbles(as_json, verbose, show_clean):
             else:
                 clean_statuses[c.name] = CleanStatus(clean=False, error="not running")
 
+    local_names = {c.name for c in containers}
+    entries = []
+    for c in containers:
+        entry = {
+            "name": c.name,
+            "state": c.state,
+            "location": "local",
+            "created_at": c.created_at,
+            "last_used_at": c.last_used_at,
+        }
+        if verbose:
+            entry["ipv4"] = c.ipv4
+            entry["disk_usage"] = c.disk_usage
+        if show_clean:
+            entry["clean_status"] = clean_statuses.get(c.name)
+        entries.append(entry)
+
+    # --- Remote bubbles from registry ---
+    has_remote = False
+    if not local_only:
+        remote_entries = _remote_entries_from_registry()
+        # Skip any that are also local (shouldn't happen, but be safe)
+        remote_entries = [e for e in remote_entries if e["name"] not in local_names]
+        has_remote = bool(remote_entries)
+
+        # Live queries: group remote entries by (host_spec, is_cloud)
+        queried_hosts: dict[str, list[dict] | None] = {}
+        if query_cloud or ssh_host:
+            # Determine which host specs to query
+            specs_to_query: set[str] = set()
+            for e in remote_entries:
+                is_cloud = e["location"] == "cloud"
+                if is_cloud and query_cloud:
+                    specs_to_query.add(e["remote_host_spec"])
+                elif not is_cloud and ssh_host:
+                    from .remote import RemoteHost
+
+                    try:
+                        query_host = RemoteHost.parse(ssh_host)
+                        entry_host = RemoteHost.parse(e["remote_host_spec"])
+                        if query_host.hostname == entry_host.hostname:
+                            specs_to_query.add(e["remote_host_spec"])
+                    except ValueError:
+                        pass
+
+            if ssh_host and not specs_to_query:
+                click.echo(
+                    f"Warning: no remote bubbles found for host '{ssh_host}'.",
+                    err=True,
+                )
+
+            for spec in specs_to_query:
+                is_cloud = any(
+                    e["remote_host_spec"] == spec and e["location"] == "cloud"
+                    for e in remote_entries
+                )
+                queried_hosts[spec] = _query_remote_list(
+                    spec, is_cloud, verbose=verbose,
+                )
+
+        # Update remote entries with live data where available
+        for e in remote_entries:
+            spec = e["remote_host_spec"]
+            live_data = queried_hosts.get(spec)
+            if live_data is not None:
+                # Find matching container in live data
+                for rc in live_data:
+                    if rc["name"] == e["name"]:
+                        e["state"] = rc.get("state", "unknown")
+                        e["created_at"] = _parse_iso(rc.get("created_at")) or e["created_at"]
+                        e["last_used_at"] = _parse_iso(rc.get("last_used_at"))
+                        if verbose:
+                            e["ipv4"] = rc.get("ipv4")
+                            e["disk_usage"] = rc.get("disk_usage")
+                        break
+                else:
+                    # Registered locally but not found on remote
+                    e["state"] = "not found"
+            elif spec in queried_hosts:
+                # Query was attempted but failed
+                is_cloud = e["location"] == "cloud"
+                if is_cloud:
+                    try:
+                        from .cloud import get_server_status
+
+                        status = get_server_status()
+                        if status and status.get("status") == "off":
+                            e["state"] = "server off"
+                        else:
+                            e["state"] = "unreachable"
+                    except Exception:
+                        e["state"] = "unreachable"
+                else:
+                    e["state"] = "unreachable"
+
+        entries.extend(remote_entries)
+
+    # --- Output ---
     if as_json:
         data = []
-        for c in containers:
-            entry = {
-                "name": c.name,
-                "state": c.state,
-                "created_at": c.created_at.isoformat() if c.created_at else None,
-                "last_used_at": c.last_used_at.isoformat() if c.last_used_at else None,
+        for e in entries:
+            d = {
+                "name": e["name"],
+                "state": e["state"],
+                "location": e["location"],
+                "created_at": e["created_at"].isoformat() if hasattr(e.get("created_at"), "isoformat") else e.get("created_at"),
+                "last_used_at": e["last_used_at"].isoformat() if hasattr(e.get("last_used_at"), "isoformat") else e.get("last_used_at"),
             }
             if verbose:
-                entry["ipv4"] = c.ipv4
-                entry["disk_usage"] = c.disk_usage
+                d["ipv4"] = e.get("ipv4")
+                d["disk_usage"] = e.get("disk_usage")
             if show_clean:
-                cs = clean_statuses.get(c.name)
+                cs = e.get("clean_status")
                 if cs and cs.error:
-                    entry["clean"] = None
+                    d["clean"] = None
                 elif cs:
-                    entry["clean"] = {"status": cs.clean, "reasons": cs.reasons}
-            data.append(entry)
+                    d["clean"] = {"status": cs.clean, "reasons": cs.reasons}
+            data.append(d)
         click.echo(json.dumps(data, indent=2))
         return
 
-    if not containers:
+    if not entries:
         click.echo("No bubbles. Create one with: bubble owner/repo")
         return
 
     # Build header and rows based on flags
-    header = f"{'NAME':<30} {'STATE':<10} {'CREATED':<12} {'LAST USED':<12}"
+    show_location = has_remote or local_only
+    header = f"{'NAME':<30} {'STATE':<12}"
+    if show_location:
+        header += f" {'LOCATION':<18}"
+    header += f" {'CREATED':<12} {'LAST USED':<12}"
     if verbose:
         header += f" {'DISK':<10} {'IPv4':<16}"
     if show_clean:
         header += " STATUS"
     click.echo(header)
     click.echo("-" * len(header))
-    for c in containers:
-        created = _format_age(c.created_at)
-        used = _format_age(c.last_used_at)
-        line = f"{c.name:<30} {c.state:<10} {created:<12} {used:<12}"
+    for e in entries:
+        created = _format_age(e.get("created_at"))
+        used = _format_age(e.get("last_used_at"))
+        line = f"{e['name']:<30} {e['state']:<12}"
+        if show_location:
+            line += f" {e['location']:<18}"
+        line += f" {created:<12} {used:<12}"
         if verbose:
-            disk = _format_bytes(c.disk_usage) if c.disk_usage else "-"
-            ipv4 = c.ipv4 or "-"
+            disk = _format_bytes(e["disk_usage"]) if e.get("disk_usage") else "-"
+            ipv4 = e.get("ipv4") or "-"
             line += f" {disk:<10} {ipv4:<16}"
         if show_clean:
-            cs = clean_statuses.get(c.name)
+            cs = e.get("clean_status")
             line += f" {cs.summary}" if cs else ""
         click.echo(line)
-    if not verbose and not show_clean:
-        click.echo("\nUse -v for disk usage and network info, -c to check cleanness.")
+
+    # Help text hints
+    hints = []
+    if not verbose:
+        hints.append("-v for disk usage")
+    if not show_clean:
+        hints.append("-c for cleanness")
+    if has_remote and not query_cloud:
+        # Check if any remote entries are cloud
+        if any(e["location"] == "cloud" for e in entries):
+            hints.append("--cloud for live cloud status")
+    if has_remote and not ssh_host:
+        ssh_hosts = {e["remote_host_spec"] for e in entries
+                     if e.get("remote_host_spec") and e["location"] != "cloud"}
+        if ssh_hosts:
+            hints.append("--ssh HOST for live remote status")
+    if hints:
+        click.echo(f"\nUse {', '.join(hints)}.")
 
 
 # ---------------------------------------------------------------------------
-# pause / destroy
+# pause / pop
 # ---------------------------------------------------------------------------
 
 
@@ -1542,8 +1790,9 @@ def pause(name):
     # Auto-route to remote host if the bubble is registered there
     info = get_bubble_info(name)
     if info and info.get("remote_host"):
-        from .remote import RemoteHost, remote_command
+        from .remote import RemoteHost, apply_cloud_ssh_options, remote_command
         host = RemoteHost.parse(info["remote_host"])
+        apply_cloud_ssh_options(host)
         result = remote_command(host, ["pause", name])
         if result.returncode != 0:
             click.echo(f"Failed to pause on {host.ssh_destination}: {result.stderr}", err=True)
@@ -1560,25 +1809,26 @@ def pause(name):
 @main.command()
 @click.argument("name")
 @click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
-def destroy(name, force):
-    """Destroy a bubble permanently."""
+def pop(name, force):
+    """Pop a bubble (destroy it permanently)."""
     # Auto-route to remote host if the bubble is registered there
     info = get_bubble_info(name)
     if info and info.get("remote_host"):
-        from .remote import RemoteHost, remote_command
+        from .remote import RemoteHost, apply_cloud_ssh_options, remote_command
         host = RemoteHost.parse(info["remote_host"])
+        apply_cloud_ssh_options(host)
         if not force:
             click.confirm(
-                f"Permanently destroy bubble '{name}' on {host.ssh_destination}?",
+                f"Permanently pop bubble '{name}' on {host.ssh_destination}?",
                 abort=True,
             )
-        result = remote_command(host, ["destroy", "-f", name])
+        result = remote_command(host, ["pop", "-f", name])
         if result.returncode != 0:
-            click.echo(f"Failed to destroy on {host.ssh_destination}: {result.stderr}", err=True)
+            click.echo(f"Failed to pop on {host.ssh_destination}: {result.stderr}", err=True)
             sys.exit(1)
         remove_ssh_config(name)
         unregister_bubble(name)
-        click.echo(f"Bubble '{name}' destroyed on {host.ssh_destination}.")
+        click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
         return
 
     config = load_config()
@@ -1590,7 +1840,7 @@ def destroy(name, force):
             click.echo(f"Bubble '{name}' is clean. ", nl=False)
         elif cs.error:
             click.confirm(
-                f"Cannot verify cleanness ({cs.error}). Permanently destroy bubble '{name}'?",
+                f"Cannot verify cleanness ({cs.error}). Permanently pop bubble '{name}'?",
                 abort=True,
             )
         else:
@@ -1598,7 +1848,7 @@ def destroy(name, force):
             click.echo("Warning: bubble has unsaved work:")
             for r in reasons:
                 click.echo(f"  - {r}")
-            click.confirm(f"Permanently destroy bubble '{name}'?", abort=True)
+            click.confirm(f"Permanently pop bubble '{name}'?", abort=True)
 
     import time
 
@@ -1620,11 +1870,11 @@ def destroy(name, force):
 
     remove_ssh_config(name)
     unregister_bubble(name)
-    click.echo(f"Bubble '{name}' destroyed.")
+    click.echo(f"Bubble '{name}' popped.")
 
 
 @main.command()
-@click.option("-n", "--dry-run", is_flag=True, help="Show what would be destroyed")
+@click.option("-n", "--dry-run", is_flag=True, help="Show what would be popped")
 @click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
 @click.option(
     "-a", "--all", "check_all", is_flag=True,
@@ -1632,7 +1882,7 @@ def destroy(name, force):
 )
 @click.option("--age", type=int, default=0, help="Only clean up bubbles unused for N+ days")
 def cleanup(dry_run, force, check_all, age):
-    """Destroy all clean bubbles (safe, no unsaved work)."""
+    """Pop all clean bubbles (safe, no unsaved work)."""
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
 
@@ -1695,12 +1945,12 @@ def cleanup(dry_run, force, check_all, age):
                 pass
 
     if not clean_list:
-        click.echo("No clean bubbles to destroy.")
+        click.echo("No clean bubbles to pop.")
         return
 
     if dry_run:
         n = len(clean_list)
-        click.echo(f"\nWould destroy {n} clean bubble{'s' if n != 1 else ''}.")
+        click.echo(f"\nWould pop {n} clean bubble{'s' if n != 1 else ''}.")
         # Re-stop clean containers that were started for checking
         for name in clean_list:
             if name in started_names:
@@ -1712,7 +1962,7 @@ def cleanup(dry_run, force, check_all, age):
 
     if not force:
         click.confirm(
-            f"\nDestroy {len(clean_list)} clean bubble{'s' if len(clean_list) != 1 else ''}?",
+            f"\nPop {len(clean_list)} clean bubble{'s' if len(clean_list) != 1 else ''}?",
             abort=True,
         )
 
@@ -1720,7 +1970,7 @@ def cleanup(dry_run, force, check_all, age):
         runtime.delete(name, force=True)
         remove_ssh_config(name)
         unregister_bubble(name)
-        click.echo(f"  Destroyed {name}")
+        click.echo(f"  Popped {name}")
 
     if dirty_count:
         click.echo(f"Kept {dirty_count} dirty bubble{'s' if dirty_count != 1 else ''}.")
