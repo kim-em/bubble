@@ -300,12 +300,14 @@ def _ensure_dependencies():
             )
             sys.exit(1)
 
-        # Check Colima and Incus
+        # Check Colima, Incus, and QEMU (Intel Macs need QEMU; Apple Silicon uses vz)
         missing = []
         if not _is_command_available("colima"):
             missing.append("colima")
         if not _is_command_available("incus"):
             missing.append("incus")
+        if platform.machine() == "x86_64" and not _is_command_available("qemu-img"):
+            missing.append("qemu")
 
         if missing:
             names = " and ".join(missing)
@@ -2153,10 +2155,12 @@ def cloud_group():
 
 @cloud_group.command("provision")
 @click.option("--type", "server_type", type=str, default=None,
-              help="Server type (e.g. ccx43, cx53)")
+              help="Server type (e.g. cx43, ccx43, cx53)")
 @click.option("--location", type=str, default=None,
               help="Datacenter location (default: fsn1)")
-def cloud_provision(server_type, location):
+@click.option("--list", "list_types", is_flag=True, default=False,
+              help="List available server types and exit")
+def cloud_provision(server_type, location, list_types):
     """Provision a Hetzner Cloud server for bubble.
 
     Creates a server with Incus pre-installed. The server auto-shuts down
@@ -2164,13 +2168,22 @@ def cloud_provision(server_type, location):
     hourly billing. It auto-starts again on next 'bubble open --cloud'.
 
     \b
-    Common server types:
-      ccx43   16 dedicated vCPU, 64GB RAM (~EUR 0.13/hr)
-      cx53    16 shared vCPU, 32GB RAM (~EUR 0.024/hr)
-      cx33     4 shared vCPU,  8GB RAM (~EUR 0.008/hr)
+    Common server types (default: cx43):
+      cx43     8 shared vCPU, 16GB RAM (~EUR 0.02/hr)
+      cx53    16 shared vCPU, 32GB RAM (~EUR 0.04/hr)
+      ccx43   16 dedicated vCPU, 64GB RAM (~EUR 0.17/hr)  # needs limit increase
+
+    Use --list to see all available server types with current pricing.
     """
+    if list_types:
+        from .cloud import list_server_types
+        config = load_config()
+        list_server_types(config, location=location)
+        return
     from .cloud import provision_server
     config = load_config()
+    if not server_type:
+        click.echo("Use --list to see all available server types.")
     provision_server(config, server_type=server_type, location=location)
 
 
@@ -2206,7 +2219,7 @@ def cloud_status():
     status = get_server_status()
     if not status:
         click.echo("No cloud server provisioned.")
-        click.echo("Set one up with: bubble cloud provision --type ccx43")
+        click.echo("Set one up with: bubble cloud provision")
         return
 
     click.echo(f"  Server:   {status.get('server_name', '?')}")

@@ -1,6 +1,7 @@
 # Changelog
 
-## 0.5.5 — 2026-02-17
+## 0.5.6 — 2026-02-17
+- Auto-install QEMU on Intel Macs (needed by Colima; Apple Silicon uses Virtualization.Framework)
 - Skip `--vm-type` flag on Colima versions that don't support it (e.g. Colima 0.10+)
 
 ## 0.5.4 — 2026-02-17
