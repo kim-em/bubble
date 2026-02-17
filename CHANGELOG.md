@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.5 — 2026-02-17
+- Skip `--vm-type` flag on Colima versions that don't support it (e.g. Colima 0.10+)
+
 ## 0.5.4 — 2026-02-17
 - Auto-install missing Homebrew dependencies (colima, incus) on remote hosts without TTY
 
