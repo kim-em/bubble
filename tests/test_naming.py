@@ -13,10 +13,11 @@ def test_generate_name_branch():
     assert generate_name("batteries", "branch", "fix-grind") == "batteries-branch-fix-grind"
 
 
-def test_generate_name_main_uses_date():
-    name = generate_name("lean4", "main", "")
-    today = date.today().strftime("%Y%m%d")
-    assert name == f"lean4-main-{today}"
+def test_generate_name_main_uses_date(monkeypatch):
+    monkeypatch.setattr("bubble.naming.date", type("D", (), {
+        "today": staticmethod(lambda: date(2026, 3, 14)),
+    })())
+    assert generate_name("lean4", "main", "") == "lean4-main-20260314"
 
 
 def test_generate_name_sanitizes_uppercase():
