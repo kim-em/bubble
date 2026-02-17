@@ -50,8 +50,8 @@ bubble leanprover/lean4 --no-interactive
 # Pause a bubble
 bubble pause mathlib4-pr-35219
 
-# Destroy permanently
-bubble destroy mathlib4-pr-35219
+# Pop (destroy permanently)
+bubble pop mathlib4-pr-35219
 ```
 
 ## How It Works
@@ -83,8 +83,8 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble <target>` | Open (or create) a bubble for a GitHub URL/repo |
 | `bubble list` | List all bubbles |
 | `bubble pause <name>` | Freeze a bubble |
-| `bubble destroy <name>` | Delete a bubble permanently |
-| `bubble cleanup` | Destroy all clean bubbles (no unsaved work) |
+| `bubble pop <name>` | Pop a bubble (delete permanently) |
+| `bubble cleanup` | Pop all clean bubbles (no unsaved work) |
 | `bubble images list\|build\|delete` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |

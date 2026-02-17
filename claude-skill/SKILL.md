@@ -62,9 +62,9 @@ bubble list --json
 # Pause (freeze) a bubble
 bubble pause mathlib4-pr-35219
 
-# Destroy permanently
-bubble destroy mathlib4-pr-35219
-bubble destroy mathlib4-pr-35219 --force
+# Pop (destroy permanently)
+bubble pop mathlib4-pr-35219
+bubble pop mathlib4-pr-35219 --force
 ```
 
 ### Images

@@ -100,7 +100,7 @@ def _save_tokens(tokens: dict[str, str]):
 
 
 def remove_relay_token(container_name: str):
-    """Remove all tokens for a container (e.g. on destroy)."""
+    """Remove all tokens for a container (e.g. on pop)."""
     tokens = _load_tokens()
     tokens = {t: c for t, c in tokens.items() if c != container_name}
     _save_tokens(tokens)

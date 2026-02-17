@@ -87,7 +87,7 @@ Uses iptables rules inside containers (not Incus ACLs) for portability across Co
 The default editor is VSCode via Remote SSH. Use `--shell` for a plain SSH session. The `open_editor()` function in `vscode.py` dispatches to the appropriate launcher.
 
 ### Remote SSH Hosts
-Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (or a configured `[remote] default_host`) causes `bubble open` to SSH to the remote, run `bubble open --machine-readable` there, then set up a chained SSH ProxyCommand locally. The `--local` flag overrides a configured default. Remote bubble lifecycle commands (`pause`, `destroy`) auto-route to the correct host via the local registry. Code is in `remote.py`.
+Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (or a configured `[remote] default_host`) causes `bubble open` to SSH to the remote, run `bubble open --machine-readable` there, then set up a chained SSH ProxyCommand locally. The `--local` flag overrides a configured default. Remote bubble lifecycle commands (`pause`, `pop`) auto-route to the correct host via the local registry. Code is in `remote.py`.
 
 ### Hetzner Cloud Support
 `bubble open --cloud <target>` auto-provisions a Hetzner Cloud server as a remote host. A single server runs Incus and hosts multiple containers, reusing the existing `remote.py` infrastructure. Code is in `cloud.py`.

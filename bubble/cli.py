@@ -622,7 +622,7 @@ def _find_existing_container(
 # ---------------------------------------------------------------------------
 
 
-BASIC_COMMANDS = {"open", "list", "pause", "pop"}
+BASIC_COMMANDS = {"list", "pause", "pop"}
 
 
 class BubbleGroup(click.Group):
@@ -1247,7 +1247,10 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
                     command=command)
 
 
-@main.command("open")
+# The "open" command is hidden from help because users invoke it implicitly via
+# `bubble TARGET`. It exists as an explicit subcommand because remote.py calls
+# `bubble open --no-interactive --machine-readable` on remote hosts.
+@main.command("open", hidden=True)
 @click.argument("target")
 @click.option("--editor", "editor_choice", type=click.Choice(["vscode", "shell"]),
               default=None, help="Editor to use (default: from config or vscode)")

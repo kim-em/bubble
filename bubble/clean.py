@@ -32,7 +32,7 @@ class CleanStatus:
 
 
 def check_clean(runtime: ContainerRuntime, name: str) -> CleanStatus:
-    """Check if a container is clean (safe to destroy without data loss).
+    """Check if a container is clean (safe to pop without data loss).
 
     Requires the container to be running. Returns CleanStatus with
     error set if the container is not running or the check fails.
