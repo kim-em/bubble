@@ -2578,16 +2578,21 @@ def doctor():
 
         all_ops = json.loads(result.stdout) if result.stdout.strip() else []
         # websocket ops are active exec/console sessions (e.g. VS Code SSH), not stuck
-        stuck = [op for op in all_ops if op.get("class") != "websocket"]
+        # Only "Running" operations can be stuck; "Success"/"Failure"/"Cancelled" are
+        # just completed history that Incus retains temporarily.
+        stuck = [
+            op for op in all_ops
+            if op.get("class") != "websocket" and op.get("status") == "Running"
+        ]
         if stuck:
             click.echo(f"  Found {len(stuck)} stuck operation(s):")
             for op in stuck:
                 desc = op.get("description", "unknown")
-                status = op.get("status", "unknown")
-                click.echo(f"    {desc} ({status})")
+                click.echo(f"    {desc}")
             issues += len(stuck)
             if click.confirm("  Cancel stuck operations?"):
                 cancelled = 0
+                errors = []
                 for op in stuck:
                     op_id = op.get("id", "")
                     if not op_id:
@@ -2595,17 +2600,22 @@ def doctor():
                     try:
                         subprocess.run(
                             ["incus", "operation", "delete", op_id],
-                            capture_output=True, check=True, timeout=10,
-                            stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, check=True,
+                            timeout=10, stdin=subprocess.DEVNULL,
                         )
                         cancelled += 1
-                    except Exception:
-                        pass
+                    except subprocess.CalledProcessError as e:
+                        msg = (e.stderr or "").strip()
+                        errors.append(f"    {op.get('description', op_id)}: {msg}")
+                    except Exception as e:
+                        errors.append(f"    {op.get('description', op_id)}: {e}")
                 if cancelled:
                     click.echo(f"  Cancelled {cancelled} operation(s).")
                     fixed += cancelled
-                else:
-                    click.echo("  Could not cancel operations.", err=True)
+                if errors:
+                    click.echo("  Could not cancel some operations:", err=True)
+                    for err_msg in errors:
+                        click.echo(err_msg, err=True)
         else:
             click.echo("  No stuck operations.")
     except (subprocess.CalledProcessError, FileNotFoundError):
