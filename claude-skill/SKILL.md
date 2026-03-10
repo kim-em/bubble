@@ -13,6 +13,8 @@ triggers:
 
 Use the `bubble` CLI to create and manage containerized development environments.
 
+For the full command reference, see the [README](https://github.com/kim-em/bubble#readme).
+
 ## When to Use
 
 - User wants to work on a PR in an isolated environment
@@ -22,90 +24,42 @@ Use the `bubble` CLI to create and manage containerized development environments
 - **Proactively suggest** bubbling when the user is about to checkout an unfamiliar PR
 - Language hooks auto-detect Lean 4 projects and provide pre-configured toolchains
 
-## Commands
+## Key Usage Patterns
 
-### Open a bubble (the primary command)
 ```bash
-# Full GitHub URL — just paste it
-bubble https://github.com/leanprover-community/mathlib4/pull/35219
+# Open a bubble for a GitHub PR (creates or re-attaches)
+bubble https://github.com/leanprover-community/mathlib4/pull/12345
+bubble mathlib4/pull/12345          # short form (learned on first use)
+bubble 12345                        # bare PR number (uses current repo)
 
-# Shorter forms
-bubble leanprover-community/mathlib4/pull/35219
-bubble mathlib4/pull/35219    # short names are learned after first use
-bubble mathlib4               # default branch
+# Open a bubble for a repo's default branch
+bubble mathlib4
 
-# Branch or commit
-bubble leanprover/lean4/tree/some-branch
-bubble leanprover/lean4/commit/abc123
-
-# From a local git repo
+# Open from a local path
 bubble .
-bubble ./path/to/repo
-bubble --path mydir
+bubble --path ./my-project
 
-# PR number shorthand (when in a cloned repo)
-bubble 123
+# SSH shell instead of VSCode
+bubble mathlib4 --shell
 
-# Options
-bubble mathlib4 --ssh            # SSH instead of VSCode
-bubble mathlib4 --no-interactive # Just create, don't attach
-bubble mathlib4 --no-network     # Skip network allowlisting
-bubble mathlib4 --name my-custom-name
-```
+# Run on a remote host or cloud
+bubble mathlib4 --ssh user@host
+bubble mathlib4 --cloud
 
-### Manage bubbles
-```bash
-# List all bubbles
+# List, pause, pop
 bubble list
-bubble list --json
+bubble pause <name>
+bubble pop <name>
 
-# Pause (freeze) a bubble
-bubble pause mathlib4-pr-35219
-
-# Pop (destroy permanently)
-bubble pop mathlib4-pr-35219
-bubble pop mathlib4-pr-35219 --force
-```
-
-### Images
-```bash
-bubble images list
-bubble images build base
-bubble images build lean
-```
-
-### Git store
-```bash
-# Refresh shared bare repo mirrors
-bubble git update
-```
-
-### Network
-```bash
-bubble network apply mathlib4-pr-35219
-bubble network remove mathlib4-pr-35219
-```
-
-### Automation
-```bash
-bubble automation install    # hourly git update, weekly image refresh
-bubble automation status
-bubble automation remove
-```
-
-### Bubble-in-bubble relay
-```bash
-bubble relay enable    # allow containers to open bubbles on the host
-bubble relay disable
-bubble relay status
+# Clean up bubbles with no unsaved work
+bubble cleanup
 ```
 
 ## Tips
 
-- Bubbles use shared git objects — creating a new one is fast (~seconds) even for large repos
+- Re-running `bubble <target>` for an existing bubble re-attaches (no duplicates)
+- Bubbles use shared git objects — creation is fast (~seconds) even for large repos
 - Each bubble has SSH access: `ssh bubble-<name>`
-- VSCode connects via Remote SSH automatically
-- If a bubble for the same target already exists, `bubble` re-attaches to it
-- Network allowlisting is applied by default — containers can only reach allowed domains
-- Language hooks auto-detect project type (Lean 4 via `lean-toolchain` file)
+- Network is allowlisted by default — containers can only reach approved domains
 - Config lives at `~/.bubble/config.toml`; data at `~/.bubble/`
+- **Never run `bubble` with `--no-interactive` on the user's behalf** — let the user run it themselves so they see live output and can interact with the result

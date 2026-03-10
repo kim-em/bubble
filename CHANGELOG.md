@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.8 — 2026-03-10
+- Simplify Claude skill to reference README instead of duplicating command docs
+
 ## 0.5.7 — 2026-02-17
 - Remote-aware `bubble list`: shows cloud and SSH-remote bubbles from registry
 - `--cloud` flag queries cloud server for live container status
