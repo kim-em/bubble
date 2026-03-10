@@ -2,6 +2,7 @@
 
 import os
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 if sys.version_info >= (3, 11):
@@ -100,3 +101,74 @@ def _deep_merge(base: dict, override: dict) -> dict:
 def repo_short_name(full_name: str) -> str:
     """Get the short name from org/repo format."""
     return full_name.split("/")[-1].lower()
+
+
+@dataclass
+class MountSpec:
+    """A user-specified host directory mount."""
+
+    source: str  # host path (~ expanded)
+    target: str  # container path
+    readonly: bool = True  # default read-only
+    exclude: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_cli(cls, spec: str) -> "MountSpec":
+        """Parse a --mount flag value: /host/path:/container/path[:ro|rw]"""
+        parts = spec.split(":")
+        if len(parts) < 2:
+            raise ValueError(
+                f"Invalid mount spec {spec!r}: expected /host/path:/container/path[:ro|rw]"
+            )
+        # Handle absolute paths on both sides — rejoin if we split too many times
+        # e.g. "/a:/b:ro" -> ["/a", "/b", "ro"]
+        # But we need to handle the mode suffix specially
+        mode = "ro"
+        if parts[-1] in ("ro", "rw"):
+            mode = parts.pop()
+        # Rejoin remaining parts — source:target with possible extra colons
+        if len(parts) < 2:
+            raise ValueError(
+                f"Invalid mount spec {spec!r}: expected /host/path:/container/path[:ro|rw]"
+            )
+        # Source is everything before the last path component
+        # Simple heuristic: target starts with / so split on ":/"
+        raw = ":".join(parts)
+        idx = raw.find(":/")
+        if idx == -1:
+            raise ValueError(
+                f"Invalid mount spec {spec!r}: container path must be absolute"
+            )
+        source = raw[:idx]
+        target = raw[idx + 1:]
+        source = str(Path(source).expanduser())
+        return cls(source=source, target=target, readonly=(mode == "ro"))
+
+    @classmethod
+    def from_config(cls, entry: dict) -> "MountSpec":
+        """Parse a [[mounts]] config entry."""
+        source = entry.get("source", "")
+        target = entry.get("target", "")
+        if not source or not target:
+            raise ValueError(f"Mount entry missing 'source' or 'target': {entry}")
+        mode = entry.get("mode", "ro")
+        if mode not in ("ro", "rw"):
+            raise ValueError(f"Invalid mount mode {mode!r}: expected 'ro' or 'rw'")
+        exclude = entry.get("exclude", [])
+        if isinstance(exclude, str):
+            exclude = [exclude]
+        source = str(Path(source).expanduser())
+        return cls(source=source, target=target, readonly=(mode == "ro"), exclude=exclude)
+
+
+def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSpec]:
+    """Merge mounts from config file and CLI flags.
+
+    CLI mounts take precedence (appended after config mounts).
+    """
+    mounts = []
+    for entry in config.get("mounts", []):
+        mounts.append(MountSpec.from_config(entry))
+    for spec in cli_mounts:
+        mounts.append(MountSpec.from_cli(spec))
+    return mounts

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.8 — 2026-03-10
+- User-configurable host directory mounts via `--mount` CLI flag and `[[mounts]]` config section
+- Supports read-only (default) and read-write modes
+- Subdirectory exclusion via `exclude` list (overmounts excluded paths with tmpfs)
+- RW mounts get `chmod 0o770` for proper UID mapping (matching existing shared_mounts pattern)
+
 ## 0.5.7 — 2026-02-17
 - Remote-aware `bubble list`: shows cloud and SSH-remote bubbles from registry
 - `--cloud` flag queries cloud server for live container status
