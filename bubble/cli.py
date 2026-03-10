@@ -594,6 +594,23 @@ def _maybe_install_automation():
         pass
 
 
+def _maybe_install_skill():
+    """Offer to install the Claude Code skill on first bubble creation."""
+    from .skill import claude_code_detected, install_skill, is_installed
+
+    try:
+        if not claude_code_detected() or is_installed():
+            return
+        click.echo()
+        click.echo("Claude Code detected at ~/.claude/ but the bubble skill isn't installed.")
+        if click.confirm("Install it now?", default=True):
+            msg = install_skill()
+            click.echo(f"  {msg}")
+            click.echo("  To manage later: bubble skill status")
+    except Exception:
+        pass
+
+
 def _find_existing_container(
     runtime: ContainerRuntime,
     target_str: str,
@@ -1232,6 +1249,7 @@ def _finalize_bubble(
         return
 
     _maybe_install_automation()
+    _maybe_install_skill()
 
     click.echo(f"Bubble '{name}' created successfully.")
     click.echo(f"  SSH: ssh bubble-{name}")
@@ -2740,6 +2758,71 @@ def cloud_default(setting):
         click.echo("Override with: bubble open --local <target>")
     else:
         click.echo("Cloud default disabled. Use --cloud flag for cloud bubbles.")
+
+
+# ---------------------------------------------------------------------------
+# skill
+# ---------------------------------------------------------------------------
+
+
+@main.group("skill")
+def skill_group():
+    """Manage the Claude Code bubble skill."""
+
+
+@skill_group.command("install")
+def skill_install():
+    """Install the bubble skill into ~/.claude/skills/."""
+    from .skill import claude_code_detected, diff_skill, install_skill, is_installed, is_up_to_date
+
+    if not claude_code_detected():
+        click.echo("~/.claude/ not found — Claude Code not detected. Skipping.")
+        return
+
+    if is_installed() and is_up_to_date():
+        click.echo("Bubble skill is already installed and up to date.")
+        return
+
+    if is_installed():
+        d = diff_skill()
+        if d:
+            click.echo("Skill update available:")
+            click.echo(d)
+            if not click.confirm("Update?"):
+                return
+
+    msg = install_skill()
+    click.echo(msg)
+
+
+@skill_group.command("uninstall")
+def skill_uninstall():
+    """Remove the bubble skill from ~/.claude/skills/."""
+    from .skill import uninstall_skill
+
+    msg = uninstall_skill()
+    click.echo(msg)
+
+
+@skill_group.command("status")
+def skill_status():
+    """Check if the bubble skill is installed and up to date."""
+    from .skill import claude_code_detected, is_installed, is_up_to_date
+
+    if not claude_code_detected():
+        click.echo("Claude Code not detected (~/.claude/ not found).")
+        return
+
+    if not is_installed():
+        click.echo("Bubble skill is not installed.")
+        click.echo("  Install with: bubble skill install")
+        return
+
+    if is_up_to_date():
+        click.echo("Bubble skill is installed and up to date.")
+    else:
+        click.echo("Bubble skill is installed but outdated.")
+        click.echo("  Update with: bubble skill install")
 
 
 @main.command()

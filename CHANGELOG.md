@@ -5,6 +5,9 @@
 - Supports read-only (default) and read-write modes
 - Subdirectory exclusion via `exclude` list (overmounts excluded paths with tmpfs)
 - Exclude entry validation prevents path traversal (`..`, absolute paths)
+- `bubble skill install/uninstall/status` commands for managing the Claude Code skill
+- Skill file bundled with the package at `bubble/data/skill.md`
+- First-run prompt: offer to install the skill on first `bubble open` when Claude Code is detected
 
 ## 0.5.7 — 2026-02-17
 - Remote-aware `bubble list`: shows cloud and SSH-remote bubbles from registry
