@@ -565,6 +565,12 @@ def _apply_network(
         for d in extra_domains:
             if d not in domains:
                 domains.append(d)
+    # Include runtime domains for enabled tools (e.g. API endpoints)
+    from .tools import resolve_tools, tool_runtime_domains
+
+    for d in tool_runtime_domains(resolve_tools(config)):
+        if d not in domains:
+            domains.append(d)
     if domains:
         try:
             from .network import apply_allowlist

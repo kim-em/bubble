@@ -16,21 +16,25 @@ SCRIPTS_DIR = Path(__file__).parent / "images" / "scripts" / "tools"
 #   script: filename in bubble/images/scripts/tools/
 #   host_cmd: command to check on host for "auto" detection
 #   network_domains: extra domains needed during install
+#   runtime_domains: domains needed at runtime (added to container firewall)
 TOOLS = {
     "claude": {
         "script": "claude.sh",
         "host_cmd": "claude",
         "network_domains": ["registry.npmjs.org", "deb.nodesource.com"],
+        "runtime_domains": ["api.anthropic.com", "statsig.anthropic.com", "sentry.io"],
     },
     "codex": {
         "script": "codex.sh",
         "host_cmd": "codex",
         "network_domains": ["registry.npmjs.org", "deb.nodesource.com"],
+        "runtime_domains": ["api.openai.com"],
     },
     "gh": {
         "script": "gh.sh",
         "host_cmd": "gh",
         "network_domains": ["cli.github.com"],
+        "runtime_domains": ["api.github.com", "github.com"],
     },
 }
 
@@ -93,6 +97,21 @@ def tool_network_domains(enabled_tools: list[str]) -> list[str]:
     domains = []
     for name in enabled_tools:
         for d in TOOLS[name].get("network_domains", []):
+            if d not in domains:
+                domains.append(d)
+    return domains
+
+
+def tool_runtime_domains(enabled_tools: list[str]) -> list[str]:
+    """Return network domains needed at runtime by the given tools.
+
+    These domains are added to the container's firewall allowlist for the
+    lifetime of the container, unlike network_domains which are only
+    available during installation.
+    """
+    domains = []
+    for name in enabled_tools:
+        for d in TOOLS[name].get("runtime_domains", []):
             if d not in domains:
                 domains.append(d)
     return domains
