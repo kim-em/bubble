@@ -200,8 +200,7 @@ def _cleanup_builder(runtime: ContainerRuntime, build_name: str):
     # Verify the container is actually gone before proceeding
     if any(c.name == build_name for c in runtime.list_containers()):
         raise RuntimeError(
-            f"Cannot remove leftover builder container '{build_name}'. "
-            f"Please delete it manually."
+            f"Cannot remove leftover builder container '{build_name}'. Please delete it manually."
         )
 
 
