@@ -227,7 +227,8 @@ class LeanHook(Hook):
                         "-",
                         "user",
                         "-c",
-                        f"git -c safe.directory={q_bare} clone --reference {q_bare} file://{q_bare} {q_pkg}",
+                        f"git -c safe.directory={q_bare} clone"
+                        f" --reference {q_bare} file://{q_bare} {q_pkg}",
                     ],
                 )
 
