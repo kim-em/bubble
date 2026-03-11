@@ -6,6 +6,7 @@ import subprocess
 
 import click
 
+from .config import DATA_DIR
 from .runtime.base import ContainerRuntime
 
 # Claude task command: reads prompt from file, runs Claude with skip-permissions,
@@ -16,67 +17,149 @@ CLAUDE_TASK_COMMAND = (
     " && rm -f .vscode/claude-prompt.txt"
 )
 
+TEMPLATES_DIR = DATA_DIR / "templates"
 
-def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) -> str | None:
-    """Fetch GitHub issue details and generate a Claude prompt.
+# Default issue prompt template. Placeholders:
+#   {owner}, {repo}, {issue_num}, {title}, {body}, {comments},
+#   {comments_section} (pre-formatted, empty when no comments), {branch}
+_DEFAULT_ISSUE_TEMPLATE = (
+    'Please read and understand GitHub issue #{issue_num}: "{title}".\n'
+    "\n"
+    "Issue description:\n"
+    "{body}\n"
+    "{comments_section}"
+    "\nPlease claim this issue (assign it to yourself if possible), "
+    "then implement a fix or feature as described. "
+    "Work on a branch named `{branch}`, and open a PR when done."
+)
 
-    Returns the prompt string, or None if the issue can't be fetched.
+# Default PR prompt template. Placeholders:
+#   {owner}, {repo}, {pr_num}, {title}, {body}, {branch}
+_DEFAULT_PR_TEMPLATE = (
+    'You are working on PR #{pr_num}: "{title}" in {owner}/{repo}'
+    " on branch `{branch}`.\n"
+    "\n"
+    "PR description:\n"
+    "{body}\n"
+    "\n"
+    "Please:\n"
+    "1. Check the CI status for this PR: `gh pr checks {pr_num}`\n"
+    "2. Build a numbered table of all PR comments (both review-level and"
+    " inline) with columns for: comment number, author, a summary of the"
+    " comment, and whether it has a response yet.\n"
+    "\n"
+    "This gives an overview of where things stand with this PR."
+)
+
+
+class _SafeDict(dict):
+    """Dict subclass that returns the key as a format placeholder for missing keys."""
+
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
+def _load_template(kind: str) -> str | None:
+    """Load a custom template from ~/.bubble/templates/<kind>.txt.
+
+    Returns the template string, or None if no custom template exists.
+    """
+    path = TEMPLATES_DIR / f"{kind}.txt"
+    if path.is_file():
+        return path.read_text()
+    return None
+
+
+def _render_template(template: str, **kwargs) -> str:
+    """Render a template with the given keyword variables.
+
+    Unknown placeholders are left as-is.
     """
     try:
+        return template.format_map(_SafeDict(**kwargs))
+    except (ValueError, KeyError):
+        # Malformed template — return as-is rather than crashing
+        return template
+
+
+def _fetch_github_item(owner: str, repo: str, endpoint: str, jq: str) -> str | None:
+    """Fetch a GitHub API endpoint via gh CLI, returning stdout or None on failure."""
+    try:
         result = subprocess.run(
-            [
-                "gh",
-                "api",
-                f"repos/{owner}/{repo}/issues/{issue_num}",
-                "--jq",
-                ".title,.body",
-            ],
+            ["gh", "api", f"repos/{owner}/{repo}/{endpoint}", "--jq", jq],
             capture_output=True,
             text=True,
             timeout=15,
         )
         if result.returncode != 0:
             return None
-        lines = result.stdout.split("\n", 1)
-        title = lines[0] if lines else ""
-        body = lines[1].strip() if len(lines) > 1 else ""
+        return result.stdout
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
 
+
+def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) -> str | None:
+    """Fetch GitHub issue details and generate a Claude prompt.
+
+    Returns the prompt string, or None if the issue can't be fetched.
+    Uses a custom template from ~/.bubble/templates/issue.txt if present,
+    otherwise falls back to the built-in default.
+    """
+    raw = _fetch_github_item(owner, repo, f"issues/{issue_num}", ".title,.body")
+    if raw is None:
+        return None
+    lines = raw.split("\n", 1)
+    title = lines[0] if lines else ""
+    body = lines[1].strip() if len(lines) > 1 else ""
+
     # Fetch comments (first 4000 chars)
     comments_text = ""
-    try:
-        result = subprocess.run(
-            [
-                "gh",
-                "api",
-                f"repos/{owner}/{repo}/issues/{issue_num}/comments",
-                "--jq",
-                ".[].body",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            comments_text = result.stdout.strip()[:4000]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+    raw_comments = _fetch_github_item(owner, repo, f"issues/{issue_num}/comments", ".[].body")
+    if raw_comments and raw_comments.strip():
+        comments_text = raw_comments.strip()[:4000]
 
-    prompt = (
-        f'Please read and understand GitHub issue #{issue_num}: "{title}".\n'
-        f"\n"
-        f"Issue description:\n"
-        f"{body}\n"
-    )
+    comments_section = ""
     if comments_text:
-        prompt += f"\nComments:\n{comments_text}\n"
-    prompt += (
-        f"\nPlease claim this issue (assign it to yourself if possible), "
-        f"then implement a fix or feature as described. "
-        f"Work on a branch named `{branch}`, and open a PR when done."
+        comments_section = f"\nComments:\n{comments_text}\n"
+
+    template = _load_template("issue") or _DEFAULT_ISSUE_TEMPLATE
+    return _render_template(
+        template,
+        owner=owner,
+        repo=repo,
+        issue_num=issue_num,
+        title=title,
+        body=body,
+        comments=comments_text,
+        comments_section=comments_section,
+        branch=branch,
     )
-    return prompt
+
+
+def generate_pr_prompt(owner: str, repo: str, pr_num: str, branch: str) -> str | None:
+    """Fetch GitHub PR details and generate a Claude prompt.
+
+    Returns the prompt string, or None if the PR can't be fetched.
+    Uses a custom template from ~/.bubble/templates/pr.txt if present,
+    otherwise falls back to the built-in default.
+    """
+    raw = _fetch_github_item(owner, repo, f"pulls/{pr_num}", ".title,.body")
+    if raw is None:
+        return None
+    lines = raw.split("\n", 1)
+    title = lines[0] if lines else ""
+    body = lines[1].strip() if len(lines) > 1 else ""
+
+    template = _load_template("pr") or _DEFAULT_PR_TEMPLATE
+    return _render_template(
+        template,
+        owner=owner,
+        repo=repo,
+        pr_num=pr_num,
+        title=title,
+        body=body,
+        branch=branch,
+    )
 
 
 def inject_claude_task(

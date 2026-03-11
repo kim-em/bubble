@@ -787,7 +787,7 @@ def open_cmd(
         )
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 
-        # Resolve Claude prompt: stdin flag > env var > auto-generate for issues
+        # Resolve Claude prompt: stdin flag > env var > auto-generate for issues/PRs
         # The stdin flag is set by _open_remote() which generates the prompt locally.
         claude_prompt = ""
         if claude_prompt_stdin:
@@ -799,6 +799,11 @@ def open_cmd(
 
             click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
             claude_prompt = generate_issue_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
+        elif not claude_prompt and t.kind == "pr" and not machine_readable:
+            from .claude import generate_pr_prompt
+
+            click.echo(f"Fetching PR #{t.ref} for Claude prompt...")
+            claude_prompt = generate_pr_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
 
         finalize_bubble(
             runtime,

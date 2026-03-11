@@ -20,6 +20,12 @@
   - emacs/neovim: build starts in background when editor opens via SSH
   - shell: build starts in background on first login via `.profile` hook
   - Build output saved to `~/build.log` inside the container
+- Templated Claude prompts for issues and PRs (#33)
+- PR bubbles now auto-inject a Claude prompt that checks CI status and summarizes PR comments
+- User-customizable prompt templates via `~/.bubble/templates/issue.txt` and `~/.bubble/templates/pr.txt`
+- Issue template placeholders: `{owner}`, `{repo}`, `{issue_num}`, `{title}`, `{body}`, `{comments}`, `{comments_section}`, `{branch}`
+- PR template placeholders: `{owner}`, `{repo}`, `{pr_num}`, `{title}`, `{body}`, `{branch}`
+- Falls back to built-in defaults when no custom template exists
 
 ## 0.5.15 — 2026-03-11
 - Split cli.py (~4200 lines) into focused modules (#45):
