@@ -20,26 +20,75 @@ PINS_FILE = SCRIPTS_DIR / "pins.json"
 #   host_cmd: command to check on host for "auto" detection
 #   network_domains: extra domains needed during install
 #   runtime_domains: domains needed at runtime (added to container firewall)
+#   priority: install order (lower = first). Language tools before editors.
 TOOLS = {
     "claude": {
         "script": "claude.sh",
         "host_cmd": "claude",
         "network_domains": ["registry.npmjs.org", "nodejs.org"],
         "runtime_domains": ["api.anthropic.com"],
+        "priority": 50,
     },
     "codex": {
         "script": "codex.sh",
         "host_cmd": "codex",
         "network_domains": ["registry.npmjs.org", "nodejs.org"],
         "runtime_domains": ["api.openai.com"],
+        "priority": 50,
+    },
+    "elan": {
+        "script": "elan.sh",
+        "host_cmd": "elan",
+        "network_domains": [
+            "raw.githubusercontent.com",
+            "api.github.com",
+            "github.com",
+        ],
+        "runtime_domains": [],
+        "priority": 10,
+    },
+    "emacs": {
+        "script": "emacs.sh",
+        "host_cmd": "emacs",
+        "network_domains": [],
+        "runtime_domains": [],
+        "priority": 90,
     },
     "gh": {
         "script": "gh.sh",
         "host_cmd": "gh",
         "network_domains": ["cli.github.com"],
         "runtime_domains": ["api.github.com", "github.com"],
+        "priority": 50,
+    },
+    "neovim": {
+        "script": "neovim.sh",
+        "host_cmd": "nvim",
+        "network_domains": [],
+        "runtime_domains": [],
+        "priority": 90,
+    },
+    "vscode": {
+        "script": "vscode.sh",
+        "host_cmd": "code",
+        "network_domains": [
+            "marketplace.visualstudio.com",
+            "*.gallery.vsassets.io",
+            "update.code.visualstudio.com",
+            "*.vo.msecnd.net",
+        ],
+        "runtime_domains": [
+            "marketplace.visualstudio.com",
+            "*.gallery.vsassets.io",
+            "update.code.visualstudio.com",
+            "*.vo.msecnd.net",
+        ],
+        "priority": 90,
     },
 }
+
+# Editor tools — only one is enabled at a time, based on the "editor" config key.
+EDITOR_TOOLS = {"vscode", "emacs", "neovim"}
 
 
 def load_pins() -> dict:
@@ -71,16 +120,33 @@ def _host_has_command(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
+def _sort_by_priority(tools: list[str]) -> list[str]:
+    """Sort tool names by (priority, name) for deterministic install order."""
+    return sorted(tools, key=lambda n: (TOOLS[n].get("priority", 50), n))
+
+
 def resolve_tools(config: dict) -> list[str]:
     """Resolve which tools should be installed based on config.
 
-    Returns sorted list of tool names that should be installed.
+    Returns list of tool names sorted by priority.
     Each tool's config value is "yes", "no", or "auto" (default).
     "auto" installs the tool if the corresponding command is found on the host.
+
+    Editor tools (vscode, emacs, neovim) are special: exactly one is enabled
+    based on the "editor" config key. The configured editor is treated as "yes"
+    unless explicitly set to "no" in [tools]. Other editors are skipped.
     """
     tools_config = config.get("tools", {})
+    editor = config.get("editor", "vscode")
     enabled = []
     for name, spec in sorted(TOOLS.items()):
+        # Editor tools use the "editor" config key, not "auto" detection
+        if name in EDITOR_TOOLS:
+            if name == editor and tools_config.get(name) != "no":
+                enabled.append(name)
+            elif tools_config.get(name) == "yes":
+                enabled.append(name)
+            continue
         setting = tools_config.get(name, "auto")
         if setting == "yes":
             enabled.append(name)
@@ -88,7 +154,7 @@ def resolve_tools(config: dict) -> list[str]:
             if _host_has_command(spec["host_cmd"]):
                 enabled.append(name)
         # "no" -> skip
-    return enabled
+    return _sort_by_priority(enabled)
 
 
 def tools_hash(enabled_tools: list[str]) -> str:
@@ -102,7 +168,7 @@ def tools_hash(enabled_tools: list[str]) -> str:
     pins = load_pins()
     h.update(json.dumps(pins, sort_keys=True).encode())
     h.update(b"\x00")
-    for name in sorted(enabled_tools):
+    for name in _sort_by_priority(enabled_tools):
         h.update(name.encode())
         h.update(b"\x00")
         script_path = SCRIPTS_DIR / TOOLS[name]["script"]
@@ -153,7 +219,7 @@ def combined_tool_script(enabled_tools: list[str]) -> str | None:
     if not enabled_tools:
         return None
     parts = ["#!/bin/bash", "set -euo pipefail", ""]
-    for name in sorted(enabled_tools):
+    for name in _sort_by_priority(enabled_tools):
         parts.append(f"# --- Install {name} ---")
         parts.append(tool_script(name))
         parts.append("")

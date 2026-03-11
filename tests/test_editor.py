@@ -2,105 +2,95 @@
 
 import subprocess
 
-from bubble.image_management import apply_editor_to_image as _apply_editor_to_image
-from bubble.image_management import editor_image_suffix as _editor_image_suffix
 from bubble.images.builder import IMAGES
+from bubble.tools import EDITOR_TOOLS, TOOLS, resolve_tools
 from bubble.vscode import open_editor
 
 
-class TestEditorImageSuffix:
-    def test_vscode_suffix(self):
-        assert _editor_image_suffix("vscode") == "-vscode"
+class TestEditorAsTools:
+    """Editors are now installed as pluggable tools, not image variants."""
 
-    def test_shell_no_suffix(self):
-        assert _editor_image_suffix("shell") == ""
+    def test_vscode_is_a_tool(self):
+        assert "vscode" in TOOLS
+        assert TOOLS["vscode"]["host_cmd"] == "code"
+        assert TOOLS["vscode"]["priority"] == 90
 
-    def test_emacs_suffix(self):
-        assert _editor_image_suffix("emacs") == "-emacs"
+    def test_emacs_is_a_tool(self):
+        assert "emacs" in TOOLS
+        assert TOOLS["emacs"]["host_cmd"] == "emacs"
 
-    def test_neovim_suffix(self):
-        assert _editor_image_suffix("neovim") == "-neovim"
+    def test_neovim_is_a_tool(self):
+        assert "neovim" in TOOLS
+        assert TOOLS["neovim"]["host_cmd"] == "nvim"
+
+    def test_editor_tools_set(self):
+        assert EDITOR_TOOLS == {"vscode", "emacs", "neovim"}
 
 
-class TestApplyEditorToImage:
-    def test_base_vscode(self):
-        assert _apply_editor_to_image("base", "vscode") == "base-vscode"
+class TestEditorToolResolution:
+    """Editor tool resolution follows the 'editor' config key."""
 
-    def test_base_emacs(self):
-        assert _apply_editor_to_image("base", "emacs") == "base-emacs"
+    def test_default_editor_is_vscode(self, monkeypatch):
+        monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+        config = {}
+        enabled = resolve_tools(config)
+        assert "vscode" in enabled
 
-    def test_base_neovim(self):
-        assert _apply_editor_to_image("base", "neovim") == "base-neovim"
+    def test_editor_emacs(self, monkeypatch):
+        monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+        config = {"editor": "emacs"}
+        enabled = resolve_tools(config)
+        assert "emacs" in enabled
+        assert "vscode" not in enabled
 
-    def test_base_shell(self):
-        assert _apply_editor_to_image("base", "shell") == "base"
+    def test_editor_neovim(self, monkeypatch):
+        monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+        config = {"editor": "neovim"}
+        enabled = resolve_tools(config)
+        assert "neovim" in enabled
+        assert "vscode" not in enabled
 
-    def test_lean_vscode(self):
-        assert _apply_editor_to_image("lean", "vscode") == "lean-vscode"
+    def test_editor_shell_no_editor_tool(self, monkeypatch):
+        monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+        config = {"editor": "shell"}
+        enabled = resolve_tools(config)
+        assert "vscode" not in enabled
+        assert "emacs" not in enabled
+        assert "neovim" not in enabled
 
-    def test_lean_emacs(self):
-        assert _apply_editor_to_image("lean", "emacs") == "lean-emacs"
+    def test_editor_can_be_disabled_via_tools(self, monkeypatch):
+        monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+        config = {"editor": "vscode", "tools": {"vscode": "no"}}
+        enabled = resolve_tools(config)
+        assert "vscode" not in enabled
 
-    def test_lean_neovim(self):
-        assert _apply_editor_to_image("lean", "neovim") == "lean-neovim"
-
-    def test_lean_shell(self):
-        assert _apply_editor_to_image("lean", "shell") == "lean"
-
-    def test_toolchain_vscode(self):
-        assert _apply_editor_to_image("lean-v4.27.0", "vscode") == "lean-vscode-v4.27.0"
-
-    def test_toolchain_emacs(self):
-        assert _apply_editor_to_image("lean-v4.27.0", "emacs") == "lean-emacs-v4.27.0"
-
-    def test_toolchain_neovim(self):
-        assert _apply_editor_to_image("lean-v4.27.0", "neovim") == "lean-neovim-v4.27.0"
-
-    def test_toolchain_shell(self):
-        assert _apply_editor_to_image("lean-v4.27.0", "shell") == "lean-v4.27.0"
-
-    def test_toolchain_rc_emacs(self):
-        assert _apply_editor_to_image("lean-v4.27.0-rc2", "emacs") == "lean-emacs-v4.27.0-rc2"
+    def test_editor_force_yes(self, monkeypatch):
+        monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+        config = {"editor": "shell", "tools": {"emacs": "yes"}}
+        enabled = resolve_tools(config)
+        assert "emacs" in enabled
 
 
 class TestImageRegistry:
-    """Verify the IMAGES registry has the expected editor variants."""
+    """Verify the simplified IMAGES registry (no editor variants)."""
 
-    def test_base_vscode_exists(self):
-        assert "base-vscode" in IMAGES
-        assert IMAGES["base-vscode"]["parent"] == "base"
-        assert IMAGES["base-vscode"]["script"] == "vscode.sh"
+    def test_only_base_and_lean(self):
+        assert set(IMAGES.keys()) == {"base", "lean"}
 
-    def test_base_emacs_exists(self):
-        assert "base-emacs" in IMAGES
-        assert IMAGES["base-emacs"]["parent"] == "base"
+    def test_base_exists(self):
+        assert IMAGES["base"]["script"] == "base.sh"
+        assert IMAGES["base"]["parent"] == "images:ubuntu/24.04"
 
-    def test_base_neovim_exists(self):
-        assert "base-neovim" in IMAGES
-        assert IMAGES["base-neovim"]["parent"] == "base"
-
-    def test_lean_is_core(self):
-        """lean image is the core image (elan + leantar, no editor)."""
+    def test_lean_exists(self):
         assert "lean" in IMAGES
         assert IMAGES["lean"]["parent"] == "base"
         assert IMAGES["lean"]["script"] == "lean.sh"
 
-    def test_lean_vscode_exists(self):
-        assert "lean-vscode" in IMAGES
-        assert IMAGES["lean-vscode"]["parent"] == "lean"
-        assert IMAGES["lean-vscode"]["script"] == "vscode.sh"
-
-    def test_lean_emacs_exists(self):
-        assert "lean-emacs" in IMAGES
-        assert IMAGES["lean-emacs"]["parent"] == "base-emacs"
-
-    def test_lean_neovim_exists(self):
-        assert "lean-neovim" in IMAGES
-        assert IMAGES["lean-neovim"]["parent"] == "base-neovim"
-
-    def test_no_lean_core_image(self):
-        """lean-core was renamed to lean."""
-        assert "lean-core" not in IMAGES
+    def test_no_editor_variants(self):
+        for name in IMAGES:
+            assert "-vscode" not in name
+            assert "-emacs" not in name
+            assert "-neovim" not in name
 
 
 class TestOpenEditorEmacs:

@@ -3,9 +3,9 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-# Skip if elan is already installed (e.g. via the elan tool in base image)
+# Skip if elan is already installed (idempotent)
 if [ -d /home/user/.elan ]; then
-    echo "elan already installed (from base image tools), skipping lean.sh."
+    echo "elan already installed, skipping."
     exit 0
 fi
 
@@ -44,4 +44,4 @@ fi
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
-echo "Lean core image setup complete."
+echo "elan tool setup complete."

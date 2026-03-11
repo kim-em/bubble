@@ -10,4 +10,4 @@ apt-get install -y -qq emacs-nox < /dev/null
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
-echo "Emacs image setup complete."
+echo "Emacs setup complete."

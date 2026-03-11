@@ -42,19 +42,16 @@ def register_images_commands(main):
         config = load_config()
         runtime = get_runtime(config)
 
-        # Parse toolchain images: lean-v4.X.Y, lean-emacs-v4.X.Y, lean-neovim-v4.X.Y
+        # Parse toolchain images: lean-v4.X.Y
         import re
 
-        tc_match = re.fullmatch(
-            r"(lean(?:-vscode|-emacs|-neovim)?)-(v\d+\.\d+\.\d+(?:-rc\d+)?)", image_name
-        )
+        tc_match = re.fullmatch(r"lean-(v\d+\.\d+\.\d+(?:-rc\d+)?)", image_name)
         if tc_match:
             from ..images.builder import build_lean_toolchain_image
 
-            base_lean = tc_match.group(1)
-            version = tc_match.group(2)
+            version = tc_match.group(1)
             try:
-                build_lean_toolchain_image(runtime, version, base_lean_image=base_lean)
+                build_lean_toolchain_image(runtime, version)
             except Exception as e:
                 click.echo(str(e), err=True)
                 sys.exit(1)

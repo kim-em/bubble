@@ -738,7 +738,7 @@ def open_cmd(
     # Resolve git source, detect language, and build image
     ensure_dirs()
     ref_path, mount_name = _resolve_ref_source(t, no_clone)
-    hook, image_name = detect_and_build_image(runtime, ref_path, t, editor=editor)
+    hook, image_name = detect_and_build_image(runtime, ref_path, t)
 
     # Pre-fetch dependency bare repos for Lake pre-population
     dep_mounts = {}  # repo_name -> host_path

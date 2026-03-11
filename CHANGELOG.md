@@ -1,16 +1,20 @@
 # Changelog
 
-## 0.5.17 — 2026-03-12
+## 0.6.0 — 2026-03-12
+- Migrate editors and elan to the pluggable tools system (#47)
+  - Editors (vscode, emacs, neovim) are now tools installed on the base image
+  - Elan + leantar is now a tool with `"auto"` detection (installs if elan is on host)
+  - Eliminates 6 editor-specific image variants (base-vscode, base-emacs, base-neovim, lean-vscode, lean-emacs, lean-neovim)
+  - IMAGES dict reduced to just `base` and `lean`
+  - Tools install in priority order: language tools (elan) before editors (vscode) so cross-tool setup works
+  - Editor selection via `editor` config key (default: vscode), individual tools overridable via `[tools]` section
+  - VS Code runtime domains (marketplace, gallery) now flow through the tool system instead of being hardcoded
 - Fix Claude integration for remote/cloud bubbles (#24):
   - Issue prompts are now auto-generated locally and forwarded to remote hosts
   - `BUBBLE_CLAUDE_PROMPT` env var now works with `--ssh` and `--cloud`
   - Claude task injection runs on the remote container host as expected
-
-## 0.5.16 — 2026-03-12
 - Fix `_purge_derived_images()` to recursively walk the full dependency tree (#69)
-  - Previously only purged direct children (e.g. `lean`, `base-vscode`) when `base` was rebuilt
-  - Now also purges second-level descendants (`lean-vscode`, `lean-emacs`, `lean-neovim`)
-  - Also purges dynamic toolchain images (`lean-v4.x.y`, `lean-emacs-v4.x.y`, etc.)
+  - Also purges dynamic toolchain images (`lean-v4.x.y`, etc.)
 - Fix race condition between background and foreground image builds (#67)
   - Add `fcntl`-based file locking to `build_image()` and `build_lean_toolchain_image()`
   - Concurrent builds of the same image now serialize; the second skips if the first completed

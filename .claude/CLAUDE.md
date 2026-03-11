@@ -37,9 +37,9 @@ bubble/
 │   ├── builder.py      # Image build via IMAGES registry dict (recursive parent building)
 │   └── scripts/
 │       ├── base.sh     # Ubuntu 24.04 + git + ssh + build-essential (user: "user")
-│       ├── lean.sh     # elan + VS Code Lean extension (derives from base, no toolchains)
+│       ├── lean.sh     # Fallback elan install (skipped if elan tool already installed)
 │       ├── lean-toolchain.sh  # Installs one specific Lean toolchain (for versioned images)
-│       └── tools/      # Per-tool install scripts (claude.sh, codex.sh, gh.sh)
+│       └── tools/      # Per-tool install scripts (claude.sh, codex.sh, elan.sh, emacs.sh, gh.sh, neovim.sh, vscode.sh)
 ```
 
 ## Key Design Decisions
@@ -64,13 +64,19 @@ The `hooks/` package provides a pluggable system for language-specific behavior.
 The core performance optimization. Host maintains bare mirror repos (`git clone --bare`). Containers clone with `git clone --reference /shared/git/repo.git url` — git alternates share immutable objects. Each container has fully independent refs/branches/working tree. `update_all_repos()` discovers repos from the `~/.bubble/git/*.git` directory listing.
 
 ### Image Registry
-Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. Static images: `base` (from Ubuntu 24.04) and `lean` (from base, elan + VS Code extension only, no toolchains).
+Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. There are only two static images: `base` (from Ubuntu 24.04) and `lean` (from base, fallback elan install). Editors and language tools are installed as pluggable tools on the base image, eliminating editor-specific image variants.
 
 ### Pluggable Tool Installation
-Tools like Claude Code, GitHub CLI, and OpenAI Codex can be installed in container images via the `[tools]` config section. Each tool has a self-contained install script in `bubble/images/scripts/tools/` and is registered in the `TOOLS` dict in `tools.py` with its script filename, host detection command, and required network domains. Config values are `"yes"`, `"no"`, or `"auto"` (default). `"auto"` checks if the tool's command exists on the host via `shutil.which()`. Tools are installed into the `base` image during `build_image("base")` — derived images inherit them. When the resolved tool set changes (detected via a content-aware hash stored in `~/.bubble/tools-hash`), a background rebuild of `base` is triggered, and stale derived images are purged.
+Tools are installed in container images via the `[tools]` config section. Each tool has a self-contained install script in `bubble/images/scripts/tools/` and is registered in the `TOOLS` dict in `tools.py` with its script filename, host detection command, required network domains, and a priority for install ordering. Tools include:
+
+- **Language tools** (priority 10): `elan` — auto-detected if elan is on the host
+- **General tools** (priority 50): `claude`, `codex`, `gh` — auto-detected via host commands
+- **Editors** (priority 90): `vscode`, `emacs`, `neovim` — driven by the `editor` config key
+
+Config values are `"yes"`, `"no"`, or `"auto"` (default). Editor tools are special: the configured editor (default: vscode) is treated as `"yes"` unless explicitly `"no"` in `[tools]`. Tools are installed into the `base` image during `build_image("base")` in priority order (language tools before editors, so vscode can detect elan and install Lean extensions). When the resolved tool set changes (detected via a content-aware hash stored in `~/.bubble/tools-hash`), the `base` image is rebuilt synchronously, and stale derived images are purged.
 
 ### Lazy Lean Toolchain Images
-The `lean` image has only elan (no toolchains pre-installed). When `LeanHook` detects a project, it reads `lean-toolchain` and parses the version. For stable/RC versions (v4.X.Y, v4.X.Y-rcK), it requests image `lean-v4.X.Y`. If that image exists, it's used directly. If not, the plain `lean` image is used (elan downloads the toolchain on demand) and a background build of the versioned image is triggered for next time. Dynamic images are built via `build_lean_toolchain_image()` in `builder.py`. Nightlies and custom toolchains always use the plain `lean` image.
+The `lean` image provides elan as a fallback for users who don't have elan on their host. When `LeanHook` detects a project, it reads `lean-toolchain` and parses the version. For stable/RC versions (v4.X.Y, v4.X.Y-rcK), it requests image `lean-v4.X.Y`. If that image exists, it's used directly. If not, the plain `lean` image is used (elan downloads the toolchain on demand) and a background build of the versioned image is triggered for next time. Dynamic images are built via `build_lean_toolchain_image()` in `builder.py`. Nightlies and custom toolchains always use the plain `lean` image.
 
 ### Colima on macOS
 Incus requires Linux. On macOS, Colima runs a lightweight Linux VM with Apple's Virtualization.Framework (`--vm-type vz`). The `ensure_colima()` function starts it if needed.
@@ -87,10 +93,10 @@ created → running ⇄ paused → destroyed
 ```
 
 ### Network Allowlisting
-Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Base allowlist comes from config.toml; hooks contribute additional domains (e.g., Lean adds `releases.lean-lang.org`).
+Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Base allowlist comes from config.toml; hooks contribute additional domains (e.g., Lean adds `releases.lean-lang.org`); enabled tools contribute runtime domains (e.g., vscode adds marketplace.visualstudio.com).
 
 ### Editor Selection
-The default editor is VSCode via Remote SSH. Use `--shell` for a plain SSH session. The `open_editor()` function in `vscode.py` dispatches to the appropriate launcher.
+The default editor is VSCode via Remote SSH. Use `--shell` for a plain SSH session, `--emacs` or `--neovim` for those editors. The editor is installed as a tool in the base image (so it's pre-baked, not installed per-container). The `open_editor()` function in `vscode.py` dispatches to the appropriate launcher.
 
 ### Remote SSH Hosts
 Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (or a configured `[remote] default_host`) causes `bubble open` to SSH to the remote, run `bubble open --machine-readable` there, then set up a chained SSH ProxyCommand locally. The `--local` flag overrides a configured default. Remote bubble lifecycle commands (`pause`, `pop`) auto-route to the correct host via the local registry. Code is in `remote.py`.
@@ -125,7 +131,7 @@ The `user` account has no sudo and a locked password. Network allowlisting is ap
 ## How to Add a New Tool
 
 1. Create `bubble/images/scripts/tools/<name>.sh` — a self-contained install script that runs as root
-2. Add an entry to the `TOOLS` dict in `bubble/tools.py` with `script`, `host_cmd`, and `network_domains`
+2. Add an entry to the `TOOLS` dict in `bubble/tools.py` with `script`, `host_cmd`, `network_domains`, `runtime_domains`, and `priority`
 3. Test with `bubble tools set <name> yes && bubble images build base`
 
 ## Code Quality
@@ -214,7 +220,7 @@ conn.commit()
 VS Code must be restarted after modifying this database.
 
 ### Pre-baked VS Code Server
-The base image pre-installs the VS Code Server binary matching the host's `code --version` commit hash. On each `bubble open`, if the hash has changed (VS Code updated), a background `bubble images build base` is triggered. The current bubble proceeds immediately; the next one gets the pre-baked server.
+When vscode is enabled as a tool (the default), the base image pre-installs the VS Code Server binary matching the host's `code --version` commit hash. On each `bubble open`, if the hash has changed (VS Code updated), a background `bubble images build base` is triggered. The current bubble proceeds immediately; the next one gets the pre-baked server.
 
 ## Changelog
 

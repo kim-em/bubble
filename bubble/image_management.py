@@ -35,7 +35,7 @@ def _spawn_background_bubble(args: list[str], log_path: str):
 
 
 def maybe_rebuild_base_image():
-    """If VS Code has updated since the base-vscode image was built, rebuild in background."""
+    """If VS Code has updated since the base image was built, rebuild in background."""
     commit = get_vscode_commit()
     if not commit:
         return
@@ -44,7 +44,7 @@ def maybe_rebuild_base_image():
     if is_build_locked("base-vscode"):
         return
     _spawn_background_bubble(
-        ["images", "build", "base-vscode"],
+        ["images", "build", "base"],
         "/tmp/bubble-vscode-rebuild.log",
     )
 
@@ -54,7 +54,7 @@ def maybe_rebuild_tools(runtime: ContainerRuntime):
 
     Rebuilds synchronously so that the container launched afterwards uses a
     fresh image with the correct tools baked in. The rebuild also purges
-    derived images (lean, base-vscode, etc.) so they get rebuilt on next use.
+    derived images (lean, etc.) so they get rebuilt on next use.
     """
     from .images.builder import TOOLS_HASH_FILE, build_image
     from .tools import resolve_tools, tools_hash
@@ -110,34 +110,7 @@ def maybe_rebuild_customize():
     )
 
 
-def editor_image_suffix(editor: str) -> str:
-    """Return the image name suffix for a given editor, or empty string for shell."""
-    if editor in ("vscode", "emacs", "neovim"):
-        return f"-{editor}"
-    return ""
-
-
-def apply_editor_to_image(image_name: str, editor: str) -> str:
-    """Transform an image name based on the editor.
-
-    Examples (editor="emacs"):
-      "base"         -> "base-emacs"
-      "lean"         -> "lean-emacs"
-      "lean-v4.27.0" -> "lean-emacs-v4.27.0"
-    """
-    suffix = editor_image_suffix(editor)
-    if not suffix:
-        return image_name
-
-    # For toolchain-specific images like "lean-v4.27.0", insert editor before version
-    if image_name.startswith("lean-v"):
-        version = image_name[len("lean-") :]
-        return f"lean{suffix}-{version}"
-
-    return f"{image_name}{suffix}"
-
-
-def detect_and_build_image(runtime, ref_path, t, editor="vscode"):
+def detect_and_build_image(runtime, ref_path, t):
     """Detect language hook and ensure image exists. Returns (hook, image_name)."""
     if t.kind == "pr":
         hook_ref = f"refs/pull/{t.ref}/head"
@@ -150,27 +123,23 @@ def detect_and_build_image(runtime, ref_path, t, editor="vscode"):
     hook = select_hook(ref_path, hook_ref)
     if hook:
         click.echo(f"  Detected: {hook.name()}")
-        base_image = hook.image_name()
+        image_name = hook.image_name()
     else:
-        base_image = "base"
-
-    image_name = apply_editor_to_image(base_image, editor)
+        image_name = "base"
 
     pending_toolchain_build = None
-    # Check for toolchain-specific images (e.g. "lean-v4.27.0" or "lean-emacs-v4.27.0")
-    is_toolchain_image = base_image.startswith("lean-v")
+    is_toolchain_image = image_name.startswith("lean-v")
     if not runtime.image_exists(image_name):
         if is_toolchain_image:
             # Toolchain-specific image doesn't exist yet — fall back to base lean
             # and build the toolchain image in the background for next time.
-            version = base_image[len("lean-") :]
-            fallback = apply_editor_to_image("lean", editor)
+            version = image_name[len("lean-") :]
             click.echo(
-                f"  Toolchain {version} image not cached, using {fallback} image"
+                f"  Toolchain {version} image not cached, using lean image"
                 f" (building {image_name} in background for next time)"
             )
-            pending_toolchain_build = (version, editor)
-            image_name = fallback
+            pending_toolchain_build = version
+            image_name = "lean"
         if not runtime.image_exists(image_name):
             click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
             from .images.builder import build_image
@@ -178,19 +147,18 @@ def detect_and_build_image(runtime, ref_path, t, editor="vscode"):
             build_image(runtime, image_name)
             click.echo(f"  {image_name} image ready.")
     elif is_toolchain_image:
-        version = base_image[len("lean-") :]
+        version = image_name[len("lean-") :]
         click.echo(f"  Using cached toolchain image ({version})")
 
     if pending_toolchain_build:
-        version, ed = pending_toolchain_build
-        _background_build_lean_toolchain(version, editor=ed)
+        _background_build_lean_toolchain(pending_toolchain_build)
 
     return hook, image_name
 
 
-def _background_build_lean_toolchain(version: str, editor: str = "vscode"):
+def _background_build_lean_toolchain(version: str):
     """Fire off a background build of a toolchain-specific Lean image."""
-    image_alias = apply_editor_to_image(f"lean-{version}", editor)
+    image_alias = f"lean-{version}"
     # Incus container names only allow alphanumeric + hyphens
     safe_alias = image_alias.replace(".", "-")
     # Skip if a build is already in progress (avoid spawning redundant processes)

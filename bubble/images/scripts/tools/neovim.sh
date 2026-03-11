@@ -10,4 +10,4 @@ apt-get install -y -qq neovim < /dev/null
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
-echo "Neovim image setup complete."
+echo "Neovim setup complete."
