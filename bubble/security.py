@@ -69,13 +69,15 @@ SETTINGS: dict[str, SecuritySettingDef] = {
 }
 
 # GitHub-related domains that are stripped from the network allowlist
-# when network_github is off.
+# when network_github is off. Includes API and CDN domains.
 GITHUB_DOMAINS = {
     "github.com",
+    "api.github.com",
     "raw.githubusercontent.com",
     "release-assets.githubusercontent.com",
     "objects.githubusercontent.com",
     "codeload.githubusercontent.com",
+    "cli.github.com",
 }
 
 

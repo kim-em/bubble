@@ -22,7 +22,6 @@ from .config import (
     editor_config_mounts,
     ensure_dirs,
     load_config,
-    load_raw_config,
     maybe_symlink_claude_projects,
     parse_mounts,
     repo_short_name,
@@ -568,9 +567,6 @@ def _apply_network(
 ):
     """Apply network allowlist to a container if configured."""
     domains = list(config.get("network", {}).get("allowlist", []))
-    # Strip GitHub domains when network_github is disabled
-    if not is_enabled(config, "network_github"):
-        domains = filter_github_domains(domains)
     # Always include VSCode infrastructure domains — bubble is a VSCode-first tool
     from .vscode import VSCODE_NETWORK_DOMAINS
 
@@ -587,6 +583,9 @@ def _apply_network(
     for d in tool_runtime_domains(resolve_tools(config)):
         if d not in domains:
             domains.append(d)
+    # Strip ALL GitHub domains after merging all sources (base, hooks, tools)
+    if not is_enabled(config, "network_github"):
+        domains = filter_github_domains(domains)
     if domains:
         try:
             from .network import apply_allowlist
@@ -1787,10 +1786,12 @@ def open_cmd(
 
     config = load_config()
 
-    # Enforce security: reject --mount when user_mounts is locked off
-    if mounts and is_locked_off(config, "user_mounts"):
+    # Enforce security: reject all user mounts when user_mounts is locked off
+    # This covers both --mount CLI flags and [[mounts]] from config
+    user_mounts_locked = is_locked_off(config, "user_mounts")
+    if user_mounts_locked and (mounts or config.get("mounts")):
         click.echo(
-            "Error: --mount rejected because security.user_mounts=off. "
+            "Error: user mounts rejected because security.user_mounts=off. "
             "Re-enable: bubble config set security.user_mounts on",
             err=True,
         )
@@ -1846,6 +1847,10 @@ def open_cmd(
         if editor not in valid_editors:
             click.echo(f"Warning: unknown editor '{editor}' in config, using vscode.", err=True)
             editor = "vscode"
+
+    # Print security posture warnings (for auto settings)
+    if not machine_readable:
+        print_warnings(config)
 
     # Native mode: skip all container/remote logic
     if native:
@@ -1928,11 +1933,6 @@ def open_cmd(
         print_warnings(config)
 
     # Resolve claude_credentials: CLI flag > config > default (False)
-    # Track whether the user made a deliberate choice (CLI flag or config setting)
-    credentials_from_cli = claude_credentials is not None
-    raw = load_raw_config()
-    credentials_in_config = "claude" in raw and "credentials" in raw["claude"]
-    credentials_explicitly_set = credentials_from_cli or credentials_in_config
     if claude_credentials is None:
         claude_credentials = config.get("claude", {}).get("credentials", False)
 
@@ -3331,7 +3331,9 @@ def relay_disable():
     """Disable bubble-in-bubble relay."""
     config = load_config()
     config.setdefault("relay", {})["enabled"] = False
-    config.setdefault("security", {})["relay"] = "off"
+    # Reset security.relay to auto (not off) so relay enable works as a toggle.
+    # Use 'bubble config set security.relay off' to permanently lock it off.
+    config.setdefault("security", {}).pop("relay", None)
     save_config(config)
 
     from .automation import remove_relay_daemon
@@ -3593,6 +3595,14 @@ def cloud_status():
 @click.argument("args", nargs=-1)
 def cloud_ssh_cmd(args):
     """SSH directly to the cloud server."""
+    config = load_config()
+    if is_locked_off(config, "cloud_root"):
+        click.echo(
+            "Error: cloud SSH rejected because security.cloud_root=off. "
+            "Re-enable: bubble config set security.cloud_root on",
+            err=True,
+        )
+        sys.exit(1)
     from .cloud import cloud_ssh
 
     cloud_ssh(list(args) if args else None)
