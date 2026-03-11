@@ -19,10 +19,12 @@ from .config import (
     DATA_DIR,
     NATIVE_DIR,
     claude_config_mounts,
+    editor_config_mounts,
     ensure_dirs,
     has_claude_credentials,
     load_config,
     load_raw_config,
+    maybe_symlink_claude_projects,
     parse_mounts,
     repo_short_name,
     save_config,
@@ -808,6 +810,43 @@ def _maybe_rebuild_tools(runtime: ContainerRuntime):
     build_image(runtime, "base")
 
 
+def _maybe_rebuild_customize():
+    """If the user customization script has changed, trigger a background rebuild of all images.
+
+    Compares the current hash of ~/.bubble/customize.sh against the stored
+    hash from the last build. If different (or script was added/removed),
+    triggers a background base image rebuild. Derived images are purged
+    during the rebuild so they pick up the changes on next use.
+    """
+    from .images.builder import CUSTOMIZE_HASH_FILE, customize_hash
+
+    current = customize_hash()
+
+    if CUSTOMIZE_HASH_FILE.exists():
+        stored = CUSTOMIZE_HASH_FILE.read_text().strip()
+    else:
+        stored = None
+
+    # No script and no previous hash — nothing to do
+    if current is None and stored is None:
+        return
+    # Hash matches — nothing to do
+    if current == stored:
+        return
+
+    if current is None:
+        click.echo("Customization script removed, rebuilding base image in background...")
+    elif stored is None:
+        click.echo("Customization script detected, rebuilding base image in background...")
+    else:
+        click.echo("Customization script changed, rebuilding base image in background...")
+
+    _spawn_background_bubble(
+        ["images", "build", "base"],
+        "/tmp/bubble-customize-rebuild.log",
+    )
+
+
 def _generate_bubble_name(t, custom_name: str | None) -> str:
     """Generate a container name from a parsed target."""
     if custom_name:
@@ -994,6 +1033,7 @@ def _provision_container(
     network=False,
     user_mounts=None,
     claude_mounts=None,
+    editor_mounts=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     click.echo("  Launching container...", nl=False)
@@ -1093,6 +1133,42 @@ def _provision_container(
                 str(projects_dir),
                 "/home/user/.claude/projects",
             )
+
+    # Mount editor config directories (read-only config, read-write data/state)
+    if editor_mounts:
+        for i, m in enumerate(editor_mounts):
+            # Ensure parent directories exist in the container
+            parent = str(Path(m.target).parent)
+            runtime.exec(
+                name,
+                [
+                    "bash",
+                    "-c",
+                    f"mkdir -p {shlex.quote(parent)} && chown -R user:user {shlex.quote(parent)}",
+                ],
+            )
+            runtime.add_disk(
+                name,
+                f"editor-config-{i}",
+                m.source,
+                m.target,
+                readonly=m.readonly,
+            )
+            # Apply exclusions by overmounting with writable tmpfs (same pattern
+            # as user mounts). This lets the editor write to plugin/cache subdirs
+            # within a read-only config mount.
+            for excluded in m.exclude:
+                exc_path = f"{m.target.rstrip('/')}/{excluded}"
+                runtime.exec(
+                    name,
+                    [
+                        "bash",
+                        "-c",
+                        f"mkdir -p {shlex.quote(exc_path)}"
+                        f" && mount -t tmpfs tmpfs {shlex.quote(exc_path)}"
+                        f" && chown user:user {shlex.quote(exc_path)}",
+                    ],
+                )
 
     # Add user-specified mounts (from --mount flags and [[mounts]] config)
     if user_mounts:
@@ -1502,6 +1578,8 @@ def _open_remote(
     git_email="",
     command=None,
     claude_config=True,
+    new_branch=None,
+    base_ref=None,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -1515,6 +1593,8 @@ def _open_remote(
             git_name=git_name,
             git_email=git_email,
             claude_config=claude_config,
+            new_branch=new_branch,
+            base_ref=base_ref,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -1758,6 +1838,8 @@ def open_cmd(
                 err=True,
             )
             sys.exit(1)
+        if base_ref and not new_branch:
+            click.echo("Warning: --base has no effect without -b/--new-branch", err=True)
         _open_remote(
             remote_host,
             target,
@@ -1770,6 +1852,8 @@ def open_cmd(
             git_email=git_email,
             command=command_args,
             claude_config=claude_config,
+            new_branch=new_branch,
+            base_ref=base_ref,
         )
         return
 
@@ -1796,6 +1880,15 @@ def open_cmd(
                 " to mount Claude auth into this bubble.",
                 err=True,
             )
+        # Offer to symlink ~/.bubble/claude-projects/ to ~/.claude/projects/
+        if not machine_readable:
+            maybe_symlink_claude_projects()
+
+    # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
+    ec_mounts = editor_config_mounts(editor)
+    if ec_mounts:
+        user_targets = {Path(m.target) for m in mount_specs}
+        ec_mounts = [m for m in ec_mounts if not _mount_overlaps(Path(m.target), user_targets)]
 
     # Local flow
     runtime = get_runtime(config)
@@ -1803,6 +1896,7 @@ def open_cmd(
     if not machine_readable:
         _maybe_rebuild_base_image()
         _maybe_rebuild_tools(runtime)
+        _maybe_rebuild_customize()
 
     # Check if target matches an existing container
     existing = _find_existing_container(runtime, target)
@@ -1909,6 +2003,7 @@ def open_cmd(
             network=network,
             user_mounts=mount_specs,
             claude_mounts=cc_mounts,
+            editor_mounts=ec_mounts,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
 
@@ -3335,7 +3430,7 @@ def cloud_provision(server_type, location, list_types):
     Use --list to see all available server types with current pricing.
     """
     if list_types:
-        from .cloud import list_server_types
+        from .cloud_types import list_server_types
 
         config = load_config()
         list_server_types(config, location=location)

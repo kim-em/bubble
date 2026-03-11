@@ -1,0 +1,35 @@
+Please read and understand GitHub issue #37: "Persistent config for Claude credentials mounting".
+
+Issue description:
+Currently `--claude-credentials` must be passed on every `bubble open` invocation. There's no way to make it the default.
+
+## Proposed changes
+
+### Config setting
+
+Add a `[claude]` section to `~/.bubble/config.toml`:
+
+```toml
+[claude]
+credentials = true   # default: false
+```
+
+When set, `--claude-credentials` behavior is enabled by default. `--no-claude-credentials` on the CLI would override it.
+
+### CLI command
+
+Add a subcommand for toggling this:
+
+```bash
+bubble claude credentials on    # sets [claude] credentials = true
+bubble claude credentials off   # sets [claude] credentials = false
+bubble claude status            # shows current settings
+```
+
+This would also suppress the nag message ("Tip: use --claude-credentials...") when credentials are explicitly disabled via `bubble claude credentials off`, since the user has made a deliberate choice.
+
+🤖 Prepared with Claude Code
+
+
+
+Please claim this issue (assign it to yourself if possible), then implement a fix or feature as described. Work on a branch named `issue-37`, and open a PR when done.

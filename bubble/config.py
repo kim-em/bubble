@@ -2,6 +2,8 @@
 
 import copy
 import os
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -258,6 +260,120 @@ def has_claude_credentials() -> bool:
     return any((CLAUDE_CONFIG_DIR / item).exists() for item in _CLAUDE_CREDENTIAL_ITEMS)
 
 
+# Editor config directories to mount into containers.
+# Config is read-only; data/state directories are mounted read-write so
+# plugin managers and caches can function.
+#
+# For Emacs legacy layout (~/.emacs.d/), the entire directory is the config
+# AND the data store. We mount it read-only with exclusions for known
+# writable subdirectories, which get tmpfs overlays so Emacs can write to
+# them without modifying the host.
+_EDITOR_CONFIG = {
+    "emacs": {
+        # Config: XDG (~/.config/emacs/) preferred, fall back to ~/.emacs.d/
+        "config": [
+            (Path.home() / ".config" / "emacs", "/home/user/.config/emacs"),
+            (Path.home() / ".emacs.d", "/home/user/.emacs.d"),
+        ],
+        # Data dirs: writable so plugin managers (straight.el, elpaca, etc.)
+        # and byte-compilation can work.
+        "data": [
+            (Path.home() / ".local" / "share" / "emacs", "/home/user/.local/share/emacs"),
+            (Path.home() / ".cache" / "emacs", "/home/user/.cache/emacs"),
+        ],
+        # Writable subdirectories within the config dir (for legacy ~/.emacs.d/ layout).
+        # These get tmpfs overlays so the editor can write to them.
+        "config_writable_subdirs": [
+            "elpa",
+            "eln-cache",
+            "straight",
+            "elpaca",
+            "auto-save-list",
+            "transient",
+            ".cache",
+        ],
+    },
+    "neovim": {
+        "config": [
+            (Path.home() / ".config" / "nvim", "/home/user/.config/nvim"),
+        ],
+        "data": [
+            (Path.home() / ".local" / "share" / "nvim", "/home/user/.local/share/nvim"),
+            (Path.home() / ".local" / "state" / "nvim", "/home/user/.local/state/nvim"),
+            (Path.home() / ".cache" / "nvim", "/home/user/.cache/nvim"),
+        ],
+        "config_writable_subdirs": [],
+    },
+}
+
+# Directories that are considered safe parents for editor config paths.
+# Symlinks that resolve outside these trees are rejected.
+_EDITOR_SAFE_ROOTS = [
+    Path.home() / ".config",
+    Path.home() / ".emacs.d",
+    Path.home() / ".local",
+    Path.home() / ".cache",
+]
+
+
+def _safe_editor_path(host_path: Path) -> Path | None:
+    """Return host_path if it's a real directory within expected locations.
+
+    Rejects symlinks that escape the expected config/data tree to prevent
+    exposing arbitrary host directories into containers.
+    """
+    if not host_path.is_dir():
+        return None
+    resolved = host_path.resolve()
+    for root in _EDITOR_SAFE_ROOTS:
+        try:
+            root_resolved = root.resolve()
+            resolved.relative_to(root_resolved)
+            return resolved
+        except ValueError:
+            continue
+    return None
+
+
+def editor_config_mounts(editor: str) -> list[MountSpec]:
+    """Return mounts for editor config directories that exist on the host.
+
+    Config directories are mounted read-only (with exclusions for known
+    writable subdirectories). Data/state/cache directories are mounted
+    read-write so plugin managers and caches can function.
+
+    Only returns mounts for directories that actually exist on the host.
+    Data dirs are only mounted if a config dir was found.
+    """
+    spec = _EDITOR_CONFIG.get(editor)
+    if not spec:
+        return []
+    mounts: list[MountSpec] = []
+    config_found = False
+    writable_subdirs = spec.get("config_writable_subdirs", [])
+    # Mount config dirs read-only (pick first that exists)
+    for host_path, container_path in spec["config"]:
+        resolved = _safe_editor_path(host_path)
+        if resolved is not None:
+            # Filter exclusions to only those that exist on the host
+            exclude = [d for d in writable_subdirs if (resolved / d).exists()]
+            mounts.append(
+                MountSpec(
+                    source=str(resolved), target=container_path, readonly=True, exclude=exclude
+                )
+            )
+            config_found = True
+            break  # Only mount the first matching config location
+    if not config_found:
+        return []
+    # Mount data dirs read-write (all that exist, only if config was found)
+    for host_path, container_path in spec["data"]:
+        resolved = _safe_editor_path(host_path)
+        if resolved is not None:
+            mounts.append(MountSpec(source=str(resolved), target=container_path, readonly=False))
+    return mounts
+
+
 def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSpec]:
     """Merge mounts from config file and CLI flags.
 
@@ -275,3 +391,92 @@ def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSp
             raise ValueError(f"Duplicate mount target: {m.target}")
         seen.add(m.target)
     return mounts
+
+
+CLAUDE_PROJECTS_DIR = DATA_DIR / "claude-projects"
+
+
+def _is_inside_git_repo(path: Path) -> bool:
+    """Check if a path is inside a git repository."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--git-dir"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def maybe_symlink_claude_projects() -> None:
+    """Offer to replace ~/.bubble/claude-projects/ with a symlink to ~/.claude/projects/.
+
+    If ~/.claude/projects/ is inside a git repo and ~/.bubble/claude-projects/ is a real
+    directory (not already a symlink), prompt the user to replace it with a symlink.
+    This lets bubble session state live inside the git-tracked directory and get
+    synced across machines automatically.
+    """
+    import sys
+
+    claude_projects = CLAUDE_CONFIG_DIR / "projects"
+    bubble_projects = CLAUDE_PROJECTS_DIR
+
+    # Nothing to do if ~/.claude/projects/ doesn't exist or isn't in a git repo
+    if not claude_projects.is_dir() or not _is_inside_git_repo(claude_projects):
+        return
+
+    # Already a symlink — nothing to do
+    if bubble_projects.is_symlink():
+        return
+
+    # If ~/.bubble/claude-projects/ doesn't exist yet, just create the symlink
+    if not bubble_projects.exists():
+        bubble_projects.parent.mkdir(parents=True, exist_ok=True)
+        bubble_projects.symlink_to(claude_projects)
+        return
+
+    # Don't prompt if stdin is not a TTY (scripted/CI usage)
+    if not sys.stdin.isatty():
+        return
+
+    # It's a real directory — prompt the user
+    import click
+
+    if not click.confirm(
+        f"{claude_projects} is git-tracked. Replace {bubble_projects}\n"
+        f"with a symlink to {claude_projects} so bubble session state is tracked too?",
+        default=False,
+    ):
+        return
+
+    # Merge existing contents into ~/.claude/projects/
+    # Move unique items; for conflicts, copy bubble-only files into the
+    # destination so nothing is silently lost.
+    for child in bubble_projects.iterdir():
+        dest = claude_projects / child.name
+        if not dest.exists():
+            shutil.move(str(child), str(dest))
+        elif child.is_dir() and dest.is_dir():
+            # Recursively merge directory contents that only exist in bubble
+            _merge_dir(child, dest)
+        else:
+            click.echo(f"  Skipping {child.name} (already exists in {claude_projects})")
+
+    # Replace with symlink — use rmtree since conflicts may leave remnants
+    shutil.rmtree(str(bubble_projects))
+    bubble_projects.symlink_to(claude_projects)
+
+
+def _merge_dir(src: Path, dest: Path) -> None:
+    """Recursively move items from src into dest, skipping existing names."""
+    import click
+
+    for item in src.iterdir():
+        target = dest / item.name
+        if not target.exists():
+            shutil.move(str(item), str(target))
+        elif item.is_dir() and target.is_dir():
+            _merge_dir(item, target)
+        else:
+            click.echo(f"  Skipping {item.name} (already exists in {dest})")

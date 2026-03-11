@@ -199,10 +199,37 @@ def _ensure_incus_remote():
     )
 
 
+def _check_colima_dns() -> bool:
+    """Check if DNS resolution works inside the Colima VM."""
+    try:
+        result = subprocess.run(
+            ["colima", "ssh", "--", "cat", "/etc/resolv.conf"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            return False
+        # Check that the file has actual content with a nameserver
+        return "nameserver" in result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
 def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
     """Ensure Colima is running with correct settings. Restart if needed."""
     if not is_colima_running():
         print("Starting Colima VM (one-time setup)...", file=sys.stderr)
+        start_colima(cpu, memory, disk, vm_type)
+    elif not _check_colima_dns():
+        print("Colima VM DNS is broken, restarting...", file=sys.stderr)
+        subprocess.run(
+            ["colima", "stop"],
+            capture_output=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
         start_colima(cpu, memory, disk, vm_type)
 
     _ensure_incus_remote()

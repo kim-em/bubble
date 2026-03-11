@@ -108,6 +108,9 @@ Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (o
 
 **State:** `~/.bubble/cloud.json` tracks server ID, IP, SSH key ID. Token comes from `HETZNER_TOKEN` env var (never stored).
 
+### User Customization Script
+Users can place a `customize.sh` script at `~/.bubble/customize.sh` to run custom setup in all container images. The script runs as root as the final step when building any image (base, lean, lean-v4.X.Y). This lets users add tools, dotfiles, shell config, etc. without forking image scripts. The script's content hash is tracked in `~/.bubble/customize-hash`; on `bubble open`, if the hash differs from the stored value, a background rebuild of the base image is triggered (same pattern as VS Code commit hash drift). Code is in `builder.py` (`customize_hash()`, `_run_customize_script()`).
+
 ### Security Model
 The `user` account has no sudo and a locked password. Network allowlisting is applied on container creation. SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Each container mounts only its specific bare repo, not the entire git store.
 
@@ -151,6 +154,8 @@ Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest
 - `~/.bubble/mathlib-cache/` — shared writable mathlib cache (mounted into Lean containers)
 - `~/.bubble/vscode-commit` — VS Code commit hash baked into current base image
 - `~/.bubble/tools-hash` — hash of installed tools + script contents (for drift detection)
+- `~/.bubble/customize.sh` — user customization script (run as final step in all image builds)
+- `~/.bubble/customize-hash` — hash of customize.sh (for drift detection)
 - `~/.bubble/cloud.json` — Hetzner Cloud server state (ID, IP, SSH key ID)
 - `~/.bubble/cloud_key` — SSH private key for cloud server (ed25519, mode 0600)
 - `~/.bubble/known_hosts` — SSH known_hosts for cloud server (isolated from ~/.ssh/)
