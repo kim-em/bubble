@@ -210,13 +210,13 @@ def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -
     """Resolve a Claude prompt on the local machine for remote bubbles.
 
     Checks BUBBLE_CLAUDE_PROMPT env var first, then auto-generates for issue
-    targets using the local gh CLI (which may not exist on remote hosts).
+    and PR targets using the local gh CLI (which may not exist on remote hosts).
     """
     prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
     if prompt:
         return prompt
 
-    # Try to parse the target to detect issue targets
+    # Try to parse the target to detect issue/PR targets
     try:
         from .repo_registry import RepoRegistry
         from .target import parse_target
@@ -228,6 +228,12 @@ def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -
             branch = new_branch or f"issue-{t.ref}"
             click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
             prompt = generate_issue_prompt(t.owner, t.repo, t.ref, branch) or ""
+        elif t.kind == "pr":
+            from .claude import generate_pr_prompt
+
+            branch = new_branch or f"pr-{t.ref}"
+            click.echo(f"Fetching PR #{t.ref} for Claude prompt...")
+            prompt = generate_pr_prompt(t.owner, t.repo, t.ref, branch) or ""
     except Exception:
         pass
 
@@ -787,7 +793,7 @@ def open_cmd(
         )
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 
-        # Resolve Claude prompt: stdin flag > env var > auto-generate for issues
+        # Resolve Claude prompt: stdin flag > env var > auto-generate for issues/PRs
         # The stdin flag is set by _open_remote() which generates the prompt locally.
         claude_prompt = ""
         if claude_prompt_stdin:
@@ -799,6 +805,11 @@ def open_cmd(
 
             click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
             claude_prompt = generate_issue_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
+        elif not claude_prompt and t.kind == "pr" and not machine_readable:
+            from .claude import generate_pr_prompt
+
+            click.echo(f"Fetching PR #{t.ref} for Claude prompt...")
+            claude_prompt = generate_pr_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
 
         finalize_bubble(
             runtime,
