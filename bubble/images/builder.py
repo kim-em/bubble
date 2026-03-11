@@ -196,6 +196,20 @@ def get_vscode_commit() -> str | None:
     return None
 
 
+def _cleanup_builder(runtime: ContainerRuntime, build_name: str):
+    """Ensure no leftover builder container exists from a previous failed attempt."""
+    try:
+        runtime.delete(build_name, force=True)
+    except Exception:
+        pass
+
+    # Verify the container is actually gone before proceeding
+    if any(c.name == build_name for c in runtime.list_containers()):
+        raise RuntimeError(
+            f"Cannot remove leftover builder container '{build_name}'. Please delete it manually."
+        )
+
+
 def build_image(runtime: ContainerRuntime, image_name: str):
     """Build any known image by name. Builds parent images recursively if needed."""
     if image_name not in IMAGES:
@@ -213,10 +227,7 @@ def build_image(runtime: ContainerRuntime, image_name: str):
     print(f"Building {image_name} image...")
 
     # Clean up any leftover builder from a previous failed attempt
-    try:
-        runtime.delete(build_name, force=True)
-    except Exception:
-        pass
+    _cleanup_builder(runtime, build_name)
 
     # Launch from parent
     runtime.launch(build_name, parent)
@@ -270,10 +281,7 @@ def build_lean_toolchain_image(
     print(f"Building {alias} image...")
 
     # Clean up any leftover builder from a previous failed attempt
-    try:
-        runtime.delete(build_name, force=True)
-    except Exception:
-        pass
+    _cleanup_builder(runtime, build_name)
 
     runtime.launch(build_name, base_lean_image)
     try:
