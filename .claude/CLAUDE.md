@@ -125,6 +125,10 @@ The `user` account has no sudo and a locked password. Network allowlisting is ap
 2. Add an entry to the `TOOLS` dict in `bubble/tools.py` with `script`, `host_cmd`, and `network_domains`
 3. Test with `bubble tools set <name> yes && bubble images build base`
 
+## Code Quality
+
+Before committing, run `uv run ruff check --fix . && uv run ruff format .` to ensure code passes linting and formatting.
+
 ## Running Tests
 
 Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest`).
