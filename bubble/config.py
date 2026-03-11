@@ -174,13 +174,15 @@ def _validate_exclude(entry: str) -> None:
 CLAUDE_CONFIG_DIR = Path.home() / ".claude"
 
 # Specific items from ~/.claude to mount read-only into containers.
-# Only these are mounted; credentials, session history, and transient
-# state are excluded by omission.
+# Only these are mounted; session history and transient state are
+# excluded by omission.
 _CLAUDE_CONFIG_ITEMS = [
     "CLAUDE.md",
     "settings.json",
     "skills",
     "keybindings.json",
+    ".credentials.json",
+    ".current-account",
 ]
 
 

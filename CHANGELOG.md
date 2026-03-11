@@ -1,8 +1,8 @@
 # Changelog
 
 ## 0.5.9 — 2026-03-11
-- Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json)
-- Credentials, session history, and transient state are excluded by design
+- Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json, credentials)
+- Session history and transient state are excluded by design
 - Opt out with `--no-claude-config`
 
 ## 0.5.8 — 2026-03-10

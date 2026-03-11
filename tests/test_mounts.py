@@ -368,17 +368,21 @@ class TestClaudeConfigMounts:
         (claude_dir / "settings.json").write_text("{}")
         (claude_dir / "skills").mkdir()
         (claude_dir / "keybindings.json").write_text("{}")
+        (claude_dir / ".credentials.json").write_text("{}")
+        (claude_dir / ".current-account").write_text("acct")
 
         monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
 
         mounts = claude_config_mounts()
 
-        assert len(mounts) == 4
+        assert len(mounts) == 6
         targets = {m.target for m in mounts}
         assert "/home/user/.claude/CLAUDE.md" in targets
         assert "/home/user/.claude/settings.json" in targets
         assert "/home/user/.claude/skills" in targets
         assert "/home/user/.claude/keybindings.json" in targets
+        assert "/home/user/.claude/.credentials.json" in targets
+        assert "/home/user/.claude/.current-account" in targets
         assert all(m.readonly for m in mounts)
 
     def test_skips_missing_files(self, tmp_path, monkeypatch):
@@ -402,14 +406,30 @@ class TestClaudeConfigMounts:
 
         assert mounts == []
 
-    def test_excludes_sensitive_files(self, tmp_path, monkeypatch):
-        """Sensitive files like credentials are NOT mounted."""
+    def test_includes_credentials(self, tmp_path, monkeypatch):
+        """Credential files are mounted for authentication."""
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
+        (claude_dir / ".current-account").write_text("acct")
+
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+
+        mounts = claude_config_mounts()
+
+        targets = {m.target for m in mounts}
+        assert "/home/user/.claude/.credentials.json" in targets
+        assert "/home/user/.claude/.current-account" in targets
+        assert all(m.readonly for m in mounts)
+
+    def test_excludes_transient_state(self, tmp_path, monkeypatch):
+        """Session history and transient state are NOT mounted."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
         (claude_dir / "projects").mkdir()
         (claude_dir / "stats-cache.json").write_text("{}")
-        (claude_dir / ".current-account").write_text("acct")
+        (claude_dir / "history.jsonl").write_text("")
+        (claude_dir / "todos").mkdir()
 
         monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
 
