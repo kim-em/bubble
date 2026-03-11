@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.14 — 2026-03-11
+- Inject GitHub auth token into bubbles so `gh` CLI works inside containers (#38)
+- New `--gh-token` flag on `bubble open` (opt-in, default disabled)
+- Persistent config via `bubble gh token on/off` and `bubble gh status`
+- Token is obtained from host's `gh auth token` and injected via `gh auth login --with-token`
+- Nag tip shown when host has `gh` auth but `--gh-token` is not enabled
+
 ## 0.5.13 — 2026-03-11
 - Persistent config for Claude credentials: `bubble claude credentials on/off` and `[claude] credentials` in config.toml (#37)
 - `bubble claude status` shows current Claude settings
