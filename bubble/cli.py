@@ -1115,6 +1115,21 @@ def _provision_container(
                 m.target,
                 readonly=m.readonly,
             )
+            # Apply exclusions by overmounting with writable tmpfs (same pattern
+            # as user mounts). This lets the editor write to plugin/cache subdirs
+            # within a read-only config mount.
+            for excluded in m.exclude:
+                exc_path = f"{m.target.rstrip('/')}/{excluded}"
+                runtime.exec(
+                    name,
+                    [
+                        "bash",
+                        "-c",
+                        f"mkdir -p {shlex.quote(exc_path)}"
+                        f" && mount -t tmpfs tmpfs {shlex.quote(exc_path)}"
+                        f" && chown user:user {shlex.quote(exc_path)}",
+                    ],
+                )
 
     # Add user-specified mounts (from --mount flags and [[mounts]] config)
     if user_mounts:

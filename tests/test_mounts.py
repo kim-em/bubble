@@ -801,6 +801,14 @@ class TestRemoteClaudeConfig:
 class TestEditorConfigMounts:
     """Test automatic editor config mounting for emacs/neovim."""
 
+    def _patch_editor(self, monkeypatch, tmp_path, editor_config):
+        """Helper: patch both _EDITOR_CONFIG and _EDITOR_SAFE_ROOTS for tmp_path."""
+        monkeypatch.setattr("bubble.config._EDITOR_CONFIG", editor_config)
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_SAFE_ROOTS",
+            [tmp_path / ".config", tmp_path / ".emacs.d", tmp_path / ".local", tmp_path / ".cache"],
+        )
+
     def test_vscode_returns_empty(self):
         """VSCode doesn't need host config mounts."""
         assert editor_config_mounts("vscode") == []
@@ -818,8 +826,9 @@ class TestEditorConfigMounts:
         config_dir.mkdir(parents=True)
         (config_dir / "init.el").write_text(";; init")
 
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "emacs": {
                     "config": [
@@ -827,6 +836,7 @@ class TestEditorConfigMounts:
                         (tmp_path / ".emacs.d", "/home/user/.emacs.d"),
                     ],
                     "data": [],
+                    "config_writable_subdirs": [],
                 },
             },
         )
@@ -842,8 +852,9 @@ class TestEditorConfigMounts:
         emacs_d.mkdir()
         (emacs_d / "init.el").write_text(";; init")
 
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "emacs": {
                     "config": [
@@ -851,6 +862,7 @@ class TestEditorConfigMounts:
                         (emacs_d, "/home/user/.emacs.d"),
                     ],
                     "data": [],
+                    "config_writable_subdirs": [],
                 },
             },
         )
@@ -867,8 +879,9 @@ class TestEditorConfigMounts:
         emacs_d = tmp_path / ".emacs.d"
         emacs_d.mkdir()
 
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "emacs": {
                     "config": [
@@ -876,6 +889,7 @@ class TestEditorConfigMounts:
                         (emacs_d, "/home/user/.emacs.d"),
                     ],
                     "data": [],
+                    "config_writable_subdirs": [],
                 },
             },
         )
@@ -893,8 +907,9 @@ class TestEditorConfigMounts:
         cache_dir = tmp_path / ".cache" / "emacs"
         cache_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "emacs": {
                     "config": [
@@ -904,6 +919,7 @@ class TestEditorConfigMounts:
                         (share_dir, "/home/user/.local/share/emacs"),
                         (cache_dir, "/home/user/.cache/emacs"),
                     ],
+                    "config_writable_subdirs": [],
                 },
             },
         )
@@ -924,14 +940,16 @@ class TestEditorConfigMounts:
         nvim_dir.mkdir(parents=True)
         (nvim_dir / "init.lua").write_text("-- init")
 
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "neovim": {
                     "config": [
                         (nvim_dir, "/home/user/.config/nvim"),
                     ],
                     "data": [],
+                    "config_writable_subdirs": [],
                 },
             },
         )
@@ -952,8 +970,9 @@ class TestEditorConfigMounts:
         cache_dir = tmp_path / ".cache" / "nvim"
         cache_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "neovim": {
                     "config": [
@@ -964,6 +983,7 @@ class TestEditorConfigMounts:
                         (state_dir, "/home/user/.local/state/nvim"),
                         (cache_dir, "/home/user/.cache/nvim"),
                     ],
+                    "config_writable_subdirs": [],
                 },
             },
         )
@@ -981,8 +1001,9 @@ class TestEditorConfigMounts:
         share_dir = tmp_path / ".local" / "share" / "nvim"
         share_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "neovim": {
                     "config": [
@@ -993,6 +1014,7 @@ class TestEditorConfigMounts:
                         (tmp_path / ".local" / "state" / "nvim", "/home/user/.local/state/nvim"),
                         (tmp_path / ".cache" / "nvim", "/home/user/.cache/nvim"),
                     ],
+                    "config_writable_subdirs": [],
                 },
             },
         )
@@ -1002,8 +1024,9 @@ class TestEditorConfigMounts:
 
     def test_no_config_dir_returns_empty(self, tmp_path, monkeypatch):
         """Returns empty when no config directory exists."""
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "emacs": {
                     "config": [
@@ -1013,6 +1036,7 @@ class TestEditorConfigMounts:
                     "data": [
                         (tmp_path / "nonexistent3", "/home/user/.local/share/emacs"),
                     ],
+                    "config_writable_subdirs": [],
                 },
             },
         )
@@ -1020,23 +1044,130 @@ class TestEditorConfigMounts:
         mounts = editor_config_mounts("emacs")
         assert mounts == []
 
+    def test_data_dirs_skipped_when_no_config(self, tmp_path, monkeypatch):
+        """Data dirs are NOT mounted when no config directory exists."""
+        # Only data dirs exist, no config dir
+        share_dir = tmp_path / ".local" / "share" / "nvim"
+        share_dir.mkdir(parents=True)
+
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
+            {
+                "neovim": {
+                    "config": [
+                        (tmp_path / ".config" / "nvim", "/home/user/.config/nvim"),
+                    ],
+                    "data": [
+                        (share_dir, "/home/user/.local/share/nvim"),
+                    ],
+                    "config_writable_subdirs": [],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("neovim")
+        assert mounts == []
+
     def test_sources_are_absolute(self, tmp_path, monkeypatch):
         """Mount sources use absolute paths."""
         nvim_dir = tmp_path / ".config" / "nvim"
         nvim_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            "bubble.config._EDITOR_CONFIG",
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
             {
                 "neovim": {
                     "config": [(nvim_dir, "/home/user/.config/nvim")],
                     "data": [],
+                    "config_writable_subdirs": [],
                 },
             },
         )
 
         mounts = editor_config_mounts("neovim")
         assert Path(mounts[0].source).is_absolute()
+
+    def test_rejects_symlinks_escaping_safe_roots(self, tmp_path, monkeypatch):
+        """Symlinks that escape safe root directories are rejected."""
+        # Create a secret dir outside safe roots
+        secret = tmp_path / "secret"
+        secret.mkdir()
+        # Create a config dir that's a symlink to the secret dir
+        config_link = tmp_path / ".config" / "nvim"
+        config_link.parent.mkdir(parents=True)
+        config_link.symlink_to(secret)
+
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
+            {
+                "neovim": {
+                    "config": [(config_link, "/home/user/.config/nvim")],
+                    "data": [],
+                    "config_writable_subdirs": [],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("neovim")
+        assert mounts == []
+
+    def test_allows_symlinks_within_safe_roots(self, tmp_path, monkeypatch):
+        """Symlinks within safe root directories are allowed."""
+        real_dir = tmp_path / ".config" / "nvim-real"
+        real_dir.mkdir(parents=True)
+        (real_dir / "init.lua").write_text("-- init")
+        link_dir = tmp_path / ".config" / "nvim"
+        link_dir.symlink_to(real_dir)
+
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
+            {
+                "neovim": {
+                    "config": [(link_dir, "/home/user/.config/nvim")],
+                    "data": [],
+                    "config_writable_subdirs": [],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("neovim")
+        assert len(mounts) == 1
+
+    def test_emacs_d_writable_subdirs(self, tmp_path, monkeypatch):
+        """Legacy ~/.emacs.d/ gets exclusions for known writable subdirs."""
+        emacs_d = tmp_path / ".emacs.d"
+        emacs_d.mkdir()
+        (emacs_d / "init.el").write_text(";; init")
+        # Create some writable subdirs that should be excluded
+        (emacs_d / "elpa").mkdir()
+        (emacs_d / "eln-cache").mkdir()
+
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
+            {
+                "emacs": {
+                    "config": [
+                        (tmp_path / ".config" / "emacs", "/home/user/.config/emacs"),
+                        (emacs_d, "/home/user/.emacs.d"),
+                    ],
+                    "data": [],
+                    "config_writable_subdirs": ["elpa", "eln-cache", "straight"],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("emacs")
+        assert len(mounts) == 1
+        assert mounts[0].readonly is True
+        # Only existing subdirs should appear in exclude list
+        assert "elpa" in mounts[0].exclude
+        assert "eln-cache" in mounts[0].exclude
+        assert "straight" not in mounts[0].exclude  # doesn't exist on host
 
 
 class TestEditorConfigProvisioning:
@@ -1144,3 +1275,37 @@ class TestEditorConfigProvisioning:
         disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
         editor_disk_calls = [c for c in disk_calls if "editor-config" in c[2]]
         assert len(editor_disk_calls) == 0
+
+    def test_exclusions_create_tmpfs_overlays(self, mock_runtime, tmp_path):
+        """Verify exclusions create tmpfs exec calls in container."""
+        from bubble.cli import _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        editor_mounts = [
+            MountSpec(
+                source="/home/testuser/.emacs.d",
+                target="/home/user/.emacs.d",
+                readonly=True,
+                exclude=["elpa", "eln-cache"],
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            editor_mounts=editor_mounts,
+        )
+
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        tmpfs_execs = [c for c in exec_calls if "tmpfs" in " ".join(c[2])]
+        assert len(tmpfs_execs) == 2
+        # Check paths include the exclusion subdirs
+        all_cmds = " ".join(" ".join(c[2]) for c in tmpfs_execs)
+        assert "/home/user/.emacs.d/elpa" in all_cmds
+        assert "/home/user/.emacs.d/eln-cache" in all_cmds

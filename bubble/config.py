@@ -243,9 +243,14 @@ def has_claude_credentials() -> bool:
     return any((CLAUDE_CONFIG_DIR / item).exists() for item in _CLAUDE_CREDENTIAL_ITEMS)
 
 
-# Editor config directories to mount read-only.
+# Editor config directories to mount into containers.
 # Config is read-only; data/state directories are mounted read-write so
 # plugin managers and caches can function.
+#
+# For Emacs legacy layout (~/.emacs.d/), the entire directory is the config
+# AND the data store. We mount it read-only with exclusions for known
+# writable subdirectories, which get tmpfs overlays so Emacs can write to
+# them without modifying the host.
 _EDITOR_CONFIG = {
     "emacs": {
         # Config: XDG (~/.config/emacs/) preferred, fall back to ~/.emacs.d/
@@ -259,6 +264,17 @@ _EDITOR_CONFIG = {
             (Path.home() / ".local" / "share" / "emacs", "/home/user/.local/share/emacs"),
             (Path.home() / ".cache" / "emacs", "/home/user/.cache/emacs"),
         ],
+        # Writable subdirectories within the config dir (for legacy ~/.emacs.d/ layout).
+        # These get tmpfs overlays so the editor can write to them.
+        "config_writable_subdirs": [
+            "elpa",
+            "eln-cache",
+            "straight",
+            "elpaca",
+            "auto-save-list",
+            "transient",
+            ".cache",
+        ],
     },
     "neovim": {
         "config": [
@@ -269,31 +285,75 @@ _EDITOR_CONFIG = {
             (Path.home() / ".local" / "state" / "nvim", "/home/user/.local/state/nvim"),
             (Path.home() / ".cache" / "nvim", "/home/user/.cache/nvim"),
         ],
+        "config_writable_subdirs": [],
     },
 }
+
+# Directories that are considered safe parents for editor config paths.
+# Symlinks that resolve outside these trees are rejected.
+_EDITOR_SAFE_ROOTS = [
+    Path.home() / ".config",
+    Path.home() / ".emacs.d",
+    Path.home() / ".local",
+    Path.home() / ".cache",
+]
+
+
+def _safe_editor_path(host_path: Path) -> Path | None:
+    """Return host_path if it's a real directory within expected locations.
+
+    Rejects symlinks that escape the expected config/data tree to prevent
+    exposing arbitrary host directories into containers.
+    """
+    if not host_path.is_dir():
+        return None
+    resolved = host_path.resolve()
+    for root in _EDITOR_SAFE_ROOTS:
+        try:
+            root_resolved = root.resolve()
+            resolved.relative_to(root_resolved)
+            return resolved
+        except ValueError:
+            continue
+    return None
 
 
 def editor_config_mounts(editor: str) -> list[MountSpec]:
     """Return mounts for editor config directories that exist on the host.
 
-    Config directories are mounted read-only. Data/state/cache directories
-    are mounted read-write so plugin managers and caches can function.
+    Config directories are mounted read-only (with exclusions for known
+    writable subdirectories). Data/state/cache directories are mounted
+    read-write so plugin managers and caches can function.
 
     Only returns mounts for directories that actually exist on the host.
+    Data dirs are only mounted if a config dir was found.
     """
     spec = _EDITOR_CONFIG.get(editor)
     if not spec:
         return []
     mounts: list[MountSpec] = []
+    config_found = False
+    writable_subdirs = spec.get("config_writable_subdirs", [])
     # Mount config dirs read-only (pick first that exists)
     for host_path, container_path in spec["config"]:
-        if host_path.is_dir():
-            mounts.append(MountSpec(source=str(host_path), target=container_path, readonly=True))
+        resolved = _safe_editor_path(host_path)
+        if resolved is not None:
+            # Filter exclusions to only those that exist on the host
+            exclude = [d for d in writable_subdirs if (resolved / d).exists()]
+            mounts.append(
+                MountSpec(
+                    source=str(resolved), target=container_path, readonly=True, exclude=exclude
+                )
+            )
+            config_found = True
             break  # Only mount the first matching config location
-    # Mount data dirs read-write (all that exist)
+    if not config_found:
+        return []
+    # Mount data dirs read-write (all that exist, only if config was found)
     for host_path, container_path in spec["data"]:
-        if host_path.is_dir():
-            mounts.append(MountSpec(source=str(host_path), target=container_path, readonly=False))
+        resolved = _safe_editor_path(host_path)
+        if resolved is not None:
+            mounts.append(MountSpec(source=str(resolved), target=container_path, readonly=False))
     return mounts
 
 
