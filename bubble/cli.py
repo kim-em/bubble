@@ -565,6 +565,12 @@ def _apply_network(
         for d in extra_domains:
             if d not in domains:
                 domains.append(d)
+    # Include runtime domains for enabled tools (e.g. API endpoints)
+    from .tools import resolve_tools, tool_runtime_domains
+
+    for d in tool_runtime_domains(resolve_tools(config)):
+        if d not in domains:
+            domains.append(d)
     if domains:
         try:
             from .network import apply_allowlist
@@ -3015,15 +3021,7 @@ def network_apply(name):
     runtime = get_runtime(config, ensure_ready=False)
     _ensure_running(runtime, name)
 
-    domains = config.get("network", {}).get("allowlist", [])
-    if not domains:
-        click.echo("No domains in allowlist. Edit ~/.bubble/config.toml", err=True)
-        sys.exit(1)
-
-    from .network import apply_allowlist
-
-    apply_allowlist(runtime, name, domains)
-    click.echo(f"Network allowlist applied to '{name}' ({len(domains)} domains).")
+    _apply_network(runtime, name, config)
 
 
 @network_group.command("remove")

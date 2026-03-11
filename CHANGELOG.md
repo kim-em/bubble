@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.11 — 2026-03-11
+- Tools now declare runtime network domains (e.g. `api.anthropic.com` for Claude Code) that persist in the container firewall, fixing connectivity for tools at runtime (#49)
+
 ## 0.5.10 — 2026-03-11
 - Pluggable tool installation system: tools like Claude Code, Codex, and GitHub CLI can be installed in container images
 - Per-tool install scripts in `bubble/images/scripts/tools/` (self-contained, run as root during image build)

@@ -7,6 +7,7 @@ from bubble.tools import (
     combined_tool_script,
     resolve_tools,
     tool_network_domains,
+    tool_runtime_domains,
     tool_script,
     tools_hash,
 )
@@ -110,6 +111,29 @@ def test_tool_network_domains_combined():
 def test_tool_network_domains_no_duplicates():
     domains = tool_network_domains(["claude", "codex"])
     assert domains.count("registry.npmjs.org") == 1
+
+
+def test_tool_runtime_domains():
+    domains = tool_runtime_domains(["claude"])
+    assert "api.anthropic.com" in domains
+
+
+def test_tool_runtime_domains_combined():
+    domains = tool_runtime_domains(["claude", "gh"])
+    assert "api.anthropic.com" in domains
+    assert "api.github.com" in domains
+    assert "github.com" in domains
+
+
+def test_tool_runtime_domains_no_duplicates():
+    domains = tool_runtime_domains(["claude", "gh"])
+    # Each domain should appear exactly once
+    assert len(domains) == len(set(domains))
+
+
+def test_tool_runtime_domains_empty():
+    domains = tool_runtime_domains([])
+    assert domains == []
 
 
 def test_combined_tool_script_none_when_empty():
