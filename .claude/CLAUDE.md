@@ -174,7 +174,7 @@ Container                              Host
 ## VS Code Integration Notes
 
 ### Workspace Trust
-The workspace trust dialog is a **local VS Code client** decision, not controlled by remote server settings. We pass `--disable-workspace-trust` when launching VS Code in `open_vscode()`. Writing to `.vscode-server/data/Machine/settings.json` or `User/settings.json` inside the container does NOT suppress the trust prompt.
+The workspace trust dialog is a **local VS Code client** decision, not controlled by remote server settings. We pass `--disable-workspace-trust` when launching VS Code in `open_vscode()` — this works on the desktop CLI but is unsupported by the VS Code Remote CLI helper, so we suppress stderr to avoid the warning. Writing to `.vscode-server/data/Machine/settings.json` or `User/settings.json` inside the container does NOT suppress the trust prompt.
 
 ### Clearing Trust State for Testing
 VS Code stores trusted workspace URIs in a SQLite database. To clear bubble-related trust entries:
