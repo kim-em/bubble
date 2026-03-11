@@ -11,7 +11,14 @@
   - `native.py`: non-containerized workspace mode
   - `commands/list_cmd.py`: list command and formatting helpers
   - `commands/lifecycle.py`: pause, pop, cleanup commands
-- cli.py reduced to ~1900 lines: Click infrastructure, open command orchestration, and small command groups
+  - `commands/images.py`: image list, build, delete commands
+  - `commands/infrastructure.py`: git, network, automation command groups
+  - `commands/relay_cmd.py`: relay enable, disable, status, daemon
+  - `commands/remote_cmd.py`: remote host management commands
+  - `commands/cloud_cmd.py`: Hetzner Cloud management commands
+  - `commands/settings.py`: skill, claude, tools, gh, config command groups
+  - `commands/doctor.py`: diagnostic doctor command
+- cli.py reduced to ~815 lines: Click infrastructure and open command orchestration only
 - All extracted modules under 420 lines each
 - Pure refactor: no behavior changes
 
