@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.12 — 2026-03-11
+- Persistent config for Claude credentials: `bubble claude credentials on/off` and `[claude] credentials` in config.toml (#37)
+- `bubble claude status` shows current Claude settings
+- Nag message suppressed when credentials are explicitly configured (on or off)
+- Fix shallow copy bug in `DEFAULT_CONFIG` that could leak state between config loads
+
 ## 0.5.11 — 2026-03-11
 - Tools now declare runtime network domains (e.g. `api.anthropic.com` for Claude Code) that persist in the container firewall, fixing connectivity for tools at runtime (#49)
 

@@ -1,5 +1,6 @@
 """Configuration management for bubble."""
 
+import copy
 import os
 import sys
 from dataclasses import dataclass, field
@@ -58,6 +59,9 @@ DEFAULT_CONFIG = {
         "server_name": "bubble-cloud",
         "default": False,
     },
+    "claude": {
+        "credentials": False,
+    },
     "tools": {},
 }
 
@@ -77,7 +81,7 @@ def load_config() -> dict:
         # Merge with defaults (user overrides)
         config = _deep_merge(DEFAULT_CONFIG, user_config)
     else:
-        config = DEFAULT_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_CONFIG)
         save_config(config)
     return config
 
