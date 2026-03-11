@@ -780,13 +780,14 @@ def _maybe_rebuild_base_image():
     )
 
 
-def _maybe_rebuild_tools():
-    """If the resolved tool set has changed since base was built, rebuild in background.
+def _maybe_rebuild_tools(runtime: ContainerRuntime):
+    """If the resolved tool set has changed since base was built, rebuild base now.
 
-    The background rebuild updates the base image for future containers.
-    The current container gets tools injected directly via _inject_tools().
+    Rebuilds synchronously so that the container launched afterwards uses a
+    fresh image with the correct tools baked in. The rebuild also purges
+    derived images (lean, base-vscode, etc.) so they get rebuilt on next use.
     """
-    from .images.builder import TOOLS_HASH_FILE
+    from .images.builder import TOOLS_HASH_FILE, build_image
     from .tools import resolve_tools, tools_hash
 
     config = load_config()
@@ -796,73 +797,8 @@ def _maybe_rebuild_tools():
     if TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash:
         return
 
-    # Use a lock file to prevent concurrent rebuilds
-    lock_path = Path("/tmp/bubble-tools-rebuild.lock")
-    try:
-        lock_path.touch(exist_ok=False)
-    except FileExistsError:
-        return  # Another rebuild is already in progress
-
-    _spawn_background_bubble(
-        ["images", "build", "base"],
-        "/tmp/bubble-tools-rebuild.log",
-    )
-
-
-def _tools_need_injection() -> bool:
-    """Check if the current base image is missing tools that should be installed.
-
-    Returns True if tools are enabled but the base image's tools hash doesn't
-    match the current configuration (e.g. first run after tools feature added,
-    or tool config changed).
-
-    IMPORTANT: This must be called and its result captured BEFORE any background
-    rebuild or image selection, because the background rebuild updates the hash
-    file on completion. If checked later, a race can cause the check to return
-    False even though the container was launched from a stale image.
-    """
-    from .images.builder import TOOLS_HASH_FILE
-    from .tools import resolve_tools, tools_hash
-
-    config = load_config()
-    enabled = resolve_tools(config)
-    if not enabled:
-        return False
-    current_hash = tools_hash(enabled)
-    return not (TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash)
-
-
-def _inject_tools(runtime: ContainerRuntime, name: str, config: dict):
-    """Install tools directly into a running container.
-
-    Used when the base image doesn't have the right tools baked in yet
-    (background rebuild is in progress). The tool scripts are idempotent,
-    so this is safe even if the image already has some tools installed.
-    """
-    from .tools import combined_tool_script, resolve_tools, tool_network_domains
-
-    enabled = resolve_tools(config)
-    if not enabled:
-        return
-    script = combined_tool_script(enabled)
-    if not script:
-        return
-
-    # Temporarily add tool network domains so install can fetch packages,
-    # then remove them so they don't widen the steady-state allowlist.
-    tool_domains = tool_network_domains(enabled)
-    if tool_domains:
-        from .network import add_domains, remove_domains
-
-        add_domains(runtime, name, tool_domains)
-
-    click.echo(f"  Installing tools: {', '.join(enabled)}...", nl=False)
-    try:
-        runtime.exec(name, ["bash", "-c", script])
-    finally:
-        if tool_domains:
-            remove_domains(runtime, name, tool_domains)
-    click.echo(" done.")
+    click.echo("Tools configuration changed, rebuilding base image...")
+    build_image(runtime, "base")
 
 
 def _generate_bubble_name(t, custom_name: str | None) -> str:
@@ -1051,7 +987,6 @@ def _provision_container(
     network=False,
     user_mounts=None,
     claude_mounts=None,
-    inject_tools=False,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     click.echo("  Launching container...", nl=False)
@@ -1071,14 +1006,6 @@ def _provision_container(
     if network:
         extra_domains = hook.network_domains() if hook else None
         _apply_network(runtime, name, config, extra_domains)
-
-    # If tools aren't baked into the image yet, install them directly.
-    # This handles first run after tools feature is added, or config changes.
-    # The background rebuild (from _maybe_rebuild_tools) will bake them into
-    # the image for future containers. The decision was snapshotted before
-    # the background rebuild started to avoid a race with the hash file.
-    if inject_tools:
-        _inject_tools(runtime, name, config)
 
     mount_source = str(ref_path)
     if Path(mount_source).exists():
@@ -1854,14 +1781,11 @@ def open_cmd(
             )
 
     # Local flow
-    # Snapshot injection decision BEFORE background rebuild, which updates the
-    # hash file on completion and would cause a false negative if checked later.
-    need_tool_injection = _tools_need_injection()
+    runtime = get_runtime(config)
+
     if not machine_readable:
         _maybe_rebuild_base_image()
-        _maybe_rebuild_tools()
-
-    runtime = get_runtime(config)
+        _maybe_rebuild_tools(runtime)
 
     # Check if target matches an existing container
     existing = _find_existing_container(runtime, target)
@@ -1968,7 +1892,6 @@ def open_cmd(
             network=network,
             user_mounts=mount_specs,
             claude_mounts=cc_mounts,
-            inject_tools=need_tool_injection,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
 
