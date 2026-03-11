@@ -6,14 +6,22 @@ CLI works inside bubbles. The token is injected via `gh auth login
 
 The token lives only in the container's filesystem and is destroyed
 when the bubble is deleted.
+
+Security: the token is written to a temp file and pushed into the
+container via `incus file push`, then consumed and deleted. It never
+appears in process arguments or error messages.
 """
 
-import shlex
 import subprocess
+import tempfile
+from pathlib import Path
 
 import click
 
 from .runtime.base import ContainerRuntime
+
+# Path inside the container where the token is temporarily stored.
+_CONTAINER_TOKEN_PATH = "/tmp/.gh-token"
 
 
 def get_host_gh_token() -> str | None:
@@ -35,37 +43,118 @@ def get_host_gh_token() -> str | None:
     return None
 
 
-def inject_gh_token(runtime: ContainerRuntime, container: str, token: str):
+def has_gh_auth() -> bool:
+    """Check if the host has gh CLI authentication configured.
+
+    Uses `gh auth status` instead of retrieving the actual token,
+    to avoid unnecessary secret handling for a UX check.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def inject_gh_token(runtime: ContainerRuntime, container: str, token: str) -> bool:
     """Inject a GitHub token into a container via gh auth login.
 
-    Sets up gh CLI authentication inside the container so that
-    commands like `gh pr create`, `gh issue comment`, etc. work.
+    Writes the token to a temp file on the host, pushes it into the
+    container, then has the container consume and delete it. The token
+    never appears in process arguments.
+
+    Returns True if injection succeeded.
     """
-    # gh auth login --with-token reads the token from stdin.
-    # We pipe it via echo to avoid putting the token in command args
-    # (which would be visible in /proc). We use a heredoc-style
-    # approach through bash -c with the token passed via env var.
-    runtime.exec(
-        container,
-        [
-            "su",
-            "-",
-            "user",
-            "-c",
-            f"echo {shlex.quote(token)}"
-            " | gh auth login --with-token 2>/dev/null"
-            " && gh auth setup-git 2>/dev/null"
-            " || true",
-        ],
+    # Write token to a host-side temp file (mode 0600)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".gh-token", delete=False) as f:
+        f.write(token + "\n")
+        tmp_path = f.name
+    try:
+        Path(tmp_path).chmod(0o600)
+        runtime.push_file(container, tmp_path, _CONTAINER_TOKEN_PATH)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    # Inside the container: consume the token file, authenticate, delete it.
+    # The token file is the only place the secret exists — it never appears
+    # in argv or environment variables.
+    try:
+        runtime.exec(
+            container,
+            [
+                "bash",
+                "-c",
+                f"chmod 600 {_CONTAINER_TOKEN_PATH}"
+                f" && chown user:user {_CONTAINER_TOKEN_PATH}"
+                f" && su - user -c '"
+                f"gh auth login --with-token < {_CONTAINER_TOKEN_PATH}"
+                f" && gh auth setup-git"
+                f"'"
+                f" ; rm -f {_CONTAINER_TOKEN_PATH}",
+            ],
+        )
+        return True
+    except RuntimeError:
+        # Clean up the token file even on failure
+        try:
+            runtime.exec(container, ["rm", "-f", _CONTAINER_TOKEN_PATH])
+        except RuntimeError:
+            pass
+        return False
+
+
+def inject_gh_token_remote(remote_host, container: str, token: str) -> bool:
+    """Inject a GitHub token into a container on a remote host.
+
+    Pipes the token via stdin through SSH to avoid it appearing in
+    process arguments on either the local or remote host.
+
+    Returns True if injection succeeded.
+    """
+    import shlex as shlex_mod
+
+    # Build the remote command: write stdin to temp file, auth, clean up.
+    # The token arrives via SSH stdin, never in argv.
+    remote_cmd = (
+        f"cat > {_CONTAINER_TOKEN_PATH}"
+        f" && incus exec {shlex_mod.quote(container)} --"
+        f" bash -c '"
+        f"chmod 600 {_CONTAINER_TOKEN_PATH}"
+        f" && chown user:user {_CONTAINER_TOKEN_PATH}"
+        f' && su - user -c \\"gh auth login --with-token < {_CONTAINER_TOKEN_PATH}'
+        f' && gh auth setup-git\\"'
+        f" ; rm -f {_CONTAINER_TOKEN_PATH}"
+        f"'"
     )
+    ssh_cmd = remote_host.ssh_cmd([remote_cmd])
+    try:
+        result = subprocess.run(
+            ssh_cmd,
+            input=token + "\n",
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 def setup_gh_token(
     runtime: ContainerRuntime,
     container: str,
     machine_readable: bool = False,
-):
+    remote_host=None,
+) -> bool:
     """Get the host token and inject it into the container.
+
+    For local containers, uses push_file + exec. For remote containers,
+    pipes the token via SSH stdin.
 
     Returns True if the token was successfully injected.
     """
@@ -75,12 +164,13 @@ def setup_gh_token(
             click.echo("  Warning: gh is not authenticated on host, skipping token injection.")
         return False
 
-    inject_gh_token(runtime, container, token)
+    if remote_host:
+        success = inject_gh_token_remote(remote_host, container, token)
+    else:
+        success = inject_gh_token(runtime, container, token)
     if not machine_readable:
-        click.echo("  GitHub token injected.")
-    return True
-
-
-def has_gh_auth() -> bool:
-    """Check if the host has gh CLI authentication configured."""
-    return get_host_gh_token() is not None
+        if success:
+            click.echo("  GitHub token injected.")
+        else:
+            click.echo("  Warning: GitHub token injection failed.")
+    return success
