@@ -247,6 +247,25 @@ def _collect_derived_images(base_name: str) -> list[str]:
     return result
 
 
+def _is_toolchain_alias(alias: str, purged_names: set[str]) -> bool:
+    """Check if an alias is a dynamic toolchain image derived from a purged lean image.
+
+    Toolchain aliases follow the pattern: <base>-v<digits>... where <base> is
+    a purged lean-family image. We require a digit after 'v' to avoid matching
+    static images like 'lean-vscode'.
+    """
+    for name in purged_names:
+        if name == "lean":
+            prefix = "lean-v"
+        elif name.startswith("lean-"):
+            prefix = f"{name}-v"
+        else:
+            continue
+        if alias.startswith(prefix) and len(alias) > len(prefix) and alias[len(prefix)].isdigit():
+            return True
+    return False
+
+
 def _collect_dynamic_toolchain_aliases(
     runtime: ContainerRuntime, purged_names: set[str]
 ) -> list[str]:
@@ -256,14 +275,7 @@ def _collect_dynamic_toolchain_aliases(
     in IMAGES and must be discovered by scanning existing image aliases.
     """
     # Only look for toolchain images if a lean-family image is being purged
-    lean_prefixes = []
-    for name in purged_names:
-        if name == "lean":
-            lean_prefixes.append("lean-v")
-        elif name.startswith("lean-"):
-            # e.g. "lean-emacs" -> match "lean-emacs-v"
-            lean_prefixes.append(f"{name}-v")
-    if not lean_prefixes:
+    if not any(n == "lean" or n.startswith("lean-") for n in purged_names):
         return []
 
     aliases = []
@@ -271,7 +283,7 @@ def _collect_dynamic_toolchain_aliases(
         for img in runtime.list_images():
             for alias_entry in img.get("aliases", []):
                 alias = alias_entry["name"]
-                if any(alias.startswith(p) for p in lean_prefixes):
+                if _is_toolchain_alias(alias, purged_names):
                     aliases.append(alias)
     except Exception:
         pass

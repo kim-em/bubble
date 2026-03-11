@@ -495,7 +495,14 @@ def test_collect_dynamic_toolchain_aliases(mock_runtime):
     from bubble.images.builder import _collect_dynamic_toolchain_aliases
 
     mock_runtime._images.update(
-        {"lean-v4-16-0", "lean-v4-17-0", "lean-emacs-v4-16-0", "base-vscode", "lean"}
+        {
+            "lean-v4-16-0",
+            "lean-v4-17-0",
+            "lean-emacs-v4-16-0",
+            "base-vscode",
+            "lean",
+            "lean-vscode",
+        }
     )
 
     # Only lean-family images in purged set trigger scanning
@@ -503,7 +510,10 @@ def test_collect_dynamic_toolchain_aliases(mock_runtime):
     assert "lean-v4-16-0" in aliases
     assert "lean-v4-17-0" in aliases
     assert "lean-emacs-v4-16-0" in aliases
+    # Static images must NOT be matched as dynamic toolchain aliases
     assert "base-vscode" not in aliases
+    assert "lean-vscode" not in aliases
+    assert "lean" not in aliases
 
     # No lean images in purged set -> no dynamic aliases
     assert _collect_dynamic_toolchain_aliases(mock_runtime, {"base-vscode"}) == []
