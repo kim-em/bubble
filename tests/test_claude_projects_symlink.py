@@ -29,12 +29,12 @@ def setup_dirs(tmp_path, monkeypatch):
 
 
 class TestMaybeSymlinkClaudeProjects:
-    def test_noop_when_claude_projects_not_git_tracked(self, setup_dirs):
+    def test_noop_when_claude_projects_not_in_git_repo(self, setup_dirs):
         """No action when ~/.claude/projects/ is not in a git repo."""
         claude_projects, bubble_projects = setup_dirs
         bubble_projects.mkdir()
 
-        with patch("bubble.config._is_git_tracked", return_value=False):
+        with patch("bubble.config._is_inside_git_repo", return_value=False):
             maybe_symlink_claude_projects()
 
         assert bubble_projects.is_dir()
@@ -54,7 +54,7 @@ class TestMaybeSymlinkClaudeProjects:
         monkeypatch.setattr(config, "CLAUDE_CONFIG_DIR", claude_dir)
         monkeypatch.setattr(config, "CLAUDE_PROJECTS_DIR", bubble_projects)
 
-        with patch("bubble.config._is_git_tracked", return_value=True):
+        with patch("bubble.config._is_inside_git_repo", return_value=True):
             maybe_symlink_claude_projects()
 
         assert bubble_projects.is_dir()
@@ -65,7 +65,7 @@ class TestMaybeSymlinkClaudeProjects:
         claude_projects, bubble_projects = setup_dirs
         bubble_projects.symlink_to(claude_projects)
 
-        with patch("bubble.config._is_git_tracked", return_value=True):
+        with patch("bubble.config._is_inside_git_repo", return_value=True):
             maybe_symlink_claude_projects()
 
         assert bubble_projects.is_symlink()
@@ -76,7 +76,7 @@ class TestMaybeSymlinkClaudeProjects:
         claude_projects, bubble_projects = setup_dirs
         # Don't create bubble_projects
 
-        with patch("bubble.config._is_git_tracked", return_value=True):
+        with patch("bubble.config._is_inside_git_repo", return_value=True):
             maybe_symlink_claude_projects()
 
         assert bubble_projects.is_symlink()
@@ -92,7 +92,8 @@ class TestMaybeSymlinkClaudeProjects:
         (bubble_projects / "session-a" / "data.jsonl").write_text("data")
 
         with (
-            patch("bubble.config._is_git_tracked", return_value=True),
+            patch("bubble.config._is_inside_git_repo", return_value=True),
+            patch("sys.stdin", **{"isatty.return_value": True}),
             patch("click.confirm", return_value=True),
         ):
             maybe_symlink_claude_projects()
@@ -109,7 +110,8 @@ class TestMaybeSymlinkClaudeProjects:
         (bubble_projects / "keep-me").write_text("data")
 
         with (
-            patch("bubble.config._is_git_tracked", return_value=True),
+            patch("bubble.config._is_inside_git_repo", return_value=True),
+            patch("sys.stdin", **{"isatty.return_value": True}),
             patch("click.confirm", return_value=False),
         ):
             maybe_symlink_claude_projects()
@@ -118,12 +120,27 @@ class TestMaybeSymlinkClaudeProjects:
         assert not bubble_projects.is_symlink()
         assert (bubble_projects / "keep-me").read_text() == "data"
 
+    def test_noop_when_not_tty(self, setup_dirs):
+        """No prompt when stdin is not a TTY."""
+        claude_projects, bubble_projects = setup_dirs
+        bubble_projects.mkdir()
+        (bubble_projects / "keep-me").write_text("data")
+
+        with (
+            patch("bubble.config._is_inside_git_repo", return_value=True),
+            patch("sys.stdin", **{"isatty.return_value": False}),
+        ):
+            maybe_symlink_claude_projects()
+
+        assert bubble_projects.is_dir()
+        assert not bubble_projects.is_symlink()
+
     def test_merges_without_overwriting_conflicts(self, setup_dirs):
-        """Existing files in claude_projects are not overwritten during merge."""
+        """Existing files are not overwritten; bubble-only files are preserved."""
         claude_projects, bubble_projects = setup_dirs
         bubble_projects.mkdir()
 
-        # Same name in both directories
+        # Same directory name in both, with different files inside
         (claude_projects / "shared").mkdir()
         (claude_projects / "shared" / "original.txt").write_text("original")
         (bubble_projects / "shared").mkdir()
@@ -134,7 +151,8 @@ class TestMaybeSymlinkClaudeProjects:
         (bubble_projects / "unique" / "data.txt").write_text("unique-data")
 
         with (
-            patch("bubble.config._is_git_tracked", return_value=True),
+            patch("bubble.config._is_inside_git_repo", return_value=True),
+            patch("sys.stdin", **{"isatty.return_value": True}),
             patch("click.confirm", return_value=True),
         ):
             maybe_symlink_claude_projects()
@@ -142,6 +160,8 @@ class TestMaybeSymlinkClaudeProjects:
         assert bubble_projects.is_symlink()
         # Original was preserved (not overwritten)
         assert (claude_projects / "shared" / "original.txt").read_text() == "original"
+        # Bubble-only file inside conflicting dir was merged in
+        assert (claude_projects / "shared" / "different.txt").read_text() == "bubble-data"
         # Unique content was moved
         assert (claude_projects / "unique" / "data.txt").read_text() == "unique-data"
 
@@ -151,7 +171,8 @@ class TestMaybeSymlinkClaudeProjects:
         bubble_projects.mkdir()
 
         with (
-            patch("bubble.config._is_git_tracked", return_value=True),
+            patch("bubble.config._is_inside_git_repo", return_value=True),
+            patch("sys.stdin", **{"isatty.return_value": True}),
             patch("click.confirm", return_value=True),
         ):
             maybe_symlink_claude_projects()
@@ -160,12 +181,11 @@ class TestMaybeSymlinkClaudeProjects:
         assert bubble_projects.resolve() == claude_projects.resolve()
 
 
-class TestIsGitTracked:
-    def test_git_tracked_directory(self, tmp_path):
+class TestIsInsideGitRepo:
+    def test_inside_git_repo(self, tmp_path):
         """Returns True for a directory inside a git repo."""
-        from bubble.config import _is_git_tracked
+        from bubble.config import _is_inside_git_repo
 
-        # Create a git repo
         repo = tmp_path / "repo"
         repo.mkdir()
         import subprocess
@@ -175,19 +195,19 @@ class TestIsGitTracked:
         subdir = repo / "subdir"
         subdir.mkdir()
 
-        assert _is_git_tracked(subdir) is True
+        assert _is_inside_git_repo(subdir) is True
 
-    def test_non_git_directory(self, tmp_path):
+    def test_not_inside_git_repo(self, tmp_path):
         """Returns False for a directory not inside a git repo."""
-        from bubble.config import _is_git_tracked
+        from bubble.config import _is_inside_git_repo
 
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
 
-        assert _is_git_tracked(plain_dir) is False
+        assert _is_inside_git_repo(plain_dir) is False
 
     def test_nonexistent_directory(self, tmp_path):
         """Returns False for a directory that doesn't exist."""
-        from bubble.config import _is_git_tracked
+        from bubble.config import _is_inside_git_repo
 
-        assert _is_git_tracked(tmp_path / "nope") is False
+        assert _is_inside_git_repo(tmp_path / "nope") is False

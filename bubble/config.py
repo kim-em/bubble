@@ -267,7 +267,7 @@ def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSp
 CLAUDE_PROJECTS_DIR = DATA_DIR / "claude-projects"
 
 
-def _is_git_tracked(path: Path) -> bool:
+def _is_inside_git_repo(path: Path) -> bool:
     """Check if a path is inside a git repository."""
     try:
         result = subprocess.run(
@@ -283,16 +283,18 @@ def _is_git_tracked(path: Path) -> bool:
 def maybe_symlink_claude_projects() -> None:
     """Offer to replace ~/.bubble/claude-projects/ with a symlink to ~/.claude/projects/.
 
-    If ~/.claude/projects/ is git-tracked and ~/.bubble/claude-projects/ is a real
+    If ~/.claude/projects/ is inside a git repo and ~/.bubble/claude-projects/ is a real
     directory (not already a symlink), prompt the user to replace it with a symlink.
     This lets bubble session state live inside the git-tracked directory and get
     synced across machines automatically.
     """
+    import sys
+
     claude_projects = CLAUDE_CONFIG_DIR / "projects"
     bubble_projects = CLAUDE_PROJECTS_DIR
 
-    # Nothing to do if ~/.claude/projects/ doesn't exist or isn't git-tracked
-    if not claude_projects.is_dir() or not _is_git_tracked(claude_projects):
+    # Nothing to do if ~/.claude/projects/ doesn't exist or isn't in a git repo
+    if not claude_projects.is_dir() or not _is_inside_git_repo(claude_projects):
         return
 
     # Already a symlink — nothing to do
@@ -303,6 +305,10 @@ def maybe_symlink_claude_projects() -> None:
     if not bubble_projects.exists():
         bubble_projects.parent.mkdir(parents=True, exist_ok=True)
         bubble_projects.symlink_to(claude_projects)
+        return
+
+    # Don't prompt if stdin is not a TTY (scripted/CI usage)
+    if not sys.stdin.isatty():
         return
 
     # It's a real directory — prompt the user
@@ -316,17 +322,32 @@ def maybe_symlink_claude_projects() -> None:
         return
 
     # Merge existing contents into ~/.claude/projects/
+    # Move unique items; for conflicts, copy bubble-only files into the
+    # destination so nothing is silently lost.
     for child in bubble_projects.iterdir():
         dest = claude_projects / child.name
-        if dest.exists():
-            # Skip conflicts — don't overwrite existing data
-            click.echo(f"  Skipping {child.name} (already exists in {claude_projects})")
-        else:
+        if not dest.exists():
             shutil.move(str(child), str(dest))
+        elif child.is_dir() and dest.is_dir():
+            # Recursively merge directory contents that only exist in bubble
+            _merge_dir(child, dest)
+        else:
+            click.echo(f"  Skipping {child.name} (already exists in {claude_projects})")
 
-    # Replace with symlink
-    if any(bubble_projects.iterdir()):
-        shutil.rmtree(str(bubble_projects))
-    else:
-        bubble_projects.rmdir()
+    # Replace with symlink — use rmtree since conflicts may leave remnants
+    shutil.rmtree(str(bubble_projects))
     bubble_projects.symlink_to(claude_projects)
+
+
+def _merge_dir(src: Path, dest: Path) -> None:
+    """Recursively move items from src into dest, skipping existing names."""
+    import click
+
+    for item in src.iterdir():
+        target = dest / item.name
+        if not target.exists():
+            shutil.move(str(item), str(target))
+        elif item.is_dir() and target.is_dir():
+            _merge_dir(item, target)
+        else:
+            click.echo(f"  Skipping {item.name} (already exists in {dest})")
