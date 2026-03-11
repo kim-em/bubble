@@ -33,7 +33,7 @@ bubble ./path/to/repo
 bubble https://github.com/owner/repo/issues/42
 bubble mathlib4/issues/42
 
-# PR or issue number shorthand (when in a cloned repo)
+# PR or issue number shorthand (when in a cloned repo, requires gh CLI)
 bubble 123                   # auto-detects PR vs issue via GitHub API
 
 # List your bubbles
@@ -164,6 +164,25 @@ bubble tools status                # show what would actually be installed
 
 When the resolved tool set changes, a background image rebuild is triggered automatically.
 
+### Claude Code Integration
+
+When a bubble is opened for a GitHub issue with VS Code (the default editor), bubble can set up [Claude Code](https://claude.ai/claude-code) as an autonomous coding agent. It uses the `gh` CLI to fetch the issue title, body, and comments, generates a prompt, and injects a VS Code task that launches Claude Code when the workspace opens.
+
+```bash
+# Creates a containerized environment; when VS Code opens, Claude starts working on the issue
+bubble mathlib4/issues/42
+```
+
+Claude is instructed to read the issue, implement a fix on the `issue-<number>` branch, and open a PR. This turns `bubble 42` (for an issue) into an autonomous coding agent workflow.
+
+You can also provide a custom prompt for any bubble via the `BUBBLE_CLAUDE_PROMPT` environment variable:
+
+```bash
+BUBBLE_CLAUDE_PROMPT="Refactor the parser module" bubble leanprover/lean4
+```
+
+Requirements: Claude Code must be installed in the container (see tool settings above), the `gh` CLI must be available on the host, and the default VS Code editor must be used. With `--shell` or `--no-interactive`, the prompt is not injected. If `gh` is unavailable or the API call fails, bubble proceeds without injecting a prompt.
+
 ## Hetzner Cloud
 
 Run bubbles on auto-provisioned Hetzner Cloud servers. The server shuts down automatically when idle to minimize costs, and restarts on demand when you open a new bubble.
@@ -270,31 +289,6 @@ bubble mathlib4
 ```
 
 The relay only allows opening repos already cloned in `~/.bubble/git/` — it cannot trigger cloning of new repos. Local paths are rejected. Existing bubbles need to be recreated after enabling the relay to get the relay socket.
-
-## Claude Code Integration
-
-When a bubble is opened for a GitHub issue, bubble automatically sets up [Claude Code](https://claude.ai/claude-code) as an autonomous coding agent:
-
-1. Fetches the issue title, body, and comments from the GitHub API
-2. Generates a prompt with the issue context and instructions
-3. Injects a VS Code task that auto-launches Claude Code when the workspace opens
-
-Claude is instructed to read the issue, claim it, implement a fix on the `issue-<number>` branch, and open a PR.
-
-```bash
-# This single command creates a containerized environment and launches Claude to work on the issue
-bubble mathlib4/issues/42
-```
-
-This turns `bubble 42` (for an issue) into an autonomous coding agent workflow — the bubble is created, Claude reads the issue, and starts working on a fix.
-
-You can also provide a custom prompt for any bubble via the `BUBBLE_CLAUDE_PROMPT` environment variable:
-
-```bash
-BUBBLE_CLAUDE_PROMPT="Refactor the parser module" bubble leanprover/lean4
-```
-
-Claude Code must be available in the container for this to work. By default, it is installed automatically if `claude` is found on your host (see [Tools](#tools) configuration).
 
 ## Security
 
