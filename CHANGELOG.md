@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2 — 2026-03-12
+- SSH tunnel auth proxy for remote/cloud bubbles (#81)
+  - Remote and cloud bubbles now use the same repo-scoped auth proxy as local bubbles
+  - SSH reverse tunnel (`-R`) forwards the local auth proxy to the remote host
+  - Per-remote-host tunnel sharing: multiple containers reuse a single tunnel
+  - Tunnel cleaned up automatically when the last bubble on a remote host is popped
+  - Removed legacy direct token injection for remote containers
+  - Host GitHub token never leaves the local machine, even for remote/cloud bubbles
+
 ## 0.6.1 — 2026-03-12
 - Repo-scoped GitHub auth via HTTP reverse proxy (#71)
 - `--gh-token` now keeps the host GitHub token on the host — never enters the container
@@ -11,7 +20,6 @@
 - `bubble gh proxy start/stop/daemon` commands for manual management
 - `bubble gh status` now shows auth proxy state
 - Fix: relay and auth proxy tokens cleaned up on `bubble pop` (fixes stale token leak)
-- Remote/cloud bubbles fall back to direct token injection (auth proxy is local-only)
 - Fix race between parent and derived image builds (#80)
   - Derived-image builds now hold a shared lock on the parent image
   - Prevents parent rebuilds from running concurrently with derived builds

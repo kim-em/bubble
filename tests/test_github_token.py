@@ -1,6 +1,6 @@
 """Tests for GitHub token injection."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
@@ -50,66 +50,6 @@ def test_has_gh_auth_gh_not_installed():
         assert has_gh_auth() is False
 
 
-def test_inject_gh_token_uses_push_file(mock_runtime):
-    """Verify inject_gh_token uses push_file (not argv) to transfer the token."""
-    from bubble.github_token import inject_gh_token
-
-    result = inject_gh_token(mock_runtime, "test-container", "gho_abc123")
-    assert result is True
-
-    # Token should be pushed via file, not embedded in exec args
-    push_calls = [c for c in mock_runtime.calls if c[0] == "push_file"]
-    assert len(push_calls) == 1
-    assert push_calls[0][1] == "test-container"
-    assert push_calls[0][3] == "/tmp/.gh-token"
-
-    # The exec command should reference the file, not contain the token
-    exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
-    assert len(exec_calls) == 1
-    cmd_str = " ".join(exec_calls[0][2])
-    assert "gh auth login --with-token" in cmd_str
-    assert "gh auth setup-git" in cmd_str
-    # Token should NOT appear in the exec command
-    assert "gho_abc123" not in cmd_str
-
-
-def test_inject_gh_token_cleans_up_host_temp_file(mock_runtime, tmp_path):
-    """Verify the host-side temp file is deleted after push."""
-    from bubble.github_token import inject_gh_token
-
-    inject_gh_token(mock_runtime, "test-container", "gho_abc123")
-
-    # The push_file call's source path should no longer exist
-    push_calls = [c for c in mock_runtime.calls if c[0] == "push_file"]
-    import os
-
-    assert not os.path.exists(push_calls[0][2])
-
-
-def test_inject_gh_token_failure_returns_false(mock_runtime):
-    """Verify inject_gh_token returns False on exec failure."""
-    from bubble.github_token import inject_gh_token
-
-    # Make exec raise RuntimeError
-    mock_runtime.exec_responses["__raise__"] = True
-
-    class FailingRuntime:
-        """Minimal runtime that fails on exec but records push_file calls."""
-
-        def __init__(self):
-            self.calls = []
-
-        def push_file(self, name, local_path, remote_path):
-            self.calls.append(("push_file", name, local_path, remote_path))
-
-        def exec(self, name, command, **kwargs):
-            raise RuntimeError("exec failed")
-
-    runtime = FailingRuntime()
-    result = inject_gh_token(runtime, "test-container", "gho_abc123")
-    assert result is False
-
-
 def test_setup_gh_token_local_with_owner_repo(mock_runtime):
     """Local container with owner/repo uses auth proxy (fail-closed)."""
     from bubble.github_token import setup_gh_token
@@ -131,15 +71,128 @@ def test_setup_gh_token_local_no_owner_repo(mock_runtime):
     assert len(mock_runtime.calls) == 0
 
 
-def test_setup_gh_token_no_host_auth_remote(mock_runtime):
-    """Remote container returns False when host has no gh auth."""
+def test_setup_gh_token_remote_no_owner_repo():
+    """Remote container without owner/repo returns False (fail-closed)."""
     from bubble.github_token import setup_gh_token
 
-    with patch("bubble.github_token.get_host_gh_token", return_value=None):
-        result = setup_gh_token(mock_runtime, "test-container", remote_host="fake-host")
+    result = setup_gh_token(None, "test-container", remote_host="fake-host")
+    assert result is False
+
+
+def test_setup_gh_token_remote_calls_proxy_remote():
+    """Remote container with owner/repo uses tunneled auth proxy."""
+    from bubble.github_token import setup_gh_token
+
+    remote_host = MagicMock()
+    with patch(
+        "bubble.github_token.setup_auth_proxy_remote", return_value=True
+    ) as mock_proxy_remote:
+        result = setup_gh_token(
+            None, "test-container", owner="kim-em", repo="bubble", remote_host=remote_host
+        )
+        assert result is True
+        mock_proxy_remote.assert_called_once_with(
+            remote_host, "test-container", "kim-em", "bubble", False
+        )
+
+
+def test_setup_auth_proxy_remote_starts_tunnel():
+    """setup_auth_proxy_remote starts a tunnel and configures the container."""
+    from bubble.github_token import setup_auth_proxy_remote
+
+    remote_host = MagicMock()
+    remote_host.spec_string.return_value = "myhost"
+
+    with (
+        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
+        patch("bubble.tunnel.start_tunnel", return_value=True) as mock_tunnel,
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok123") as mock_gen,
+        patch("bubble.remote._ssh_run") as mock_ssh,
+    ):
+        result = setup_auth_proxy_remote(remote_host, "my-container", "kim-em", "bubble")
+        assert result is True
+
+        # Tunnel started with local port
+        mock_tunnel.assert_called_once_with(remote_host, local_port=7654)
+
+        # Token generated for the container
+        mock_gen.assert_called_once_with("my-container", "kim-em", "bubble")
+
+        # Two SSH calls: incus device add + incus exec (git config)
+        assert mock_ssh.call_count == 2
+        device_call = mock_ssh.call_args_list[0]
+        assert "bubble-auth-proxy" in device_call[0][1]
+        git_call = mock_ssh.call_args_list[1]
+        assert "git config" in " ".join(str(a) for a in git_call[0][1])
+
+
+def test_setup_auth_proxy_remote_tunnel_fails():
+    """setup_auth_proxy_remote returns False if tunnel fails."""
+    from bubble.github_token import setup_auth_proxy_remote
+
+    remote_host = MagicMock()
+
+    with (
+        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
+        patch("bubble.tunnel.start_tunnel", return_value=False),
+    ):
+        result = setup_auth_proxy_remote(remote_host, "my-container", "kim-em", "bubble")
         assert result is False
 
-    assert len(mock_runtime.calls) == 0
+
+def test_setup_auth_proxy_remote_proxy_not_running():
+    """setup_auth_proxy_remote returns False if auth proxy isn't running."""
+    from bubble.github_token import setup_auth_proxy_remote
+
+    remote_host = MagicMock()
+
+    with patch("bubble.github_token._ensure_auth_proxy_running", return_value=None):
+        result = setup_auth_proxy_remote(remote_host, "my-container", "kim-em", "bubble")
+        assert result is False
+
+
+def test_setup_auth_proxy_remote_device_failure_cleans_token():
+    """If Incus device add fails, the minted token is cleaned up."""
+    from bubble.github_token import setup_auth_proxy_remote
+
+    remote_host = MagicMock()
+
+    with (
+        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
+        patch("bubble.tunnel.start_tunnel", return_value=True),
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok123"),
+        patch("bubble.remote._ssh_run", side_effect=RuntimeError("device add failed")),
+        patch("bubble.auth_proxy.remove_auth_tokens") as mock_remove,
+    ):
+        result = setup_auth_proxy_remote(remote_host, "my-container", "kim-em", "bubble")
+        assert result is False
+        mock_remove.assert_called_once_with("my-container")
+
+
+def test_setup_auth_proxy_remote_git_config_failure_cleans_token():
+    """If git config fails, the minted token is cleaned up."""
+    from bubble.github_token import setup_auth_proxy_remote
+
+    remote_host = MagicMock()
+
+    call_count = 0
+
+    def ssh_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("git config failed")
+
+    with (
+        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
+        patch("bubble.tunnel.start_tunnel", return_value=True),
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok123"),
+        patch("bubble.remote._ssh_run", side_effect=ssh_side_effect),
+        patch("bubble.auth_proxy.remove_auth_tokens") as mock_remove,
+    ):
+        result = setup_auth_proxy_remote(remote_host, "my-container", "kim-em", "bubble")
+        assert result is False
+        mock_remove.assert_called_once_with("my-container")
 
 
 # CLI tests

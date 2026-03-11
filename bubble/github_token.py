@@ -10,22 +10,19 @@ we run an HTTP reverse proxy on the host that:
 The host GitHub token never enters the container. Each container
 gets a per-container bearer token scoped to one repository.
 
-For remote/cloud bubbles where the auth proxy isn't available,
-falls back to direct token injection (the old behavior).
+For local containers, the proxy is exposed via Incus proxy devices.
+For remote/cloud containers, an SSH reverse tunnel forwards the
+local proxy port to the remote host, then an Incus proxy device
+on the remote exposes it into the container.
 """
 
 import platform
 import shlex
 import subprocess
-import tempfile
-from pathlib import Path
 
 import click
 
 from .runtime.base import ContainerRuntime
-
-# Path inside the container where the token is temporarily stored (fallback only).
-_CONTAINER_TOKEN_PATH = "/tmp/.gh-token"
 
 # Port inside the container where the auth proxy is exposed
 _CONTAINER_PROXY_PORT = 7654
@@ -187,86 +184,106 @@ def setup_auth_proxy(
     return True
 
 
-def inject_gh_token(runtime: ContainerRuntime, container: str, token: str) -> bool:
-    """Inject a GitHub token into a container via gh auth login.
+def setup_auth_proxy_remote(
+    remote_host,
+    container: str,
+    owner: str,
+    repo: str,
+    machine_readable: bool = False,
+) -> bool:
+    """Set up auth proxy access for a container on a remote host.
 
-    Writes the token to a temp file on the host, pushes it into the
-    container, then has the container consume and delete it. The token
-    never appears in process arguments.
+    Tunnels the local auth proxy to the remote host via SSH reverse
+    port forwarding, adds an Incus proxy device on the remote to
+    expose the tunneled port into the container, and configures git.
 
-    Returns True if injection succeeded.
+    The host GitHub token never leaves the local machine.
+
+    Returns True if setup succeeded.
     """
-    # Write token to a host-side temp file (mode 0600)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".gh-token", delete=False) as f:
-        f.write(token + "\n")
-        tmp_path = f.name
-    try:
-        Path(tmp_path).chmod(0o600)
-        runtime.push_file(container, tmp_path, _CONTAINER_TOKEN_PATH)
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    from .auth_proxy import generate_auth_token, remove_auth_tokens
+    from .remote import _ssh_run
+    from .tunnel import start_tunnel
 
-    # Inside the container: consume the token file, authenticate, delete it.
+    port = _ensure_auth_proxy_running()
+    if not port:
+        if not machine_readable:
+            click.echo("  Warning: auth proxy failed to start. No GitHub auth configured.")
+            click.echo("  Run 'bubble gh proxy start' to diagnose.")
+        return False
+
+    # Start SSH reverse tunnel (per-remote-host, shared across containers)
+    if not start_tunnel(remote_host, local_port=port):
+        if not machine_readable:
+            click.echo("  Warning: SSH tunnel to remote failed. No GitHub auth configured.")
+        return False
+
+    # Generate per-container token
+    token = generate_auth_token(container, owner, repo)
+
+    # Add Incus proxy device on the remote: tunneled port → container
+    from .tunnel import TUNNEL_REMOTE_PORT
+
+    connect_addr = f"tcp:127.0.0.1:{TUNNEL_REMOTE_PORT}"
+    listen_addr = f"tcp:127.0.0.1:{_CONTAINER_PROXY_PORT}"
+
     try:
-        runtime.exec(
-            container,
+        _ssh_run(
+            remote_host,
             [
+                "incus",
+                "config",
+                "device",
+                "add",
+                container,
+                "bubble-auth-proxy",
+                "proxy",
+                f"connect={connect_addr}",
+                f"listen={listen_addr}",
+                "bind=container",
+            ],
+            timeout=15,
+        )
+    except Exception as e:
+        if not machine_readable:
+            click.echo(f"  Warning: failed to add remote proxy device: {e}")
+            click.echo("  No GitHub auth configured (fail-closed).")
+        remove_auth_tokens(container)
+        return False
+
+    # Configure git inside the container to use the proxy
+    q_token = shlex.quote(token)
+    git_config_cmd = (
+        f"git config --global url.'http://127.0.0.1:{_CONTAINER_PROXY_PORT}/git/'.insteadOf"
+        f" 'https://github.com/'"
+        f" && git config --global http.'http://127.0.0.1:{_CONTAINER_PROXY_PORT}/'.extraHeader"
+        f" 'X-Bubble-Token: {q_token}'"
+    )
+
+    try:
+        _ssh_run(
+            remote_host,
+            [
+                "incus",
+                "exec",
+                container,
+                "--",
                 "bash",
                 "-c",
-                f"chmod 600 {_CONTAINER_TOKEN_PATH}"
-                f" && chown user:user {_CONTAINER_TOKEN_PATH}"
-                f" && su - user -c '"
-                f"gh auth login --with-token < {_CONTAINER_TOKEN_PATH}"
-                f" && gh auth setup-git"
-                f"'"
-                f" ; rm -f {_CONTAINER_TOKEN_PATH}",
+                f"su - user -c {shlex.quote(git_config_cmd)}",
             ],
+            timeout=15,
         )
-        return True
-    except RuntimeError:
-        # Clean up the token file even on failure
-        try:
-            runtime.exec(container, ["rm", "-f", _CONTAINER_TOKEN_PATH])
-        except RuntimeError:
-            pass
+    except Exception as e:
+        if not machine_readable:
+            click.echo(f"  Warning: failed to configure git proxy on remote: {e}")
+            click.echo("  No GitHub auth configured (fail-closed).")
+        remove_auth_tokens(container)
         return False
 
-
-def inject_gh_token_remote(remote_host, container: str, token: str) -> bool:
-    """Inject a GitHub token into a container on a remote host.
-
-    Pipes the token via stdin through SSH to avoid it appearing in
-    process arguments on either the local or remote host.
-
-    Returns True if injection succeeded.
-    """
-    import shlex as shlex_mod
-
-    # Build the remote command: write stdin to temp file, auth, clean up.
-    # The token arrives via SSH stdin, never in argv.
-    remote_cmd = (
-        f"cat > {_CONTAINER_TOKEN_PATH}"
-        f" && incus exec {shlex_mod.quote(container)} --"
-        f" bash -c '"
-        f"chmod 600 {_CONTAINER_TOKEN_PATH}"
-        f" && chown user:user {_CONTAINER_TOKEN_PATH}"
-        f' && su - user -c \\"gh auth login --with-token < {_CONTAINER_TOKEN_PATH}'
-        f' && gh auth setup-git\\"'
-        f" ; rm -f {_CONTAINER_TOKEN_PATH}"
-        f"'"
-    )
-    ssh_cmd = remote_host.ssh_cmd([remote_cmd])
-    try:
-        result = subprocess.run(
-            ssh_cmd,
-            input=token + "\n",
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
-        return False
+    if not machine_readable:
+        click.echo(f"  GitHub auth proxy configured (scoped to {owner}/{repo}, via SSH tunnel).")
+    return True
 
 
 def setup_gh_token(
@@ -279,34 +296,23 @@ def setup_gh_token(
 ) -> bool:
     """Set up GitHub auth for a container.
 
-    For local containers with owner/repo info: uses the auth proxy
-    (repo-scoped, host token never enters the container).
+    For local containers: uses the auth proxy via Incus proxy device.
+    For remote/cloud containers: tunnels the auth proxy via SSH -R.
 
-    For remote containers or when owner/repo is unavailable: falls
-    back to direct token injection.
+    Both paths provide repo-scoped auth — the host token never enters
+    the container.
 
     Returns True if auth was successfully configured.
     """
-    # Remote containers: direct injection (auth proxy is local-only for now)
-    if remote_host:
-        token = get_host_gh_token()
-        if not token:
-            if not machine_readable:
-                click.echo("  Warning: gh is not authenticated on host, skipping token injection.")
-            return False
-        success = inject_gh_token_remote(remote_host, container, token)
+    if not owner or not repo:
         if not machine_readable:
-            if success:
-                click.echo("  GitHub token injected (remote, full access).")
-            else:
-                click.echo("  Warning: GitHub token injection failed.")
-        return success
+            click.echo("  Warning: no owner/repo available, cannot set up scoped auth.")
+        return False
 
-    # Local containers with owner/repo: use auth proxy (fail-closed)
-    if runtime and owner and repo:
+    if remote_host:
+        return setup_auth_proxy_remote(remote_host, container, owner, repo, machine_readable)
+
+    if runtime:
         return setup_auth_proxy(runtime, container, owner, repo, machine_readable)
 
-    # No owner/repo available — can't scope the token
-    if not machine_readable:
-        click.echo("  Warning: no owner/repo available, cannot set up scoped auth.")
     return False
