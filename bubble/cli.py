@@ -22,6 +22,7 @@ from .config import (
     ensure_dirs,
     has_claude_credentials,
     load_config,
+    maybe_symlink_claude_projects,
     parse_mounts,
     repo_short_name,
     save_config,
@@ -1785,6 +1786,9 @@ def open_cmd(
                 "Tip: use --claude-credentials to mount Claude auth into this bubble.",
                 err=True,
             )
+        # Offer to symlink ~/.bubble/claude-projects/ to ~/.claude/projects/
+        if not machine_readable:
+            maybe_symlink_claude_projects()
 
     # Local flow
     runtime = get_runtime(config)

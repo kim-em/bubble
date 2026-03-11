@@ -1,6 +1,8 @@
 """Configuration management for bubble."""
 
 import os
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -260,3 +262,71 @@ def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSp
             raise ValueError(f"Duplicate mount target: {m.target}")
         seen.add(m.target)
     return mounts
+
+
+CLAUDE_PROJECTS_DIR = DATA_DIR / "claude-projects"
+
+
+def _is_git_tracked(path: Path) -> bool:
+    """Check if a path is inside a git repository."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--git-dir"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def maybe_symlink_claude_projects() -> None:
+    """Offer to replace ~/.bubble/claude-projects/ with a symlink to ~/.claude/projects/.
+
+    If ~/.claude/projects/ is git-tracked and ~/.bubble/claude-projects/ is a real
+    directory (not already a symlink), prompt the user to replace it with a symlink.
+    This lets bubble session state live inside the git-tracked directory and get
+    synced across machines automatically.
+    """
+    claude_projects = CLAUDE_CONFIG_DIR / "projects"
+    bubble_projects = CLAUDE_PROJECTS_DIR
+
+    # Nothing to do if ~/.claude/projects/ doesn't exist or isn't git-tracked
+    if not claude_projects.is_dir() or not _is_git_tracked(claude_projects):
+        return
+
+    # Already a symlink — nothing to do
+    if bubble_projects.is_symlink():
+        return
+
+    # If ~/.bubble/claude-projects/ doesn't exist yet, just create the symlink
+    if not bubble_projects.exists():
+        bubble_projects.parent.mkdir(parents=True, exist_ok=True)
+        bubble_projects.symlink_to(claude_projects)
+        return
+
+    # It's a real directory — prompt the user
+    import click
+
+    if not click.confirm(
+        f"{claude_projects} is git-tracked. Replace {bubble_projects}\n"
+        f"with a symlink to {claude_projects} so bubble session state is tracked too?",
+        default=False,
+    ):
+        return
+
+    # Merge existing contents into ~/.claude/projects/
+    for child in bubble_projects.iterdir():
+        dest = claude_projects / child.name
+        if dest.exists():
+            # Skip conflicts — don't overwrite existing data
+            click.echo(f"  Skipping {child.name} (already exists in {claude_projects})")
+        else:
+            shutil.move(str(child), str(dest))
+
+    # Replace with symlink
+    if any(bubble_projects.iterdir()):
+        shutil.rmtree(str(bubble_projects))
+    else:
+        bubble_projects.rmdir()
+    bubble_projects.symlink_to(claude_projects)
