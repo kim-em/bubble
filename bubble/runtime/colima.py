@@ -1,7 +1,10 @@
 """macOS Colima management for running Incus."""
 
+import os
+import select
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -34,6 +37,62 @@ def _colima_supports_vm_type() -> bool:
         return False
 
 
+def _run_colima_start(args: list[str]) -> subprocess.CompletedProcess:
+    """Run colima start, streaming output to the terminal while capturing it.
+
+    Uses a PTY so that colima sees a terminal and doesn't block-buffer its
+    output.  Stdout and stderr from the child are merged (as colima does
+    internally) and echoed to our stderr so that normal stdout piping is
+    unaffected.
+    """
+    parent_fd, child_fd = os.openpty()
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=child_fd,
+            stderr=child_fd,
+            stdin=subprocess.DEVNULL,
+        )
+    finally:
+        os.close(child_fd)
+
+    output_chunks: list[str] = []
+    try:
+        while True:
+            ready, _, _ = select.select([parent_fd], [], [], 0.1)
+            if ready:
+                try:
+                    data = os.read(parent_fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                decoded = data.decode("utf-8", errors="replace")
+                output_chunks.append(decoded)
+                sys.stderr.write(decoded)
+                sys.stderr.flush()
+            elif proc.poll() is not None:
+                # Process exited; drain any remaining output
+                try:
+                    while True:
+                        data = os.read(parent_fd, 4096)
+                        if not data:
+                            break
+                        decoded = data.decode("utf-8", errors="replace")
+                        output_chunks.append(decoded)
+                        sys.stderr.write(decoded)
+                        sys.stderr.flush()
+                except OSError:
+                    pass
+                break
+    finally:
+        os.close(parent_fd)
+
+    proc.wait()
+    stdout = "".join(output_chunks)
+    return subprocess.CompletedProcess(args, proc.returncode, stdout=stdout, stderr="")
+
+
 def start_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
     """Start Colima with incus runtime and specified resources."""
     args = [
@@ -46,11 +105,9 @@ def start_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
     ]
     if _colima_supports_vm_type():
         args.append(f"--vm-type={vm_type}")
-    result = subprocess.run(
-        args, check=False, capture_output=True, text=True, stdin=subprocess.DEVNULL
-    )
+    result = _run_colima_start(args)
     if result.returncode != 0:
-        if "already exists" in (result.stderr + result.stdout):
+        if "already exists" in result.stdout:
             # Stale instance exists but isn't running — delete and retry
             subprocess.run(
                 ["colima", "delete", "--force"],
@@ -62,14 +119,11 @@ def start_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
             lima_dir = Path.home() / ".colima" / "_lima" / "colima"
             if lima_dir.exists():
                 shutil.rmtree(lima_dir)
-            subprocess.run(args, check=True, stdin=subprocess.DEVNULL)
+            result = _run_colima_start(args)
+            if result.returncode != 0:
+                raise subprocess.CalledProcessError(result.returncode, args, output=result.stdout)
         else:
-            # Unknown error — print output and raise
-            if result.stdout:
-                print(result.stdout, end="")
-            if result.stderr:
-                print(result.stderr, end="")
-            result.check_returncode()
+            raise subprocess.CalledProcessError(result.returncode, args, output=result.stdout)
 
 
 def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
@@ -77,5 +131,5 @@ def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
     if is_colima_running():
         return
 
-    print("Starting Colima VM (one-time setup)...")
+    print("Starting Colima VM (one-time setup)...", file=sys.stderr)
     start_colima(cpu, memory, disk, vm_type)
