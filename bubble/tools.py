@@ -1,4 +1,9 @@
-"""Pluggable tool installation system for container images."""
+"""Pluggable tool installation system for container images.
+
+Tool install scripts (in images/scripts/tools/) MUST be idempotent.
+They may be run both during image builds and directly in running containers
+(when the base image doesn't have the latest tools baked in yet).
+"""
 
 import hashlib
 import shutil
