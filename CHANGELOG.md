@@ -5,6 +5,13 @@
   - `maybe_symlink_claude_projects()` now prints an informational message instead of blocking on a `[y/N]` prompt
   - New `bubble config symlink-claude-projects` command to perform the symlink manually
   - Suppress the hint with `claude_projects_symlink = "no"` in `~/.bubble/config.toml`
+- Improve security posture warnings UX (#87)
+  - Replace per-setting warning spam with a single summary line: "bubble is using default security assumptions. Review with: bubble security"
+  - New `bubble security` command with grouped settings display (Network, Filesystem, Authentication, Cloud, SSH)
+  - Quick presets: `bubble security permissive`, `bubble security default`, `bubble security lockdown`
+  - `bubble security set <name> <value>` for individual settings
+  - Fix duplicate security warnings (were printed twice per `bubble open` invocation)
+  - Once all settings are explicitly configured, the summary message disappears entirely
 
 ## 0.6.2 — 2026-03-12
 - Remove `.current-account` from Claude credential mounts (#91)

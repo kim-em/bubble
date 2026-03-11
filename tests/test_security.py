@@ -3,9 +3,14 @@
 from click.testing import CliRunner
 
 from bubble.security import (
+    CATEGORIES,
     SETTINGS,
+    apply_preset_default,
+    apply_preset_lockdown,
+    apply_preset_permissive,
     filter_github_domains,
     get_setting,
+    has_auto_settings,
     is_enabled,
     is_locked_off,
     print_warnings,
@@ -102,13 +107,15 @@ def test_is_locked_off_on_is_not_locked():
 # --- Warning tests ---
 
 
-def test_print_warnings_all_auto(capsys):
+def test_print_warnings_all_auto_shows_single_line(capsys):
     config = {}
     print_warnings(config)
     captured = capsys.readouterr()
-    # All settings are auto, so all should produce warnings
+    # Should show a single summary line, not per-setting warnings
+    assert "bubble security" in captured.err
+    # Should NOT show per-setting detail
     for name in SETTINGS:
-        assert f"{name}=auto" in captured.err
+        assert f"{name}=auto" not in captured.err
 
 
 def test_print_warnings_none_when_all_explicit(capsys):
@@ -126,20 +133,23 @@ def test_print_warnings_suppressed_by_env(capsys, monkeypatch):
     assert captured.err == ""
 
 
-def test_print_warnings_on_defaults_suggest_lock(capsys):
-    config = {}
+def test_print_warnings_partial_auto(capsys):
+    """Even one auto setting should show the summary."""
+    config = {"security": {name: defn.auto_default for name, defn in SETTINGS.items()}}
+    # Set one back to auto
+    del config["security"]["relay"]
     print_warnings(config)
     captured = capsys.readouterr()
-    # on-by-default settings should suggest "Lock: ..."
-    assert "Lock: bubble config set security.shared_cache off" in captured.err
+    assert "bubble security" in captured.err
 
 
-def test_print_warnings_off_defaults_suggest_enable(capsys):
-    config = {}
-    print_warnings(config)
-    captured = capsys.readouterr()
-    # off-by-default settings should suggest "Enable: ..."
-    assert "Enable: bubble config set security.relay on" in captured.err
+def test_has_auto_settings_all_auto():
+    assert has_auto_settings({}) is True
+
+
+def test_has_auto_settings_none_auto():
+    config = {"security": {name: defn.auto_default for name, defn in SETTINGS.items()}}
+    assert has_auto_settings(config) is False
 
 
 # --- GitHub domain filtering ---
@@ -171,15 +181,119 @@ def test_filter_github_domains_no_github():
 # --- CLI tests ---
 
 
-def test_config_security_cli(tmp_data_dir):
+def test_security_cli_shows_posture(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security"])
+    assert result.exit_code == 0
+    assert "Quick presets" in result.output
+    assert "bubble security permissive" in result.output
+    assert "bubble security lockdown" in result.output
+    assert "shared_cache" in result.output
+    assert "relay" in result.output
+
+
+def test_security_cli_shows_categories(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security"])
+    assert result.exit_code == 0
+    for cat_name, _ in CATEGORIES:
+        assert cat_name in result.output
+
+
+def test_security_permissive_cli(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "permissive"])
+    assert result.exit_code == 0
+
+    from bubble.config import load_config
+
+    config = load_config()
+    for name in SETTINGS:
+        assert config["security"][name] == "on"
+
+
+def test_security_lockdown_cli(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "lockdown"])
+    assert result.exit_code == 0
+
+    from bubble.config import load_config
+
+    config = load_config()
+    for name in SETTINGS:
+        assert config["security"][name] == "off"
+
+
+def test_security_default_cli(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    # First set everything to on
+    runner.invoke(main, ["security", "permissive"])
+    # Then reset
+    result = runner.invoke(main, ["security", "default"])
+    assert result.exit_code == 0
+
+    from bubble.config import load_config
+
+    config = load_config()
+    # All should be cleared (auto)
+    for name in SETTINGS:
+        assert config.get("security", {}).get(name) is None
+
+
+def test_security_set_cli(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "shared_cache", "off"])
+    assert result.exit_code == 0
+    assert "Set security.shared_cache = off" in result.output
+
+
+def test_security_set_unknown(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "bogus", "on"])
+    assert result.exit_code != 0
+    assert "Unknown security setting" in result.output
+
+
+def test_security_set_relay_syncs_old_config(tmp_data_dir):
+    """Setting security.relay also updates [relay] enabled for backwards compat."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "relay", "on"])
+    assert result.exit_code == 0
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["relay"] == "on"
+    assert config["relay"]["enabled"] is True
+
+
+# --- Legacy config commands still work ---
+
+
+def test_config_security_cli_redirects(tmp_data_dir):
     from bubble.cli import main
 
     runner = CliRunner()
     result = runner.invoke(main, ["config", "security"])
     assert result.exit_code == 0
-    assert "SETTING" in result.output
+    assert "bubble security" in result.output
     assert "shared_cache" in result.output
-    assert "relay" in result.output
 
 
 def test_config_set_cli(tmp_data_dir):
@@ -190,7 +304,6 @@ def test_config_set_cli(tmp_data_dir):
     assert result.exit_code == 0
     assert "Set security.shared_cache = off" in result.output
 
-    # Verify saved
     from bubble.config import load_config
 
     config = load_config()
@@ -222,21 +335,6 @@ def test_config_set_invalid_value(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["config", "set", "relay", "maybe"])
     assert result.exit_code != 0
-
-
-def test_config_set_relay_syncs_old_config(tmp_data_dir):
-    """Setting security.relay also updates [relay] enabled for backwards compat."""
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["config", "set", "relay", "on"])
-    assert result.exit_code == 0
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["security"]["relay"] == "on"
-    assert config["relay"]["enabled"] is True
 
 
 def test_config_lockdown(tmp_data_dir):
@@ -282,6 +380,58 @@ def test_config_accept_risks_idempotent(tmp_data_dir):
     result = runner.invoke(main, ["config", "accept-risks"])
     assert result.exit_code == 0
     assert "No auto-defaulting-to-on" in result.output
+
+
+# --- Preset function tests ---
+
+
+def test_apply_preset_permissive():
+    config = {}
+    changed = apply_preset_permissive(config)
+    assert len(changed) == len(SETTINGS)
+    for name in SETTINGS:
+        assert config["security"][name] == "on"
+
+
+def test_apply_preset_lockdown():
+    config = {}
+    changed = apply_preset_lockdown(config)
+    assert len(changed) == len(SETTINGS)
+    for name in SETTINGS:
+        assert config["security"][name] == "off"
+
+
+def test_apply_preset_default():
+    config = {"security": {name: "on" for name in SETTINGS}}
+    changed = apply_preset_default(config)
+    assert len(changed) == len(SETTINGS)
+    for name in SETTINGS:
+        assert config["security"].get(name) is None
+
+
+def test_apply_preset_default_idempotent():
+    config = {}
+    changed = apply_preset_default(config)
+    assert len(changed) == 0
+
+
+def test_apply_preset_default_clears_legacy_relay():
+    """permissive then default should fully restore relay to auto."""
+    config = {}
+    apply_preset_permissive(config)
+    # permissive sets both security.relay=on and relay.enabled=True
+    assert config["security"]["relay"] == "on"
+    assert config["relay"]["enabled"] is True
+    apply_preset_default(config)
+    # default should clear both, so relay is truly auto (off)
+    assert get_setting(config, "relay") == "auto"
+    assert is_enabled(config, "relay") is False
+
+
+def test_all_settings_have_valid_category():
+    valid_cats = {name for name, _ in CATEGORIES}
+    for name, defn in SETTINGS.items():
+        assert defn.category in valid_cats, f"{name} has unknown category '{defn.category}'"
 
 
 # --- SSH config tests ---
