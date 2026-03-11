@@ -15,7 +15,14 @@ import click
 
 from . import __version__
 from .clean import CleanStatus, check_clean, format_reasons
-from .config import DATA_DIR, ensure_dirs, load_config, repo_short_name, save_config
+from .config import (
+    DATA_DIR,
+    ensure_dirs,
+    load_config,
+    parse_mounts,
+    repo_short_name,
+    save_config,
+)
 from .git_store import (
     bare_repo_path,
     ensure_rev_available,
@@ -880,6 +887,7 @@ def _provision_container(
     hook=None,
     dep_mounts=None,
     network=False,
+    user_mounts=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     click.echo("  Launching container...", nl=False)
@@ -947,6 +955,34 @@ def _provision_container(
                     f"printf '{script}\\n' > /etc/profile.d/bubble-shared.sh",
                 ],
             )
+
+    # Add user-specified mounts (from --mount flags and [[mounts]] config)
+    if user_mounts:
+        for i, m in enumerate(user_mounts):
+            device_name = f"user-mount-{i}"
+            runtime.add_disk(
+                name,
+                device_name,
+                m.source,
+                m.target,
+                readonly=m.readonly,
+            )
+            # Apply exclusions by overmounting with empty tmpfs
+            for excluded in m.exclude:
+                exc_path = f"{m.target.rstrip('/')}/{excluded}"
+                # Mount a tmpfs to hide the excluded subdirectory.
+                # mkdir -p runs as root inside the container, so it works
+                # even on RO mounts (the dir already exists on the host,
+                # or we create it in the container's overlay).
+                runtime.exec(
+                    name,
+                    [
+                        "bash",
+                        "-c",
+                        f"mkdir -p {shlex.quote(exc_path)}"
+                        f" && mount -t tmpfs tmpfs {shlex.quote(exc_path)}",
+                    ],
+                )
 
     relay_enabled = config.get("relay", {}).get("enabled", False)
     if relay_enabled:
@@ -1366,6 +1402,13 @@ def _open_remote(
     hidden=True,
     help="Git user.email for container",
 )
+@click.option(
+    "--mount",
+    "mounts",
+    type=str,
+    multiple=True,
+    help="Mount host dir: /host/path:/container/path[:ro|rw] (repeatable)",
+)
 def open_cmd(
     target,
     editor_choice,
@@ -1382,12 +1425,26 @@ def open_cmd(
     no_clone,
     git_name,
     git_email,
+    mounts,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
         target = "./" + target
 
     config = load_config()
+
+    # Parse user mounts from config + CLI flags
+    try:
+        mount_specs = parse_mounts(config, mounts)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+
+    # Validate mount sources exist
+    for m in mount_specs:
+        if not Path(m.source).exists():
+            click.echo(f"Mount source does not exist: {m.source}", err=True)
+            sys.exit(1)
 
     # Auto-detect git identity from host if not explicitly provided
     if git_name is None or git_email is None:
@@ -1432,6 +1489,12 @@ def open_cmd(
                 remote_host = RemoteHost.parse(default)
 
     if remote_host:
+        if mount_specs:
+            click.echo(
+                "Error: --mount is not supported with remote/cloud bubbles (host paths are local)",
+                err=True,
+            )
+            sys.exit(1)
         _open_remote(
             remote_host,
             target,
@@ -1540,6 +1603,7 @@ def open_cmd(
             hook=hook,
             dep_mounts=dep_mounts,
             network=network,
+            user_mounts=mount_specs,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
         _finalize_bubble(
