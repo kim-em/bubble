@@ -61,13 +61,20 @@ def resolve_tools(config: dict) -> list[str]:
 
 
 def tools_hash(enabled_tools: list[str]) -> str:
-    """Compute a stable hash of the enabled tool set.
+    """Compute a stable hash of the enabled tool set and their scripts.
 
-    Used to detect when the resolved tool set has changed and images
-    need rebuilding.
+    Includes both tool names and script contents so that changes to
+    install scripts also trigger rebuilds.
     """
-    content = ",".join(sorted(enabled_tools))
-    return hashlib.sha256(content.encode()).hexdigest()[:16]
+    h = hashlib.sha256()
+    for name in sorted(enabled_tools):
+        h.update(name.encode())
+        h.update(b"\x00")
+        script_path = SCRIPTS_DIR / TOOLS[name]["script"]
+        if script_path.exists():
+            h.update(script_path.read_bytes())
+        h.update(b"\x00")
+    return h.hexdigest()[:16]
 
 
 def tool_script(name: str) -> str:

@@ -791,7 +791,14 @@ def _maybe_rebuild_tools():
 
     if TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash:
         return
-    # No stored hash yet, or hash differs — rebuild base to pick up tools
+
+    # Use a lock file to prevent concurrent rebuilds
+    lock_path = Path("/tmp/bubble-tools-rebuild.lock")
+    try:
+        lock_path.touch(exist_ok=False)
+    except FileExistsError:
+        return  # Another rebuild is already in progress
+
     _spawn_background_bubble(
         ["images", "build", "base"],
         "/tmp/bubble-tools-rebuild.log",

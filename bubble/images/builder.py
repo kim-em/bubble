@@ -212,6 +212,23 @@ def _cleanup_builder(runtime: ContainerRuntime, build_name: str):
         )
 
 
+def _purge_derived_images(runtime: ContainerRuntime, base_name: str):
+    """Delete images that derive from base_name so they rebuild from the fresh base.
+
+    When the base image is rebuilt (e.g. with new tools), derived images like
+    lean, base-vscode, lean-vscode etc. are stale snapshots. Deleting them
+    forces a rebuild on next use.
+    """
+    derived = [name for name, spec in IMAGES.items() if spec["parent"] == base_name]
+    for name in derived:
+        if runtime.image_exists(name):
+            try:
+                runtime.image_delete(name)
+                print(f"  Deleted derived image '{name}' (will rebuild on next use).")
+            except Exception:
+                pass  # Best-effort; may fail if in use
+
+
 def _install_tools_if_base(
     runtime: ContainerRuntime, build_name: str, image_name: str
 ) -> list[str] | None:
@@ -278,10 +295,13 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         VSCODE_COMMIT_FILE.write_text(vscode_commit + "\n")
 
-    # Record the tools hash baked into the image (only on base image)
+    # Record the tools hash baked into the image and purge stale derived images
     if enabled_tools is not None:
         TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
         TOOLS_HASH_FILE.write_text(tools_hash(enabled_tools) + "\n")
+        _purge_derived_images(runtime, image_name)
+        # Clean up rebuild lock (may have been set by _maybe_rebuild_tools)
+        Path("/tmp/bubble-tools-rebuild.lock").unlink(missing_ok=True)
 
     print(f"{image_name} image built successfully.")
 
