@@ -44,10 +44,10 @@ def finalize_bubble(
         setup_gh_token(runtime, name, machine_readable=machine_readable)
 
     # Inject Claude Code task if prompt is provided
-    if claude_prompt and not machine_readable:
+    if claude_prompt:
         from .claude import inject_claude_task
 
-        inject_claude_task(runtime, name, project_dir, claude_prompt)
+        inject_claude_task(runtime, name, project_dir, claude_prompt, quiet=machine_readable)
 
     if not machine_readable:
         click.echo("Setting up SSH access...")

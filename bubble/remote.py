@@ -409,6 +409,7 @@ def remote_open(
     claude_config: bool = True,
     new_branch: str | None = None,
     base_ref: str | None = None,
+    claude_prompt: str = "",
 ) -> dict:
     """Open a bubble on a remote host.
 
@@ -435,6 +436,8 @@ def remote_open(
         args += ["-b", new_branch]
     if base_ref:
         args += ["--base", base_ref]
+    if claude_prompt:
+        args.append("--claude-prompt-stdin")
     args.append(target)
 
     click_mod.echo(f"Creating bubble on {host.ssh_destination}...")
@@ -459,8 +462,14 @@ def remote_open(
         ssh_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE if claude_prompt else subprocess.DEVNULL,
         text=True,
     )
+
+    # Send prompt via stdin to avoid exposing it in ps/audit logs
+    if claude_prompt:
+        proc.stdin.write(claude_prompt)
+        proc.stdin.close()
 
     stderr_chunks = []
 

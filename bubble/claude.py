@@ -79,7 +79,9 @@ def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) ->
     return prompt
 
 
-def inject_claude_task(runtime: ContainerRuntime, container: str, project_dir: str, prompt: str):
+def inject_claude_task(
+    runtime: ContainerRuntime, container: str, project_dir: str, prompt: str, quiet: bool = False
+):
     """Inject Claude auto-start task into a container's VS Code configuration.
 
     - Writes prompt to .vscode/claude-prompt.txt
@@ -173,4 +175,5 @@ def inject_claude_task(runtime: ContainerRuntime, container: str, project_dir: s
     )
     runtime.exec(container, ["su", "-", "user", "-c", trust_script])
 
-    click.echo("  Claude Code task injected (will start on VS Code folder open).")
+    if not quiet:
+        click.echo("  Claude Code task injected (will start on VS Code folder open).")
