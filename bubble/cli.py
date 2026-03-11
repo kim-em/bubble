@@ -1716,9 +1716,7 @@ def open_cmd(
             from .claude import generate_issue_prompt
 
             click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
-            claude_prompt = generate_issue_prompt(
-                t.owner, t.repo, t.ref, checkout_branch
-            ) or ""
+            claude_prompt = generate_issue_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
 
         _finalize_bubble(
             runtime,
@@ -1774,7 +1772,10 @@ def _reattach(
                 has_upstream = runtime.exec(
                     name,
                     [
-                        "su", "-", "user", "-c",
+                        "su",
+                        "-",
+                        "user",
+                        "-c",
                         f"cd {q_dir} && git rev-parse --abbrev-ref"
                         " @{upstream} 2>/dev/null || true",
                     ],

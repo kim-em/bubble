@@ -11,7 +11,7 @@ from .runtime.base import ContainerRuntime
 # Claude task command: reads prompt from file, runs Claude with skip-permissions,
 # then deletes the prompt file so reopening is clean.
 CLAUDE_TASK_COMMAND = (
-    'test -f .vscode/claude-prompt.txt && ANTHROPIC_API_KEY= CLAUDECODE='
+    "test -f .vscode/claude-prompt.txt && ANTHROPIC_API_KEY= CLAUDECODE="
     ' claude --dangerously-skip-permissions "$(cat .vscode/claude-prompt.txt)"'
     " && rm -f .vscode/claude-prompt.txt"
 )
@@ -52,7 +52,7 @@ def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) ->
                 "api",
                 f"repos/{owner}/{repo}/issues/{issue_num}/comments",
                 "--jq",
-                '.[].body',
+                ".[].body",
             ],
             capture_output=True,
             text=True,
@@ -79,9 +79,7 @@ def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) ->
     return prompt
 
 
-def inject_claude_task(
-    runtime: ContainerRuntime, container: str, project_dir: str, prompt: str
-):
+def inject_claude_task(runtime: ContainerRuntime, container: str, project_dir: str, prompt: str):
     """Inject Claude auto-start task into a container's VS Code configuration.
 
     - Writes prompt to .vscode/claude-prompt.txt
@@ -116,7 +114,7 @@ def inject_claude_task(
     script = (
         f"cd {q_dir} && "
         f"if [ -f .vscode/tasks.json ]; then "
-        f"  python3 -c \""
+        f'  python3 -c "'
         f"import json,sys; "
         f"t=json.load(open('.vscode/tasks.json')); "
         f"t['tasks']=[x for x in t.get('tasks',[])"
@@ -152,8 +150,8 @@ def inject_claude_task(
         f"GIT_DIR=$(git rev-parse --git-dir) && "
         f"mkdir -p $GIT_DIR/info && "
         f"for f in .vscode/claude-prompt.txt .vscode/settings.json .vscode/tasks.json; do "
-        f"  grep -qxF \"$f\" $GIT_DIR/info/exclude 2>/dev/null"
-        f" || echo \"$f\" >> $GIT_DIR/info/exclude; "
+        f'  grep -qxF "$f" $GIT_DIR/info/exclude 2>/dev/null'
+        f' || echo "$f" >> $GIT_DIR/info/exclude; '
         f"done"
     )
     runtime.exec(container, ["su", "-", "user", "-c", exclude_script])
