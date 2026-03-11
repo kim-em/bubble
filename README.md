@@ -35,7 +35,7 @@ bubble 123                   # opens PR #123 for the current repo
 # List your bubbles
 bubble list
 
-# Drop into SSH session instead of VSCode
+# Drop into an SSH session instead of VSCode
 bubble leanprover/lean4 --shell
 
 # Run on a remote host
