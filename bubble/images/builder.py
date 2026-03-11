@@ -5,7 +5,7 @@ import hashlib
 import re
 import subprocess
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from ..config import DATA_DIR, load_config
@@ -23,18 +23,23 @@ BUILD_LOCK_DIR = Path("/tmp/bubble-build-locks")
 
 
 @contextmanager
-def _build_lock(image_name: str):
-    """Acquire an exclusive file lock for an image build.
+def _build_lock(image_name: str, *, shared: bool = False):
+    """Acquire a file lock for an image build.
 
-    Prevents concurrent builds of the same image from racing on the
-    shared builder container name. If another build is in progress,
-    this blocks until it completes.
+    With ``shared=False`` (default): exclusive lock that prevents
+    concurrent builds of the same image from racing on the shared
+    builder container name.
+
+    With ``shared=True``: shared/read lock used by derived-image builds
+    to hold the parent stable while they build from it.  Multiple shared
+    locks coexist, but an exclusive lock blocks until all shared locks
+    are released (and vice-versa).
     """
     BUILD_LOCK_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = BUILD_LOCK_DIR / f"{image_name}.lock"
     fd = lock_path.open("w")
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         yield
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
@@ -416,9 +421,21 @@ def build_image(runtime: ContainerRuntime, image_name: str):
     if parent in IMAGES and not runtime.image_exists(parent):
         build_image(runtime, parent)
 
-    # Acquire exclusive lock to prevent concurrent builds of the same image.
-    # After acquiring, re-check whether the image was built by another process.
-    with _build_lock(image_name):
+    # Acquire a shared lock on the parent (if it's one of our images) to
+    # prevent the parent from being rebuilt while we build from it.  This
+    # fixes the race where a concurrent parent rebuild could either:
+    #   (a) produce a derived image built from a stale parent, or
+    #   (b) purge the derived image we just published.
+    # Multiple derived builds can proceed concurrently (shared locks coexist),
+    # but a parent rebuild (exclusive lock) waits for them all to finish.
+    #
+    # Then acquire an exclusive lock on this image to prevent concurrent
+    # builds of the same image.
+    with ExitStack() as stack:
+        if parent in IMAGES:
+            stack.enter_context(_build_lock(parent, shared=True))
+        stack.enter_context(_build_lock(image_name))
+
         if runtime.image_exists(image_name):
             print(f"{image_name} image already built (by concurrent process).")
             return
@@ -498,9 +515,14 @@ def build_lean_toolchain_image(
     safe_alias = alias.replace(".", "-")
     build_name = f"{safe_alias}-builder"
 
-    # Acquire exclusive lock to prevent concurrent builds of the same image.
-    # After acquiring, re-check whether the image was built by another process.
-    with _build_lock(safe_alias):
+    # Acquire a shared lock on the base lean image to prevent it from being
+    # rebuilt while we build from it (same parent-lock pattern as build_image).
+    # Then acquire an exclusive lock on this toolchain image.
+    with ExitStack() as stack:
+        # base_lean_image is always one of our images (e.g. "lean", "lean-emacs")
+        stack.enter_context(_build_lock(base_lean_image, shared=True))
+        stack.enter_context(_build_lock(safe_alias))
+
         if runtime.image_exists(alias):
             print(f"{alias} image already built (by concurrent process).")
             return
