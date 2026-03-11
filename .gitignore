@@ -8,3 +8,6 @@ build/
 .venv/
 .env
 uv.lock
+.vscode/claude-prompt.txt
+.vscode/tasks.json
+.vscode/settings.json
