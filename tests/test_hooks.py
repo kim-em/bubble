@@ -1,5 +1,6 @@
 """Tests for the hook system."""
 
+import os
 import subprocess
 
 import pytest
@@ -29,7 +30,7 @@ def lean_repo(tmp_path):
             "GIT_COMMITTER_NAME": "test",
             "GIT_COMMITTER_EMAIL": "t@t",
             "HOME": str(tmp_path),
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
         },
     )
     subprocess.run(
@@ -60,7 +61,7 @@ def non_lean_repo(tmp_path):
             "GIT_COMMITTER_NAME": "test",
             "GIT_COMMITTER_EMAIL": "t@t",
             "HOME": str(tmp_path),
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
         },
     )
     subprocess.run(
@@ -91,7 +92,7 @@ def nightly_lean_repo(tmp_path):
             "GIT_COMMITTER_NAME": "test",
             "GIT_COMMITTER_EMAIL": "t@t",
             "HOME": str(tmp_path),
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
         },
     )
     subprocess.run(
@@ -107,7 +108,7 @@ GIT_ENV = {
     "GIT_AUTHOR_EMAIL": "t@t",
     "GIT_COMMITTER_NAME": "test",
     "GIT_COMMITTER_EMAIL": "t@t",
-    "PATH": "/usr/bin:/bin:/usr/local/bin",
+    "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
 }
 
 

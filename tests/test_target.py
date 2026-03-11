@@ -1,5 +1,6 @@
 """Tests for the target parsing module."""
 
+import os
 import subprocess
 
 import pytest
@@ -172,7 +173,7 @@ _GIT_ENV = {
     "GIT_AUTHOR_EMAIL": "t@t",
     "GIT_COMMITTER_NAME": "test",
     "GIT_COMMITTER_EMAIL": "t@t",
-    "PATH": "/usr/bin:/bin:/usr/local/bin",
+    "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
 }
 
 
