@@ -376,7 +376,6 @@ class TestClaudeConfigMounts:
         (claude_dir / "keybindings.json").write_text("{}")
         (claude_dir / "commands").mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
-        (claude_dir / ".current-account").write_text("acct")
 
         monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
 
@@ -391,7 +390,6 @@ class TestClaudeConfigMounts:
         assert "/home/user/.claude/commands" in targets
         # Credentials NOT included by default
         assert "/home/user/.claude/.credentials.json" not in targets
-        assert "/home/user/.claude/.current-account" not in targets
         assert all(m.readonly for m in mounts)
 
     def test_returns_all_with_credentials(self, tmp_path, monkeypatch):
@@ -404,16 +402,14 @@ class TestClaudeConfigMounts:
         (claude_dir / "keybindings.json").write_text("{}")
         (claude_dir / "commands").mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
-        (claude_dir / ".current-account").write_text("acct")
 
         monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
 
         mounts = claude_config_mounts(include_credentials=True)
 
-        assert len(mounts) == 7
+        assert len(mounts) == 6
         targets = {m.target for m in mounts}
         assert "/home/user/.claude/.credentials.json" in targets
-        assert "/home/user/.claude/.current-account" in targets
 
     def test_skips_missing_files(self, tmp_path, monkeypatch):
         """Only existing files are mounted."""
@@ -441,7 +437,6 @@ class TestClaudeConfigMounts:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
-        (claude_dir / ".current-account").write_text("acct")
 
         monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
 
@@ -454,7 +449,6 @@ class TestClaudeConfigMounts:
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
-        (claude_dir / ".current-account").write_text("acct")
 
         monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
 
@@ -462,7 +456,6 @@ class TestClaudeConfigMounts:
 
         targets = {m.target for m in mounts}
         assert "/home/user/.claude/.credentials.json" in targets
-        assert "/home/user/.claude/.current-account" in targets
         assert all(m.readonly for m in mounts)
 
     def test_has_claude_credentials(self, tmp_path, monkeypatch):

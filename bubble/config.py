@@ -217,7 +217,6 @@ _CLAUDE_CONFIG_ITEMS = [
 # Credential files — opt-in only (--claude-credentials).
 _CLAUDE_CREDENTIAL_ITEMS = [
     ".credentials.json",
-    ".current-account",
 ]
 
 
@@ -247,8 +246,8 @@ def claude_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
     inside containers, giving Claude Code sessions access to global config.
 
     Args:
-        include_credentials: If True, also mount .credentials.json and
-            .current-account. Off by default for security.
+        include_credentials: If True, also mount .credentials.json.
+            Off by default for security.
     """
     mounts = []
     if not CLAUDE_CONFIG_DIR.is_dir():

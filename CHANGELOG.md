@@ -7,6 +7,9 @@
   - Suppress the hint with `claude_projects_symlink = "no"` in `~/.bubble/config.toml`
 
 ## 0.6.2 — 2026-03-12
+- Remove `.current-account` from Claude credential mounts (#91)
+  - Only `.credentials.json` is needed for Claude auth inside bubbles
+  - `.current-account` is local account-swapping machinery, not relevant for containers
 - SSH tunnel auth proxy for remote/cloud bubbles (#81)
   - Remote and cloud bubbles now use the same repo-scoped auth proxy as local bubbles
   - SSH reverse tunnel (`-R`) forwards the local auth proxy to the remote host
@@ -150,7 +153,7 @@
 - VS Code Server moved from `base` to `vscode.sh` script (shared by `base-vscode` and `lean-vscode`)
 - Lean VS Code extensions installed conditionally (only when elan is present in the image)
 - Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json)
-- Credentials (`.credentials.json`, `.current-account`) opt-in via `--claude-credentials` for security
+- Credentials (`.credentials.json`) opt-in via `--claude-credentials` for security
 - Nag message reminds you about `--claude-credentials` when credentials exist on host
 - Writable per-bubble `projects/` directory (`~/.bubble/claude-projects/<name>/`) for persistent session memory
 - Session history and transient state are excluded by design
