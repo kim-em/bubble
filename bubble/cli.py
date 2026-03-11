@@ -960,9 +960,6 @@ def _provision_container(
     if user_mounts:
         for i, m in enumerate(user_mounts):
             device_name = f"user-mount-{i}"
-            # For rw mounts, ensure source is group-writable for UID mapping
-            if not m.readonly:
-                Path(m.source).chmod(0o770)
             runtime.add_disk(
                 name,
                 device_name,
@@ -973,15 +970,10 @@ def _provision_container(
             # Apply exclusions by overmounting with empty tmpfs
             for excluded in m.exclude:
                 exc_path = f"{m.target.rstrip('/')}/{excluded}"
-                exc_device = f"user-excl-{i}-{excluded}".replace("/", "-").replace(".", "-")[:63]
-                runtime.add_device(
-                    name,
-                    exc_device,
-                    "disk",
-                    source="",
-                    path=exc_path,
-                )
-                # Mount a tmpfs to hide the excluded subdirectory
+                # Mount a tmpfs to hide the excluded subdirectory.
+                # mkdir -p runs as root inside the container, so it works
+                # even on RO mounts (the dir already exists on the host,
+                # or we create it in the container's overlay).
                 runtime.exec(
                     name,
                     [

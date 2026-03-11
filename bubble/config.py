@@ -120,19 +120,21 @@ class MountSpec:
             raise ValueError(
                 f"Invalid mount spec {spec!r}: expected /host/path:/container/path[:ro|rw]"
             )
-        # Handle absolute paths on both sides — rejoin if we split too many times
-        # e.g. "/a:/b:ro" -> ["/a", "/b", "ro"]
-        # But we need to handle the mode suffix specially
+        # Check for mode suffix
         mode = "ro"
-        if parts[-1] in ("ro", "rw"):
+        if len(parts) >= 3 and parts[-1] in ("ro", "rw"):
             mode = parts.pop()
+        elif len(parts) >= 3 and not parts[-1].startswith("/"):
+            # Third field present but not a valid mode — reject it
+            raise ValueError(
+                f"Invalid mount mode {parts[-1]!r} in {spec!r}: expected 'ro' or 'rw'"
+            )
         # Rejoin remaining parts — source:target with possible extra colons
         if len(parts) < 2:
             raise ValueError(
                 f"Invalid mount spec {spec!r}: expected /host/path:/container/path[:ro|rw]"
             )
-        # Source is everything before the last path component
-        # Simple heuristic: target starts with / so split on ":/"
+        # Target starts with / so split on ":/"
         raw = ":".join(parts)
         idx = raw.find(":/")
         if idx == -1:
@@ -157,8 +159,20 @@ class MountSpec:
         exclude = entry.get("exclude", [])
         if isinstance(exclude, str):
             exclude = [exclude]
+        for e in exclude:
+            _validate_exclude(e)
         source = str(Path(source).expanduser())
         return cls(source=source, target=target, readonly=(mode == "ro"), exclude=exclude)
+
+
+def _validate_exclude(entry: str) -> None:
+    """Validate an exclude entry is a simple relative subdirectory name."""
+    if not entry:
+        raise ValueError("Empty exclude entry")
+    if entry.startswith("/"):
+        raise ValueError(f"Exclude entry must be relative, not absolute: {entry!r}")
+    if ".." in entry.split("/"):
+        raise ValueError(f"Exclude entry must not contain '..': {entry!r}")
 
 
 def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSpec]:

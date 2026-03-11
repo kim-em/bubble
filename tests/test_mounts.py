@@ -43,6 +43,10 @@ class TestMountSpecFromCli:
         with pytest.raises(ValueError, match="absolute"):
             MountSpec.from_cli("/host:relative/path")
 
+    def test_invalid_mode_suffix_raises(self):
+        with pytest.raises(ValueError, match="mode"):
+            MountSpec.from_cli("/host:/container:bogus")
+
 
 class TestMountSpecFromConfig:
     """Test parsing [[mounts]] config entries."""
@@ -102,6 +106,30 @@ class TestMountSpecFromConfig:
                 "source": "/data",
                 "target": "/mnt/data",
                 "mode": "wx",
+            })
+
+    def test_exclude_absolute_path_raises(self):
+        with pytest.raises(ValueError, match="relative"):
+            MountSpec.from_config({
+                "source": "/data",
+                "target": "/mnt/data",
+                "exclude": ["/etc"],
+            })
+
+    def test_exclude_parent_traversal_raises(self):
+        with pytest.raises(ValueError, match="\\.\\."):
+            MountSpec.from_config({
+                "source": "/data",
+                "target": "/mnt/data",
+                "exclude": ["../etc"],
+            })
+
+    def test_exclude_empty_raises(self):
+        with pytest.raises(ValueError, match="Empty"):
+            MountSpec.from_config({
+                "source": "/data",
+                "target": "/mnt/data",
+                "exclude": [""],
             })
 
 
@@ -183,14 +211,14 @@ class TestMountProvisioning:
         assert user_disk_calls[0] == ("add_disk", "test-container", "user-mount-0", str(src1), "/mnt/src1", True)
         assert user_disk_calls[1] == ("add_disk", "test-container", "user-mount-1", str(src2), "/mnt/src2", False)
 
-    def test_rw_mount_sets_permissions(self, mock_runtime, tmp_path):
-        """Verify rw mounts get chmod 0o770."""
+    def test_rw_mount_does_not_mutate_host_permissions(self, mock_runtime, tmp_path):
+        """Verify rw mounts do NOT chmod the host source directory."""
         from bubble.cli import _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
         rw_dir = tmp_path / "rw_data"
-        rw_dir.mkdir()
+        rw_dir.mkdir(mode=0o755)
 
         mounts = [
             MountSpec(source=str(rw_dir), target="/mnt/data", readonly=False),
@@ -202,10 +230,11 @@ class TestMountProvisioning:
             user_mounts=mounts,
         )
 
-        assert rw_dir.stat().st_mode & 0o777 == 0o770
+        # Host permissions must not be changed
+        assert rw_dir.stat().st_mode & 0o777 == 0o755
 
     def test_exclusions_overmount_tmpfs(self, mock_runtime, tmp_path):
-        """Verify exclusions create exec calls to mount tmpfs."""
+        """Verify exclusions create exec calls to mount tmpfs (no add_device)."""
         from bubble.cli import _provision_container
 
         ref_path = tmp_path / "repo.git"
@@ -230,6 +259,11 @@ class TestMountProvisioning:
         exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
         tmpfs_execs = [c for c in exec_calls if "tmpfs" in " ".join(c[2])]
         assert len(tmpfs_execs) == 2
+
+        # No add_device calls for exclusions (just tmpfs via exec)
+        device_calls = [c for c in mock_runtime.calls if c[0] == "add_device"]
+        excl_devices = [c for c in device_calls if "user-excl" in str(c)]
+        assert len(excl_devices) == 0
 
     def test_no_user_mounts(self, mock_runtime, tmp_path):
         """No user mount calls when user_mounts is empty."""
