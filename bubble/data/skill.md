@@ -54,7 +54,7 @@ bubble doctor
 
 ## Tools
 
-Tools like Claude Code, GitHub CLI, and OpenAI Codex can be installed in container images:
+Tools like Claude Code and OpenAI Codex can be installed in container images:
 
 ```bash
 bubble tools list                  # show available tools and settings

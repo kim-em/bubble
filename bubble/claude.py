@@ -44,7 +44,7 @@ _DEFAULT_PR_TEMPLATE = (
     "{body}\n"
     "\n"
     "Please:\n"
-    "1. Check the CI status for this PR: `gh pr checks {pr_num}`\n"
+    "1. Check the CI status for this PR using the GitHub API.\n"
     "2. Build a numbered table of all PR comments (both review-level and"
     " inline) with columns for: comment number, author, a summary of the"
     " comment, and whether it has a response yet.\n"
