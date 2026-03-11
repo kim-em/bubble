@@ -33,7 +33,7 @@ class IncusRuntime(ContainerRuntime):
                 stdin=subprocess.DEVNULL,
             )
         except FileNotFoundError:
-            from ..cli import _ensure_dependencies
+            from ..setup import _ensure_dependencies
 
             _ensure_dependencies()
             # _ensure_dependencies exits if incus not found; if we get here, retry
