@@ -100,6 +100,26 @@ exec python3 /usr/local/lib/bubble-relay-client.py "$SOCK" "$1"
 STUBEOF
 chmod +x /usr/local/bin/bubble
 
+# Add shell hook to consume build marker file (for non-VS Code editors).
+# The VS Code extension (bubble.lean-cache) handles this for VS Code.
+# For shell/emacs/neovim, this .profile snippet runs the build in background
+# on first login and points the user to the log file.
+cat >> /home/user/.profile << 'PROFILEEOF'
+
+# bubble: auto-run build command if marker file exists
+if [ -f "$HOME/.bubble-fetch-cache" ]; then
+    _bubble_cmd=$(cat "$HOME/.bubble-fetch-cache")
+    rm -f "$HOME/.bubble-fetch-cache"
+    if [ -n "$_bubble_cmd" ]; then
+        echo "Build started in background..."
+        echo "  Run 'tail -f ~/build.log' to monitor progress."
+        nohup bash -c "$_bubble_cmd" > "$HOME/build.log" 2>&1 &
+    fi
+    unset _bubble_cmd
+fi
+PROFILEEOF
+chown user:user /home/user/.profile
+
 # Clean up
 apt-get clean
 rm -rf /var/lib/apt/lists/*

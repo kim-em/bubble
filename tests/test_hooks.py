@@ -182,6 +182,8 @@ class TestLean4Detection:
         assert len(marker_calls) == 1
         cmd_str = " ".join(marker_calls[0][2])
         assert "cmake --preset release" in cmd_str
+        assert "cd" in cmd_str
+        assert "/home/user/lean4" in cmd_str
 
     def test_post_clone_lean4_no_apt_get(self, lean4_repo, mock_runtime):
         """lean4 post_clone should NOT install packages (cmake is in base image)."""
@@ -201,6 +203,8 @@ class TestLean4Detection:
         assert len(marker_calls) == 1
         cmd_str = " ".join(marker_calls[0][2])
         assert "lake exe cache get" in cmd_str
+        assert "cd" in cmd_str
+        assert "/home/user/mathlib4" in cmd_str
 
     def test_workspace_file_lean4(self, lean4_repo):
         hook = LeanHook()
