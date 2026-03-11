@@ -144,6 +144,7 @@ def open_editor_native(editor: str, local_path: str, command: list[str] | None =
             subprocess.run(
                 ["code", "--disable-workspace-trust", "--folder-uri", f"file://{local_path}"],
                 check=True,
+                stderr=subprocess.DEVNULL,
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
             print(f"VSCode CLI not found or failed. Open manually: {local_path}")
@@ -170,7 +171,11 @@ def open_vscode(
         uri = f"vscode-remote://ssh-remote+{host}{remote_path}"
         flag = "--folder-uri"
     try:
-        subprocess.run(["code", "--disable-workspace-trust", flag, uri], check=True)
+        subprocess.run(
+            ["code", "--disable-workspace-trust", flag, uri],
+            check=True,
+            stderr=subprocess.DEVNULL,
+        )
     except subprocess.CalledProcessError:
         if workspace_file:
             # Fall back to opening the folder if --file-uri fails
@@ -179,6 +184,7 @@ def open_vscode(
                 subprocess.run(
                     ["code", "--disable-workspace-trust", "--folder-uri", folder_uri],
                     check=True,
+                    stderr=subprocess.DEVNULL,
                 )
             except (FileNotFoundError, subprocess.CalledProcessError):
                 pass
