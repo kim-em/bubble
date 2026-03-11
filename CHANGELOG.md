@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 — 2026-03-12
+- Fix race between parent and derived image builds (#80)
+  - Derived-image builds now hold a shared lock on the parent image
+  - Prevents parent rebuilds from running concurrently with derived builds
+  - Multiple derived builds can still proceed in parallel (shared locks coexist)
+
 ## 0.6.0 — 2026-03-12
 - Migrate editors and elan to the pluggable tools system (#47)
   - Editors (vscode, emacs, neovim) are now tools installed on the base image
