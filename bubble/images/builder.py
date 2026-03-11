@@ -234,8 +234,8 @@ def build_image(runtime: ContainerRuntime, image_name: str):
     runtime.publish(build_name, image_name)
     runtime.delete(build_name)
 
-    # Record the VS Code commit hash baked into the image
-    if vscode_commit:
+    # Record the VS Code commit hash baked into the image (only for vscode images)
+    if vscode_commit and spec["script"] == "vscode.sh":
         VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         VSCODE_COMMIT_FILE.write_text(vscode_commit + "\n")
 
