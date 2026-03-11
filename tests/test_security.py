@@ -434,6 +434,17 @@ def test_apply_preset_default_idempotent():
     assert len(changed) == 0
 
 
+def test_apply_preset_default_clears_legacy_github_token():
+    """permissive then default should clear legacy [github] token."""
+    config = {"github": {"token": False}}
+    # Legacy token=false makes github_auth effectively off
+    assert is_enabled(config, "github_auth") is False
+    apply_preset_default(config)
+    # default should clear the legacy key, so github_auth is truly auto (on)
+    assert get_setting(config, "github_auth") == "auto"
+    assert is_enabled(config, "github_auth") is True
+
+
 def test_apply_preset_default_clears_legacy_relay():
     """permissive then default should fully restore relay to auto."""
     config = {}

@@ -247,6 +247,9 @@ def apply_preset_default(config: dict) -> list[str]:
     # Clear legacy relay flag so backwards compat doesn't override auto
     if "relay" in config and "enabled" in config["relay"]:
         del config["relay"]["enabled"]
+    # Clear legacy github token flag so backwards compat doesn't override auto
+    if "github" in config and "token" in config["github"]:
+        del config["github"]["token"]
     return changed
 
 
