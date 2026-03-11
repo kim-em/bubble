@@ -2,7 +2,7 @@
 
 ## 0.5.9 — 2026-03-11
 - Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json, credentials)
-- Writable `projects/` directory (`~/.bubble/claude-projects/`) shared across bubbles for persistent session memory
+- Writable per-bubble `projects/` directory (`~/.bubble/claude-projects/<name>/`) for persistent session memory
 - Session history and transient state are excluded by design
 - Opt out with `--no-claude-config`
 

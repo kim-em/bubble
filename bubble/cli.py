@@ -986,10 +986,11 @@ def _provision_container(
                 m.target,
                 readonly=m.readonly,
             )
-        # Writable projects directory — shared across bubbles, persists on host.
-        # Separate from the host's ~/.claude/projects/ so existing host session
-        # history isn't visible, but new sessions created inside bubbles persist.
-        projects_dir = DATA_DIR / "claude-projects"
+        # Writable projects directory — per-bubble subdirectory, persists on host.
+        # Each bubble gets its own isolated subdir so bubbles can't see each
+        # other's sessions, but all accumulate under ~/.bubble/claude-projects/
+        # on the host (useful for backing up with a git repo).
+        projects_dir = DATA_DIR / "claude-projects" / name
         projects_dir.mkdir(parents=True, exist_ok=True)
         projects_dir.chmod(0o770)
         runtime.add_disk(

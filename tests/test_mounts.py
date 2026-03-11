@@ -565,8 +565,8 @@ class TestClaudeConfigProvisioning:
         assert projects_calls[0][4] == "/home/user/.claude/projects"
         assert projects_calls[0][5] is False  # read-write
 
-        # Host directory created
-        projects_dir = tmp_data_dir / "claude-projects"
+        # Host directory created with per-bubble subdirectory
+        projects_dir = tmp_data_dir / "claude-projects" / "test-container"
         assert projects_dir.is_dir()
         assert projects_dir.stat().st_mode & 0o770 == 0o770
 
