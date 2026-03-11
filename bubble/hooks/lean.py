@@ -218,6 +218,8 @@ class LeanHook(Hook):
             try:
                 # Clone from mounted bare repo with --reference for alternates.
                 # Since source and reference are the same, zero objects are copied.
+                # Use -c safe.directory to allow reading the root-owned mounted bare repo
+                # (scoped to this command only, not persisted in global gitconfig).
                 runtime.exec(
                     container,
                     [
@@ -225,7 +227,8 @@ class LeanHook(Hook):
                         "-",
                         "user",
                         "-c",
-                        f"git clone --reference {q_bare} file://{q_bare} {q_pkg}",
+                        f"git -c safe.directory={q_bare} clone"
+                        f" --reference {q_bare} file://{q_bare} {q_pkg}",
                     ],
                 )
 
