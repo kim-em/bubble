@@ -21,7 +21,9 @@ SSH_CONFIG_FILE = SSH_CONFIG_DIR / "bubble"
 SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"
 
 
-def add_ssh_config(bubble_name: str, user: str = "user", remote_host=None):
+def add_ssh_config(
+    bubble_name: str, user: str = "user", remote_host=None, host_key_trust: bool = True
+):
     """Add an SSH config entry for a bubble.
 
     Uses `incus exec` as ProxyCommand to avoid port forwarding issues on macOS.
@@ -32,6 +34,7 @@ def add_ssh_config(bubble_name: str, user: str = "user", remote_host=None):
         bubble_name: Container name.
         user: User inside the container.
         remote_host: Optional RemoteHost for chained ProxyCommand.
+        host_key_trust: If True (default), disable StrictHostKeyChecking.
     """
     if not _BUBBLE_NAME_RE.match(bubble_name):
         raise ValueError(f"Invalid bubble name for SSH config: {bubble_name!r}")
@@ -53,14 +56,17 @@ def add_ssh_config(bubble_name: str, user: str = "user", remote_host=None):
     else:
         proxy_cmd = incus_cmd
 
-    entry = f"""
-Host bubble-{bubble_name}
-  User {user}
-  ProxyCommand {proxy_cmd}
-  StrictHostKeyChecking no
-  UserKnownHostsFile /dev/null
-  LogLevel ERROR
-"""
+    lines = [
+        f"Host bubble-{bubble_name}",
+        f"  User {user}",
+        f"  ProxyCommand {proxy_cmd}",
+    ]
+    if host_key_trust:
+        lines.append("  StrictHostKeyChecking no")
+        lines.append("  UserKnownHostsFile /dev/null")
+    lines.append("  LogLevel ERROR")
+
+    entry = "\n" + "\n".join(lines) + "\n"
     # Append to config file
     with open(SSH_CONFIG_FILE, "a") as f:
         f.write(entry)

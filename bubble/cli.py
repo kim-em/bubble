@@ -21,9 +21,7 @@ from .config import (
     claude_config_mounts,
     editor_config_mounts,
     ensure_dirs,
-    has_claude_credentials,
     load_config,
-    load_raw_config,
     maybe_symlink_claude_projects,
     parse_mounts,
     repo_short_name,
@@ -44,6 +42,17 @@ from .naming import deduplicate_name, generate_name
 from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
 from .runtime.incus import IncusRuntime
+from .security import SETTINGS as SECURITY_SETTINGS
+from .security import (
+    VALID_VALUES as SECURITY_VALID_VALUES,
+)
+from .security import (
+    filter_github_domains,
+    get_setting,
+    is_enabled,
+    is_locked_off,
+    print_warnings,
+)
 from .target import Target, TargetParseError, parse_target
 from .vscode import (
     SSH_CONFIG_FILE,
@@ -481,7 +490,7 @@ def _ensure_running(runtime: ContainerRuntime, name: str):
     return info
 
 
-def _setup_ssh(runtime: ContainerRuntime, name: str):
+def _setup_ssh(runtime: ContainerRuntime, name: str, host_key_trust: bool = True):
     """Start SSH and inject host public keys into a container."""
     runtime.exec(name, ["bash", "-c", "service ssh start || /usr/sbin/sshd"])
 
@@ -519,7 +528,7 @@ def _setup_ssh(runtime: ContainerRuntime, name: str):
         finally:
             Path(tmp_keys).unlink(missing_ok=True)
 
-    add_ssh_config(name)
+    add_ssh_config(name, host_key_trust=host_key_trust)
 
 
 def _get_host_git_identity() -> tuple[str, str]:
@@ -574,6 +583,9 @@ def _apply_network(
     for d in tool_runtime_domains(resolve_tools(config)):
         if d not in domains:
             domains.append(d)
+    # Strip ALL GitHub domains after merging all sources (base, hooks, tools)
+    if not is_enabled(config, "network_github"):
+        domains = filter_github_domains(domains)
     if domains:
         try:
             from .network import apply_allowlist
@@ -1074,7 +1086,9 @@ def _provision_container(
                 readonly=True,
             )
 
-    # Add shared writable mounts from hook (e.g. mathlib cache)
+    # Add shared mounts from hook (e.g. mathlib cache)
+    # When shared_cache is off, mount read-only so containers can't poison the cache
+    shared_cache_enabled = is_enabled(config, "shared_cache")
     if hook:
         env_lines = []
         for host_dir_name, container_path, env_var in hook.shared_mounts():
@@ -1087,6 +1101,7 @@ def _provision_container(
                 f"shared-{host_dir_name}",
                 str(host_path),
                 container_path,
+                readonly=not shared_cache_enabled,
             )
             if env_var:
                 env_lines.append(f"export {env_var}={shlex.quote(container_path)}")
@@ -1198,8 +1213,7 @@ def _provision_container(
                     ],
                 )
 
-    relay_enabled = config.get("relay", {}).get("enabled", False)
-    if relay_enabled:
+    if is_enabled(config, "relay"):
         from .relay import RELAY_PORT_FILE, RELAY_SOCK
 
         # macOS/Colima: Unix sockets can't traverse virtio-fs, use TCP.
@@ -1470,7 +1484,7 @@ def _finalize_bubble(
 
     if not machine_readable:
         click.echo("Setting up SSH access...")
-    _setup_ssh(runtime, name)
+    _setup_ssh(runtime, name, host_key_trust=is_enabled(config, "host_key_trust"))
     _setup_git_config(runtime, name, git_name, git_email)
 
     commit = ""
@@ -1623,7 +1637,8 @@ def _open_remote(
         setup_gh_token(None, name, remote_host=remote_host)
 
     # Write local SSH config with chained ProxyCommand through the remote host
-    add_ssh_config(name, remote_host=remote_host)
+    host_key = is_enabled(config, "host_key_trust")
+    add_ssh_config(name, remote_host=remote_host, host_key_trust=host_key)
 
     # Register in local lifecycle registry with remote_host info
     register_bubble(
@@ -1771,6 +1786,26 @@ def open_cmd(
 
     config = load_config()
 
+    # Enforce security: reject all user mounts when user_mounts is locked off
+    # This covers both --mount CLI flags and [[mounts]] from config
+    user_mounts_locked = is_locked_off(config, "user_mounts")
+    if user_mounts_locked and (mounts or config.get("mounts")):
+        click.echo(
+            "Error: user mounts rejected because security.user_mounts=off. "
+            "Re-enable: bubble config set security.user_mounts on",
+            err=True,
+        )
+        sys.exit(1)
+
+    # Enforce security: reject --claude-credentials when locked off
+    if claude_credentials and is_locked_off(config, "claude_credentials"):
+        click.echo(
+            "Error: --claude-credentials rejected because security.claude_credentials=off. "
+            "Re-enable: bubble config set security.claude_credentials on",
+            err=True,
+        )
+        sys.exit(1)
+
     # Parse user mounts from config + CLI flags
     try:
         mount_specs = parse_mounts(config, mounts)
@@ -1813,6 +1848,10 @@ def open_cmd(
             click.echo(f"Warning: unknown editor '{editor}' in config, using vscode.", err=True)
             editor = "vscode"
 
+    # Print security posture warnings (for auto settings)
+    if not machine_readable:
+        print_warnings(config)
+
     # Native mode: skip all container/remote logic
     if native:
         incompatible = []
@@ -1841,6 +1880,13 @@ def open_cmd(
 
             remote_host = RemoteHost.parse(ssh_host)
         elif cloud or config.get("cloud", {}).get("default", False):
+            if is_locked_off(config, "cloud_root"):
+                click.echo(
+                    "Error: cloud access rejected because security.cloud_root=off. "
+                    "Re-enable: bubble config set security.cloud_root on",
+                    err=True,
+                )
+                sys.exit(1)
             from .cloud import get_cloud_remote_host
 
             remote_host = get_cloud_remote_host(config)
@@ -1882,29 +1928,23 @@ def open_cmd(
         )
         return
 
+    # Print security posture warnings (for auto settings)
+    if not machine_readable:
+        print_warnings(config)
+
     # Resolve claude_credentials: CLI flag > config > default (False)
-    # Track whether the user made a deliberate choice (CLI flag or config setting)
-    credentials_from_cli = claude_credentials is not None
-    raw = load_raw_config()
-    credentials_in_config = "claude" in raw and "credentials" in raw["claude"]
-    credentials_explicitly_set = credentials_from_cli or credentials_in_config
     if claude_credentials is None:
         claude_credentials = config.get("claude", {}).get("credentials", False)
 
     # Claude Code config mounts (opt-out via --no-claude-config)
+    # When security.claude_credentials=on, always include credentials
+    include_creds = claude_credentials or is_enabled(config, "claude_credentials")
     cc_mounts = []
     if claude_config:
-        cc_mounts = claude_config_mounts(include_credentials=claude_credentials)
+        cc_mounts = claude_config_mounts(include_credentials=include_creds)
         # Suppress auto mounts that overlap with user mounts (exact or ancestry)
         user_targets = {Path(m.target) for m in mount_specs}
         cc_mounts = [m for m in cc_mounts if not _mount_overlaps(Path(m.target), user_targets)]
-        # Nag about credentials if not enabled and not explicitly configured
-        if not claude_credentials and not credentials_explicitly_set and has_claude_credentials():
-            click.echo(
-                "Tip: use --claude-credentials or 'bubble claude credentials on'"
-                " to mount Claude auth into this bubble.",
-                err=True,
-            )
         # Offer to symlink ~/.bubble/claude-projects/ to ~/.claude/projects/
         if not machine_readable:
             maybe_symlink_claude_projects()
@@ -1997,7 +2037,7 @@ def open_cmd(
 
     # Pre-fetch dependency bare repos for Lake pre-population
     dep_mounts = {}  # repo_name -> host_path
-    if hook:
+    if hook and is_enabled(config, "git_manifest_trust"):
         deps = hook.git_dependencies()
         if deps:
             if not machine_readable:
@@ -3257,7 +3297,17 @@ def relay_enable():
     click.echo()
 
     config = load_config()
+    # Check if relay is explicitly locked off
+    if is_locked_off(config, "relay"):
+        click.echo(
+            "Error: relay is locked off (security.relay=off). "
+            "Re-enable: bubble config set security.relay on",
+            err=True,
+        )
+        sys.exit(1)
+
     config.setdefault("relay", {})["enabled"] = True
+    config.setdefault("security", {})["relay"] = "on"
     save_config(config)
 
     # Install and start the relay daemon
@@ -3281,6 +3331,9 @@ def relay_disable():
     """Disable bubble-in-bubble relay."""
     config = load_config()
     config.setdefault("relay", {})["enabled"] = False
+    # Reset security.relay to auto (not off) so relay enable works as a toggle.
+    # Use 'bubble config set security.relay off' to permanently lock it off.
+    config.setdefault("security", {}).pop("relay", None)
     save_config(config)
 
     from .automation import remove_relay_daemon
@@ -3305,8 +3358,9 @@ def relay_disable():
 def relay_status():
     """Show relay status."""
     config = load_config()
-    enabled = config.get("relay", {}).get("enabled", False)
+    enabled = is_enabled(config, "relay")
     click.echo(f"  Relay: {'enabled' if enabled else 'disabled'}")
+    click.echo(f"  Security setting: {get_setting(config, 'relay')}")
 
     from .relay import RELAY_PORT_FILE, RELAY_SOCK
 
@@ -3465,15 +3519,23 @@ def cloud_provision(server_type, location, list_types):
 
     Use --list to see all available server types with current pricing.
     """
+    config = load_config()
     if list_types:
         from .cloud_types import list_server_types
 
-        config = load_config()
         list_server_types(config, location=location)
         return
+
+    if is_locked_off(config, "cloud_root"):
+        click.echo(
+            "Error: cloud provisioning rejected because security.cloud_root=off. "
+            "Re-enable: bubble config set security.cloud_root on",
+            err=True,
+        )
+        sys.exit(1)
+
     from .cloud import provision_server
 
-    config = load_config()
     if not server_type:
         click.echo("Use --list to see all available server types.")
     provision_server(config, server_type=server_type, location=location)
@@ -3533,6 +3595,14 @@ def cloud_status():
 @click.argument("args", nargs=-1)
 def cloud_ssh_cmd(args):
     """SSH directly to the cloud server."""
+    config = load_config()
+    if is_locked_off(config, "cloud_root"):
+        click.echo(
+            "Error: cloud SSH rejected because security.cloud_root=off. "
+            "Re-enable: bubble config set security.cloud_root on",
+            err=True,
+        )
+        sys.exit(1)
     from .cloud import cloud_ssh
 
     cloud_ssh(list(args) if args else None)
@@ -3823,6 +3893,110 @@ def gh_status():
         click.echo("\nRun 'gh auth login' to authenticate on the host first.")
     elif not token_enabled:
         click.echo("\nRun 'bubble gh token on' to enable token injection by default.")
+
+
+@main.group("config")
+def config_group():
+    """View and manage bubble configuration."""
+
+
+@config_group.command("security")
+def config_security():
+    """Show current security posture."""
+    config = load_config()
+
+    click.echo(f"{'SETTING':<22} {'VALUE':<8} {'EFFECTIVE':<12} DESCRIPTION")
+    click.echo("-" * 80)
+
+    auto_count = 0
+    for name, defn in SECURITY_SETTINGS.items():
+        value = get_setting(config, name)
+        if value == "auto":
+            auto_count += 1
+            effective = defn.auto_default
+        else:
+            effective = value
+        click.echo(f"{name:<22} {value:<8} {effective:<12} {defn.description}")
+
+    if auto_count == len(SECURITY_SETTINGS):
+        click.echo(
+            "\nAll settings are 'auto'. Run 'bubble config accept-risks' to silence "
+            "on-by-default warnings,\nor 'bubble config lockdown' to disable "
+            "off-by-default features permanently."
+        )
+    elif auto_count > 0:
+        click.echo(f"\n{auto_count} setting(s) still 'auto'. Set explicitly to silence warnings.")
+
+
+@config_group.command("set")
+@click.argument("key")
+@click.argument("value", type=click.Choice(SECURITY_VALID_VALUES))
+def config_set(key, value):
+    """Set a security setting: bubble config set security.<name> <value>."""
+    # Accept both "security.X" and bare "X"
+    name = key.removeprefix("security.")
+    if name not in SECURITY_SETTINGS:
+        available = ", ".join(sorted(SECURITY_SETTINGS.keys()))
+        click.echo(f"Unknown security setting: {name}. Available: {available}", err=True)
+        sys.exit(1)
+
+    config = load_config()
+    if "security" not in config:
+        config["security"] = {}
+    config["security"][name] = value
+
+    # Keep relay backwards compat in sync
+    if name == "relay":
+        config.setdefault("relay", {})["enabled"] = value == "on"
+
+    save_config(config)
+    click.echo(f"Set security.{name} = {value}")
+
+
+@config_group.command("lockdown")
+def config_lockdown():
+    """Set all auto-defaulting-to-off settings to off permanently."""
+    config = load_config()
+    if "security" not in config:
+        config["security"] = {}
+
+    changed = []
+    for name, defn in SECURITY_SETTINGS.items():
+        if get_setting(config, name) == "auto" and defn.auto_default == "off":
+            config["security"][name] = "off"
+            if name == "relay":
+                config.setdefault("relay", {})["enabled"] = False
+            changed.append(name)
+
+    if changed:
+        save_config(config)
+        for name in changed:
+            click.echo(f"  security.{name} = off")
+        click.echo(f"Locked down {len(changed)} setting(s).")
+    else:
+        click.echo("No auto-defaulting-to-off settings to lock down.")
+
+
+@config_group.command("accept-risks")
+def config_accept_risks():
+    """Set all auto-defaulting-to-on settings to on permanently (silences warnings)."""
+    config = load_config()
+    if "security" not in config:
+        config["security"] = {}
+
+    changed = []
+    for name, defn in SECURITY_SETTINGS.items():
+        if get_setting(config, name) == "auto" and defn.auto_default == "on":
+            config["security"][name] = "on"
+            changed.append(name)
+
+    if changed:
+        save_config(config)
+        for name in changed:
+            click.echo(f"  security.{name} = on")
+        click.echo(f"Accepted {len(changed)} risk(s). On-by-default warnings silenced.")
+    else:
+        click.echo("No auto-defaulting-to-on settings to accept.")
 
 
 @main.command()
