@@ -91,6 +91,9 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble automation install\|remove\|status` | Manage periodic jobs |
 | `bubble relay enable\|disable\|status` | Manage bubble-in-bubble relay |
 | `bubble remote set-default\|clear-default\|status` | Manage remote SSH host |
+| `bubble cloud provision\|destroy\|start\|stop\|status` | Manage Hetzner Cloud server |
+| `bubble cloud default on\|off` | Set cloud as the default for all bubbles |
+| `bubble cloud ssh` | SSH directly to the cloud server |
 | `bubble doctor` | Diagnose and fix common issues |
 
 ## Images
@@ -135,6 +138,98 @@ allowlist = [
 [remote]
 default_host = ""        # e.g. "user@myserver" or "user@host:2222"
 ```
+
+## Hetzner Cloud
+
+Run bubbles on auto-provisioned Hetzner Cloud servers. The server shuts down automatically when idle to minimize costs, and restarts on demand when you open a new bubble.
+
+### Setup
+
+1. Create a Hetzner Cloud account at [console.hetzner.cloud](https://console.hetzner.cloud)
+2. Go to your project → Security → API Tokens → Generate API Token (read/write)
+3. Set the token in your environment:
+   ```bash
+   export HETZNER_TOKEN="your-token-here"
+   ```
+4. Install the cloud dependency:
+   ```bash
+   uv pip install 'dev-bubble[cloud]'
+   ```
+5. Provision a server:
+   ```bash
+   bubble cloud provision                    # default: cx43 (8 shared vCPU, 16GB RAM)
+   bubble cloud provision --type ccx43       # 16 dedicated vCPU, 64GB RAM
+   bubble cloud provision --type cx53 --location hel1  # specific type and datacenter
+   ```
+
+Bubble generates its own SSH keypair (`~/.bubble/cloud_key`) — no need to configure SSH keys manually.
+
+### Usage
+
+```bash
+# Open a bubble on the cloud server
+bubble --cloud leanprover-community/mathlib4/pull/35219
+
+# Set cloud as the default (no --cloud flag needed)
+bubble cloud default on
+bubble leanprover-community/mathlib4     # goes to cloud automatically
+bubble leanprover/lean4 --local          # override: run locally instead
+```
+
+Multiple bubbles share one cloud server. If the server is stopped (manually or by idle auto-shutdown), it restarts automatically when you run `bubble --cloud <target>` or `bubble <target>` with cloud as default.
+
+### Server Types and Pricing
+
+```bash
+bubble cloud provision --list            # show all types with current pricing
+```
+
+Common types:
+
+| Type | Specs | Approximate Cost |
+|------|-------|-----------------|
+| `cx33` | 4 shared vCPU, 8 GB RAM | ~€0.01/hr |
+| `cx43` | 8 shared vCPU, 16 GB RAM (default) | ~€0.02/hr |
+| `cx53` | 16 shared vCPU, 32 GB RAM | ~€0.04/hr |
+| `ccx33` | 8 dedicated vCPU, 32 GB RAM | ~€0.09/hr |
+| `ccx43` | 16 dedicated vCPU, 64 GB RAM | ~€0.17/hr |
+
+Prices are approximate and vary by datacenter. Run `bubble cloud provision --list` for current pricing from the Hetzner API.
+
+Dedicated vCPU types (`ccx*`) may require a limit increase on new Hetzner accounts — the CLI will guide you if so.
+
+Hetzner bills servers hourly while they exist, even when powered off. To stop billing entirely, use `bubble cloud destroy`. The idle auto-shutdown reduces costs by keeping the server off when not in use, but the only way to fully stop charges is to destroy the server.
+
+### Idle Auto-Shutdown
+
+A systemd timer checks every 5 minutes for SSH connections and CPU load. If there are **no SSH connections** and **low CPU** (normalized load < 0.5) for the configured idle timeout (default: 15 minutes), the server shuts down automatically. A 15-minute boot grace period prevents shutdown during initial setup, so a freshly booted idle server won't shut down for roughly 25 minutes.
+
+- Running containers do **not** prevent shutdown — only active SSH sessions and high CPU load do
+- Containers survive shutdown: they're still on disk when the server restarts
+- The server restarts automatically on your next `bubble --cloud <target>` command
+
+### Lifecycle Commands
+
+```bash
+bubble cloud status                      # show server info and current state
+bubble cloud stop                        # power off manually
+bubble cloud start                       # power on and wait for SSH
+bubble cloud destroy                     # delete server and all containers permanently
+bubble cloud ssh                         # SSH directly to the cloud server (requires server running)
+```
+
+### Configuration
+
+Cloud settings in `~/.bubble/config.toml`:
+
+```toml
+[cloud]
+server_type = "cx43"         # default server type for provision
+location = "fsn1"            # datacenter: fsn1, nbg1, hel1, ash, hil
+idle_timeout = 900           # seconds before idle shutdown (default: 900 = 15min)
+```
+
+The `HETZNER_TOKEN` environment variable is always required — the token is never stored on disk.
 
 ## Bubble-in-Bubble
 
