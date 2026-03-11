@@ -53,6 +53,9 @@ bubble pop <name>
 
 # Clean up bubbles with no unsaved work
 bubble cleanup
+
+# Diagnose issues
+bubble doctor
 ```
 
 ## Tips
