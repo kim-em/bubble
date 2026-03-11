@@ -116,8 +116,6 @@ def test_tool_network_domains_no_duplicates():
 def test_tool_runtime_domains():
     domains = tool_runtime_domains(["claude"])
     assert "api.anthropic.com" in domains
-    assert "statsig.anthropic.com" in domains
-    assert "sentry.io" in domains
 
 
 def test_tool_runtime_domains_combined():

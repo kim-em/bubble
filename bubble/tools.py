@@ -22,7 +22,7 @@ TOOLS = {
         "script": "claude.sh",
         "host_cmd": "claude",
         "network_domains": ["registry.npmjs.org", "deb.nodesource.com"],
-        "runtime_domains": ["api.anthropic.com", "statsig.anthropic.com", "sentry.io"],
+        "runtime_domains": ["api.anthropic.com"],
     },
     "codex": {
         "script": "codex.sh",
