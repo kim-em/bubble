@@ -3332,7 +3332,7 @@ def cloud_provision(server_type, location, list_types):
     Use --list to see all available server types with current pricing.
     """
     if list_types:
-        from .cloud import list_server_types
+        from .cloud_types import list_server_types
 
         config = load_config()
         list_server_types(config, location=location)

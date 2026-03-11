@@ -49,7 +49,7 @@ version = {attr = "bubble.__version__"}
 include = ["bubble*"]
 
 [tool.setuptools.package-data]
-bubble = ["default_repos.json", "data/skill.md"]
+bubble = ["default_repos.json", "data/skill.md", "images/scripts/*.sh", "images/scripts/tools/*.sh"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
