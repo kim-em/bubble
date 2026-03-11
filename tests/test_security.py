@@ -415,6 +415,19 @@ def test_apply_preset_default_idempotent():
     assert len(changed) == 0
 
 
+def test_apply_preset_default_clears_legacy_relay():
+    """permissive then default should fully restore relay to auto."""
+    config = {}
+    apply_preset_permissive(config)
+    # permissive sets both security.relay=on and relay.enabled=True
+    assert config["security"]["relay"] == "on"
+    assert config["relay"]["enabled"] is True
+    apply_preset_default(config)
+    # default should clear both, so relay is truly auto (off)
+    assert get_setting(config, "relay") == "auto"
+    assert is_enabled(config, "relay") is False
+
+
 def test_all_settings_have_valid_category():
     valid_cats = {name for name, _ in CATEGORIES}
     for name, defn in SETTINGS.items():

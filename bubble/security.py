@@ -194,7 +194,7 @@ def print_security_posture(config: dict):
 
             click.echo(f"  {name}: {status}")
             click.echo(f"    {defn.warning}")
-            click.echo(f"    Set: bubble config set security.{name} on|off|auto")
+            click.echo(f"    Set: bubble security set {name} on|off|auto")
             click.echo()
 
     if auto_count == 0:
@@ -229,6 +229,9 @@ def apply_preset_default(config: dict) -> list[str]:
             changed.append(name)
     if "security" not in config:
         config["security"] = security
+    # Clear legacy relay flag so backwards compat doesn't override auto
+    if "relay" in config and "enabled" in config["relay"]:
+        del config["relay"]["enabled"]
     return changed
 
 
