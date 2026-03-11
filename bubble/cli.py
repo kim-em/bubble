@@ -254,7 +254,6 @@ def _open_remote(
     claude_config=True,
     new_branch=None,
     base_ref=None,
-    gh_token=False,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -288,7 +287,7 @@ def _open_remote(
     inject_local_ssh_keys(remote_host, name)
 
     # Set up GitHub auth via tunneled auth proxy
-    if gh_token:
+    if is_enabled(config, "github_auth"):
         from .github_token import setup_gh_token
 
         owner, repo = "", ""
@@ -457,11 +456,6 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     help="Mount ~/.claude credentials into container (default: from config or disabled)",
 )
 @click.option(
-    "--gh-token/--no-gh-token",
-    default=None,
-    help="Inject GitHub auth token into container (default: from config or disabled)",
-)
-@click.option(
     "--claude-prompt-stdin",
     is_flag=True,
     hidden=True,
@@ -491,7 +485,6 @@ def open_cmd(
     mounts,
     claude_config,
     claude_credentials,
-    gh_token,
     claude_prompt_stdin,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
@@ -611,10 +604,6 @@ def open_cmd(
 
                 remote_host = RemoteHost.parse(default)
 
-    # Resolve --gh-token: CLI flag > config > disabled
-    if gh_token is None:
-        gh_token = config.get("github", {}).get("token", False)
-
     if remote_host:
         if mount_specs:
             click.echo(
@@ -638,7 +627,6 @@ def open_cmd(
             claude_config=claude_config,
             new_branch=new_branch,
             base_ref=base_ref,
-            gh_token=gh_token,
         )
         return
 
@@ -664,16 +652,6 @@ def open_cmd(
     if ec_mounts:
         user_targets = {Path(m.target) for m in mount_specs}
         ec_mounts = [m for m in ec_mounts if not mount_overlaps(Path(m.target), user_targets)]
-
-    # Nag about gh token if not enabled
-    if not gh_token and not machine_readable:
-        from .github_token import has_gh_auth
-
-        if has_gh_auth():
-            click.echo(
-                "Tip: use --gh-token to inject GitHub auth into this bubble.",
-                err=True,
-            )
 
     # Local flow
     runtime = get_runtime(config)
@@ -827,7 +805,6 @@ def open_cmd(
             git_email=git_email,
             command=command_args,
             claude_prompt=claude_prompt,
-            gh_token=gh_token,
         )
     except Exception:
         # Clean up partially-provisioned container on failure
