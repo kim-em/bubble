@@ -1,6 +1,12 @@
 # Changelog
 
 ## 0.5.9 — 2026-03-11
+- GitHub issue targets: `bubble https://github.com/owner/repo/issues/123` creates a branch `issue-123` and opens a bubble
+- Bare numbers auto-detect PR vs issue via GitHub API
+- New branch mode: `bubble -b my-feature owner/repo` creates a fresh branch in a new bubble
+- Claude Code integration: issue bubbles auto-inject a Claude prompt from the issue body/comments, runs on VS Code folder open
+- `BUBBLE_CLAUDE_PROMPT` env var for custom Claude prompts on any bubble
+- Pull latest on reattach: clean containers auto-pull before reopening
 - Emacs and Neovim editor support: `--emacs`, `--neovim` flags or `editor = "emacs"` / `editor = "neovim"` in config
 - Uniform editor image naming: `base-vscode`, `base-emacs`, `base-neovim`, `lean-vscode`, `lean-emacs`, `lean-neovim`
 - `lean` is now the core image (elan + leantar); VS Code Server and extensions live in `-vscode` variants

@@ -41,7 +41,7 @@ from .naming import deduplicate_name, generate_name
 from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
 from .runtime.incus import IncusRuntime
-from .target import TargetParseError, parse_target
+from .target import Target, TargetParseError, parse_target
 from .vscode import (
     SSH_CONFIG_FILE,
     add_ssh_config,
@@ -786,6 +786,8 @@ def _generate_bubble_name(t, custom_name: str | None) -> str:
         return custom_name
     if t.kind == "pr":
         return generate_name(t.short_name, "pr", t.ref)
+    if t.kind == "issue":
+        return generate_name(t.short_name, "issue", t.ref)
     if t.kind == "branch":
         return generate_name(t.short_name, "branch", t.ref)
     if t.kind == "commit":
@@ -865,6 +867,7 @@ def _detect_and_build_image(runtime, ref_path, t, editor="vscode"):
     elif t.kind in ("branch", "commit"):
         hook_ref = t.ref
     else:
+        # "repo" and "issue" use the default branch
         hook_ref = "HEAD"
 
     hook = select_hook(ref_path, hook_ref)
@@ -1177,7 +1180,22 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
     )
 
     checkout_branch = ""
-    if t.kind == "pr":
+    if t.kind == "issue":
+        branch_name = f"issue-{t.ref}"
+        click.echo(f"Creating branch '{branch_name}' for issue #{t.ref}...")
+        q_branch = shlex.quote(branch_name)
+        runtime.exec(
+            name,
+            [
+                "su",
+                "-",
+                "user",
+                "-c",
+                f"cd /home/user/{q_short} && git checkout -b {q_branch}",
+            ],
+        )
+        checkout_branch = branch_name
+    elif t.kind == "pr":
         click.echo(f"Checking out PR #{t.ref}...")
         pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
         pr_checkout_ok = False
@@ -1243,6 +1261,37 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
                     f" pull/{t.ref}/head:{q_branch} && git checkout {q_branch}",
                 ],
             )
+    elif t.kind == "branch" and t.new_branch:
+        base = t.base_ref if t.base_ref else "HEAD"
+        q_base = shlex.quote(base)
+        q_branch = shlex.quote(t.ref)
+        if t.base_ref:
+            click.echo(f"Creating branch '{t.ref}' off '{t.base_ref}'...")
+            # Fetch the base ref first if it's not HEAD
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "user",
+                    "-c",
+                    f"cd /home/user/{q_short} && git fetch origin {q_base}"
+                    f" && git checkout -b {q_branch} FETCH_HEAD",
+                ],
+            )
+        else:
+            click.echo(f"Creating branch '{t.ref}' off default branch...")
+            runtime.exec(
+                name,
+                [
+                    "su",
+                    "-",
+                    "user",
+                    "-c",
+                    f"cd /home/user/{q_short} && git checkout -b {q_branch}",
+                ],
+            )
+        checkout_branch = t.ref
     elif t.kind == "branch":
         click.echo(f"Checking out branch '{t.ref}'...")
         checkout_branch = t.ref
@@ -1294,12 +1343,19 @@ def _finalize_bubble(
     git_name="",
     git_email="",
     command=None,
+    claude_prompt="",
 ):
     """Post-clone setup: hooks, SSH, registration, and attach."""
     q_short = shlex.quote(short)
     project_dir = f"/home/user/{short}"
     if hook:
         hook.post_clone(runtime, name, project_dir)
+
+    # Inject Claude Code task if prompt is provided
+    if claude_prompt and not machine_readable:
+        from .claude import inject_claude_task
+
+        inject_claude_task(runtime, name, project_dir, claude_prompt)
 
     if not machine_readable:
         click.echo("Setting up SSH access...")
@@ -1514,6 +1570,21 @@ def _open_remote(
 )
 @click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
 @click.option(
+    "-b",
+    "--new-branch",
+    "new_branch",
+    type=str,
+    default=None,
+    help="Create a new branch with this name",
+)
+@click.option(
+    "--base",
+    "base_ref",
+    type=str,
+    default=None,
+    help="Base branch for --new-branch (default: repo default branch)",
+)
+@click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
 )
 @click.option("--git-name", type=str, default=None, hidden=True, help="Git user.name for container")
@@ -1557,6 +1628,8 @@ def open_cmd(
     command,
     native,
     force_path,
+    new_branch,
+    base_ref,
     no_clone,
     git_name,
     git_email,
@@ -1714,6 +1787,21 @@ def open_cmd(
         sys.exit(1)
     registry.register(t.owner, t.repo)
 
+    # Apply -b/--new-branch: override target to create a new branch
+    if new_branch:
+        t = Target(
+            owner=t.owner,
+            repo=t.repo,
+            kind="branch",
+            ref=new_branch,
+            original=t.original,
+            local_path=t.local_path,
+            new_branch=True,
+            base_ref=base_ref or "",
+        )
+    elif base_ref:
+        click.echo("Warning: --base has no effect without -b/--new-branch", err=True)
+
     # Generate name and check for existing container with same target
     name = _generate_bubble_name(t, custom_name)
     existing = _find_existing_container(
@@ -1784,6 +1872,15 @@ def open_cmd(
             claude_mounts=cc_mounts,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
+
+        # Resolve Claude prompt: env var > auto-generate for issues
+        claude_prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
+        if not claude_prompt and t.kind == "issue" and not machine_readable:
+            from .claude import generate_issue_prompt
+
+            click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
+            claude_prompt = generate_issue_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
+
         _finalize_bubble(
             runtime,
             name,
@@ -1800,6 +1897,7 @@ def open_cmd(
             git_name=git_name,
             git_email=git_email,
             command=command_args,
+            claude_prompt=claude_prompt,
         )
     except Exception:
         # Clean up partially-provisioned container on failure
@@ -2090,6 +2188,39 @@ def _reattach(
         return
 
     project_dir = _detect_project_dir(runtime, name)
+
+    # Pull latest if the working tree is clean
+    if project_dir:
+        try:
+            q_dir = shlex.quote(project_dir)
+            status = runtime.exec(
+                name,
+                ["su", "-", "user", "-c", f"cd {q_dir} && git status --porcelain -uno"],
+            ).strip()
+            if not status:
+                # Only pull if there's an upstream tracking branch
+                has_upstream = runtime.exec(
+                    name,
+                    [
+                        "su",
+                        "-",
+                        "user",
+                        "-c",
+                        f"cd {q_dir} && git rev-parse --abbrev-ref"
+                        " @{upstream} 2>/dev/null || true",
+                    ],
+                ).strip()
+                if has_upstream:
+                    click.echo("Working tree is clean, pulling latest...")
+                    try:
+                        runtime.exec(
+                            name,
+                            ["su", "-", "user", "-c", f"cd {q_dir} && git pull --ff-only"],
+                        )
+                    except RuntimeError:
+                        pass  # Silently continue if pull fails
+        except RuntimeError:
+            pass  # Can't check status, skip pull
 
     _echo_editor_opening(editor)
     open_editor(editor, name, project_dir, command=command)

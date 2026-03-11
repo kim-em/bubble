@@ -12,7 +12,7 @@ This file helps Claude Code sessions understand the bubble codebase.
 bubble/
 ├── cli.py              # Click CLI with BubbleGroup (routes unknown args to `open` command)
 ├── config.py           # TOML config at ~/.bubble/config.toml
-├── target.py           # Target parsing: GitHub URLs, local paths, bare PR numbers
+├── target.py           # Target parsing: GitHub URLs, issues, local paths, bare PR/issue numbers
 ├── repo_registry.py    # Learned short name → owner/repo mappings (~/.bubble/repos.json)
 ├── naming.py           # Container name generation: <repo>-<source>-<id>
 ├── git_store.py        # Shared bare repo management at ~/.bubble/git/
@@ -24,6 +24,7 @@ bubble/
 ├── relay.py            # Bubble-in-bubble relay daemon (Unix socket, validation, rate limiting)
 ├── remote.py           # Remote SSH host support: run bubbles on remote machines
 ├── cloud.py            # Hetzner Cloud auto-provisioning (provision, destroy, start, stop)
+├── claude.py           # Claude Code integration: prompt generation, VS Code task injection
 ├── hooks/
 │   ├── __init__.py     # Hook ABC, discover_hooks(), select_hook()
 │   └── lean.py         # LeanHook: detects lean-toolchain, uses lean image

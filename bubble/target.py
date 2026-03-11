@@ -18,10 +18,12 @@ class Target:
 
     owner: str  # e.g. "leanprover-community"
     repo: str  # e.g. "mathlib4"
-    kind: str  # "pr" | "branch" | "commit" | "repo"
-    ref: str  # PR number, branch name, commit SHA, or ""
+    kind: str  # "pr" | "branch" | "commit" | "repo" | "issue"
+    ref: str  # PR number, branch name, commit SHA, issue number, or ""
     original: str  # raw input string
     local_path: str = ""  # set when target came from a local filesystem path
+    new_branch: bool = False  # True when -b flag creates a fresh branch
+    base_ref: str = ""  # base branch for new_branch mode (empty = default branch)
 
     @property
     def org_repo(self) -> str:
@@ -94,6 +96,39 @@ def _git_repo_info(path: str) -> tuple[str, str, str]:
 
     owner, repo = _parse_github_remote(remote_url)
     return owner, repo, repo_root
+
+
+def _check_github_number_kind(owner: str, repo: str, number: str) -> str:
+    """Query GitHub API to determine if a number is a PR or issue.
+
+    Returns "pr" if it's a pull request, "issue" if it's an issue,
+    or "pr" as default if the API is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{owner}/{repo}/pulls/{number}", "--jq", ".number"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return "pr"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "pr"  # Default to PR if gh is unavailable
+
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{owner}/{repo}/issues/{number}", "--jq", ".number"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return "issue"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    return "pr"  # Default to PR
 
 
 def _parse_local_path(raw: str) -> Target:
@@ -169,6 +204,9 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
     # Strip URL scheme
     s = re.sub(r"^https?://", "", s)
 
+    # Strip fragment and query string (e.g. #issuecomment-123, ?query=1)
+    s = re.sub(r"[#?].*$", "", s)
+
     # Strip github.com/ prefix
     s = re.sub(r"^github\.com/", "", s)
 
@@ -178,26 +216,36 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
     if not s:
         raise TargetParseError(f"Empty target: {raw!r}")
 
-    # Bare number: PR in current directory's repo
+    # Bare number: PR or issue in current directory's repo
     if s.isdigit():
         try:
             owner, repo, _ = _git_repo_info(".")
+            kind = _check_github_number_kind(owner, repo, s)
             return Target(
                 owner=owner,
                 repo=repo,
-                kind="pr",
+                kind=kind,
                 ref=s,
                 original=original,
             )
         except TargetParseError:
             raise TargetParseError(
-                f"'{s}' looks like a PR number, but the current directory "
+                f"'{s}' looks like a PR/issue number, but the current directory "
                 f"is not a git repository with a GitHub remote."
             )
 
     parts = s.split("/")
 
     # Try to match with 2+ segments (owner/repo/...)
+    if len(parts) >= 4 and parts[2] == "issues":
+        # owner/repo/issues/N
+        owner, repo = parts[0], parts[1]
+        try:
+            issue_num = str(int(parts[3]))
+        except ValueError:
+            raise TargetParseError(f"Invalid issue number: {parts[3]!r}")
+        return Target(owner=owner, repo=repo, kind="issue", ref=issue_num, original=original)
+
     if len(parts) >= 4 and parts[2] == "pull":
         # owner/repo/pull/N[/...]
         owner, repo = parts[0], parts[1]
@@ -227,6 +275,22 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
         return Target(owner=owner, repo=repo, kind="repo", ref="", original=original)
 
     # Try short name resolution
+    if len(parts) >= 3 and parts[1] == "issues":
+        # short_name/issues/N
+        short = parts[0]
+        resolved = registry.resolve(short)
+        if resolved:
+            owner, repo = resolved.split("/", 1)
+            try:
+                issue_num = str(int(parts[2]))
+            except ValueError:
+                raise TargetParseError(f"Invalid issue number: {parts[2]!r}")
+            return Target(owner=owner, repo=repo, kind="issue", ref=issue_num, original=original)
+        if registry.is_ambiguous(short):
+            options = registry.get_ambiguous_options(short)
+            raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
+        raise TargetParseError(f"Unknown repo '{short}'. Use the full owner/repo form first.")
+
     if len(parts) >= 3 and parts[1] == "pull":
         # short_name/pull/N
         short = parts[0]
