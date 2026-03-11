@@ -180,7 +180,7 @@ The workspace trust dialog is a **local VS Code client** decision, not controlle
 VS Code stores trusted workspace URIs in a SQLite database. To clear bubble-related trust entries:
 ```python
 import json, sqlite3
-db = "/Users/kim/Library/Application Support/Code/User/globalStorage/state.vscdb"
+db = "/Users/<USERNAME>/Library/Application Support/Code/User/globalStorage/state.vscdb"
 conn = sqlite3.connect(db)
 cur = conn.cursor()
 cur.execute("SELECT value FROM ItemTable WHERE key = 'content.trust.model.key'")
