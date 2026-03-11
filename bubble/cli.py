@@ -14,10 +14,13 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .clean import CleanStatus, check_clean, format_reasons
+from .clean import CleanStatus, check_clean, check_native_clean, format_reasons
 from .config import (
     DATA_DIR,
+    NATIVE_DIR,
+    claude_config_mounts,
     ensure_dirs,
+    has_claude_credentials,
     load_config,
     parse_mounts,
     repo_short_name,
@@ -39,7 +42,13 @@ from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
 from .runtime.incus import IncusRuntime
 from .target import Target, TargetParseError, parse_target
-from .vscode import SSH_CONFIG_FILE, add_ssh_config, open_editor, remove_ssh_config
+from .vscode import (
+    SSH_CONFIG_FILE,
+    add_ssh_config,
+    open_editor,
+    open_editor_native,
+    remove_ssh_config,
+)
 
 
 def _is_command_available(cmd: str) -> bool:
@@ -759,14 +768,14 @@ def _spawn_background_bubble(args: list[str], log_path: str):
 
 
 def _maybe_rebuild_base_image():
-    """If VS Code has updated since the base image was built, rebuild in background."""
+    """If VS Code has updated since the base-vscode image was built, rebuild in background."""
     commit = get_vscode_commit()
     if not commit:
         return
     if VSCODE_COMMIT_FILE.exists() and VSCODE_COMMIT_FILE.read_text().strip() == commit:
         return
     _spawn_background_bubble(
-        ["images", "build", "base"],
+        ["images", "build", "base-vscode"],
         "/tmp/bubble-vscode-rebuild.log",
     )
 
@@ -824,7 +833,34 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
     return ref_path, mount_name
 
 
-def _detect_and_build_image(runtime, ref_path, t):
+def _editor_image_suffix(editor: str) -> str:
+    """Return the image name suffix for a given editor, or empty string for shell."""
+    if editor in ("vscode", "emacs", "neovim"):
+        return f"-{editor}"
+    return ""
+
+
+def _apply_editor_to_image(image_name: str, editor: str) -> str:
+    """Transform an image name based on the editor.
+
+    Examples (editor="emacs"):
+      "base"         -> "base-emacs"
+      "lean"         -> "lean-emacs"
+      "lean-v4.27.0" -> "lean-emacs-v4.27.0"
+    """
+    suffix = _editor_image_suffix(editor)
+    if not suffix:
+        return image_name
+
+    # For toolchain-specific images like "lean-v4.27.0", insert editor before version
+    if image_name.startswith("lean-v"):
+        version = image_name[len("lean-") :]
+        return f"lean{suffix}-{version}"
+
+    return f"{image_name}{suffix}"
+
+
+def _detect_and_build_image(runtime, ref_path, t, editor="vscode"):
     """Detect language hook and ensure image exists. Returns (hook, image_name)."""
     if t.kind == "pr":
         hook_ref = f"refs/pull/{t.ref}/head"
@@ -837,44 +873,49 @@ def _detect_and_build_image(runtime, ref_path, t):
     hook = select_hook(ref_path, hook_ref)
     if hook:
         click.echo(f"  Detected: {hook.name()}")
-        image_name = hook.image_name()
+        base_image = hook.image_name()
     else:
-        image_name = "base"
+        base_image = "base"
+
+    image_name = _apply_editor_to_image(base_image, editor)
 
     pending_toolchain_build = None
+    # Check for toolchain-specific images (e.g. "lean-v4.27.0" or "lean-emacs-v4.27.0")
+    is_toolchain_image = base_image.startswith("lean-v")
     if not runtime.image_exists(image_name):
-        if image_name.startswith("lean-v"):
+        if is_toolchain_image:
             # Toolchain-specific image doesn't exist yet — fall back to base lean
             # and build the toolchain image in the background for next time.
-            # Defer the background build until after the lean image is ready,
-            # otherwise the background process races with the main build.
-            version = image_name[len("lean-") :]
+            version = base_image[len("lean-") :]
+            fallback = _apply_editor_to_image("lean", editor)
             click.echo(
-                f"  Toolchain {version} image not cached, using base lean image"
+                f"  Toolchain {version} image not cached, using {fallback} image"
                 f" (building {image_name} in background for next time)"
             )
-            pending_toolchain_build = version
-            image_name = "lean"
+            pending_toolchain_build = (version, editor)
+            image_name = fallback
         if not runtime.image_exists(image_name):
             click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
             from .images.builder import build_image
 
             build_image(runtime, image_name)
             click.echo(f"  {image_name} image ready.")
-    elif image_name.startswith("lean-v"):
-        version = image_name[len("lean-") :]
+    elif is_toolchain_image:
+        version = base_image[len("lean-") :]
         click.echo(f"  Using cached toolchain image ({version})")
 
     if pending_toolchain_build:
-        _background_build_lean_toolchain(pending_toolchain_build)
+        version, ed = pending_toolchain_build
+        _background_build_lean_toolchain(version, editor=ed)
 
     return hook, image_name
 
 
-def _background_build_lean_toolchain(version: str):
+def _background_build_lean_toolchain(version: str, editor: str = "vscode"):
     """Fire off a background build of a toolchain-specific Lean image."""
+    image_alias = _apply_editor_to_image(f"lean-{version}", editor)
     # Lock file prevents duplicate concurrent builds for the same version
-    lock_path = Path(f"/tmp/bubble-lean-{version}.lock")
+    lock_path = Path(f"/tmp/bubble-{image_alias}.lock")
     try:
         lock_path.touch(exist_ok=False)
     except FileExistsError:
@@ -887,11 +928,30 @@ def _background_build_lean_toolchain(version: str):
             lock_path.touch(exist_ok=False)
         except (OSError, FileExistsError):
             return
-    click.echo(f"  Building lean-{version} image in background for next time...")
+    click.echo(f"  Building {image_alias} image in background for next time...")
     _spawn_background_bubble(
-        ["images", "build", f"lean-{version}"],
-        f"/tmp/bubble-lean-{version}-build.log",
+        ["images", "build", image_alias],
+        f"/tmp/bubble-{image_alias}-build.log",
     )
+
+
+def _mount_overlaps(target: Path, user_targets: set[Path]) -> bool:
+    """Check if target overlaps with any user mount (exact match or ancestry)."""
+    for ut in user_targets:
+        # Exact match, or one is an ancestor of the other
+        if target == ut:
+            return True
+        try:
+            target.relative_to(ut)
+            return True  # target is inside a user mount
+        except ValueError:
+            pass
+        try:
+            ut.relative_to(target)
+            return True  # user mount is inside this auto mount
+        except ValueError:
+            pass
+    return False
 
 
 def _provision_container(
@@ -905,6 +965,7 @@ def _provision_container(
     dep_mounts=None,
     network=False,
     user_mounts=None,
+    claude_mounts=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     click.echo("  Launching container...", nl=False)
@@ -971,6 +1032,38 @@ def _provision_container(
                     "-c",
                     f"printf '{script}\\n' > /etc/profile.d/bubble-shared.sh",
                 ],
+            )
+
+    # Mount Claude Code config (read-only individual files/dirs from ~/.claude)
+    if claude_mounts:
+        runtime.exec(
+            name,
+            ["bash", "-c", "mkdir -p /home/user/.claude && chown user:user /home/user/.claude"],
+        )
+        for i, m in enumerate(claude_mounts):
+            runtime.add_disk(
+                name,
+                f"claude-config-{i}",
+                m.source,
+                m.target,
+                readonly=m.readonly,
+            )
+        # Writable projects directory — per-bubble subdirectory, persists on host.
+        # Each bubble gets its own isolated subdir so bubbles can't see each
+        # other's sessions, but all accumulate under ~/.bubble/claude-projects/
+        # on the host (useful for backing up with a git repo).
+        # Skip if a user mount overlaps with this target.
+        projects_target = Path("/home/user/.claude/projects")
+        user_targets = {Path(m.target) for m in (user_mounts or [])}
+        if not _mount_overlaps(projects_target, user_targets):
+            projects_dir = DATA_DIR / "claude-projects" / name
+            projects_dir.mkdir(parents=True, exist_ok=True)
+            projects_dir.chmod(0o770)
+            runtime.add_disk(
+                name,
+                "claude-projects",
+                str(projects_dir),
+                "/home/user/.claude/projects",
             )
 
     # Add user-specified mounts (from --mount flags and [[mounts]] config)
@@ -1308,11 +1401,19 @@ def _finalize_bubble(
     click.echo(f"  SSH: ssh bubble-{name}")
 
     if not no_interactive:
-        if editor == "shell":
-            click.echo("Connecting via SSH...")
-        else:
-            click.echo("Opening VSCode...")
+        _echo_editor_opening(editor)
         open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
+
+
+def _echo_editor_opening(editor: str):
+    """Print a status message for the editor being opened."""
+    labels = {
+        "vscode": "Opening VSCode...",
+        "emacs": "Opening Emacs...",
+        "neovim": "Opening Neovim...",
+        "shell": "Connecting via SSH...",
+    }
+    click.echo(labels.get(editor, f"Opening {editor}..."))
 
 
 def _machine_readable_output(status: str, name: str, **kwargs):
@@ -1372,6 +1473,7 @@ def _open_remote(
     git_name="",
     git_email="",
     command=None,
+    claude_config=True,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -1384,6 +1486,7 @@ def _open_remote(
             custom_name=custom_name,
             git_name=git_name,
             git_email=git_email,
+            claude_config=claude_config,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -1413,10 +1516,7 @@ def _open_remote(
     click.echo(f"  SSH: ssh bubble-{name}")
 
     if not no_interactive:
-        if editor == "shell":
-            click.echo("Connecting via SSH...")
-        else:
-            click.echo("Opening VSCode...")
+        _echo_editor_opening(editor)
         open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
 
 
@@ -1428,11 +1528,13 @@ def _open_remote(
 @click.option(
     "--editor",
     "editor_choice",
-    type=click.Choice(["vscode", "shell"]),
+    type=click.Choice(["vscode", "emacs", "neovim", "shell"]),
     default=None,
     help="Editor to use (default: from config or vscode)",
 )
 @click.option("--shell", is_flag=True, help="Drop into SSH session (shortcut for --editor shell)")
+@click.option("--emacs", is_flag=True, help="Use Emacs (shortcut for --editor emacs)")
+@click.option("--neovim", is_flag=True, help="Use Neovim (shortcut for --editor neovim)")
 @click.option(
     "--ssh",
     "ssh_host",
@@ -1460,6 +1562,11 @@ def _open_remote(
     type=str,
     default=None,
     help="Run a command via SSH instead of interactive shell",
+)
+@click.option(
+    "--native",
+    is_flag=True,
+    help="Non-containerized workspace (local clone, no isolation)",
 )
 @click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
 @click.option(
@@ -1495,10 +1602,22 @@ def _open_remote(
     multiple=True,
     help="Mount host dir: /host/path:/container/path[:ro|rw] (repeatable)",
 )
+@click.option(
+    "--claude-config/--no-claude-config",
+    default=True,
+    help="Mount ~/.claude config read-only into container (default: enabled)",
+)
+@click.option(
+    "--claude-credentials/--no-claude-credentials",
+    default=False,
+    help="Mount ~/.claude credentials into container (default: disabled for security)",
+)
 def open_cmd(
     target,
     editor_choice,
     shell,
+    emacs,
+    neovim,
     ssh_host,
     cloud,
     force_local,
@@ -1507,6 +1626,7 @@ def open_cmd(
     network,
     custom_name,
     command,
+    native,
     force_path,
     new_branch,
     base_ref,
@@ -1514,6 +1634,8 @@ def open_cmd(
     git_name,
     git_email,
     mounts,
+    claude_config,
+    claude_credentials,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
@@ -1546,17 +1668,42 @@ def open_cmd(
     command_args = shlex.split(command) if command else None
 
     # Resolve editor: shortcut flags > --editor > config > vscode
+    valid_editors = ("vscode", "emacs", "neovim", "shell")
     if command_args:
         editor = "shell"
     elif shell:
         editor = "shell"
+    elif emacs:
+        editor = "emacs"
+    elif neovim:
+        editor = "neovim"
     elif editor_choice is not None:
         editor = editor_choice
     else:
         editor = config.get("editor", "vscode")
-        if editor not in ("vscode", "shell"):
+        if editor not in valid_editors:
             click.echo(f"Warning: unknown editor '{editor}' in config, using vscode.", err=True)
             editor = "vscode"
+
+    # Native mode: skip all container/remote logic
+    if native:
+        incompatible = []
+        if ssh_host:
+            incompatible.append("--ssh")
+        if cloud:
+            incompatible.append("--cloud")
+        if not network:
+            incompatible.append("--no-network")
+        if machine_readable:
+            incompatible.append("--machine-readable")
+        if incompatible:
+            click.echo(
+                f"--native cannot be combined with {', '.join(incompatible)}",
+                err=True,
+            )
+            sys.exit(1)
+        _open_native(target, editor, no_interactive, custom_name, command=command_args)
+        return
 
     # Priority: --local > --ssh > --cloud > [cloud] default > [remote] default_host
     remote_host = None
@@ -1594,8 +1741,23 @@ def open_cmd(
             git_name=git_name,
             git_email=git_email,
             command=command_args,
+            claude_config=claude_config,
         )
         return
+
+    # Claude Code config mounts (opt-out via --no-claude-config)
+    cc_mounts = []
+    if claude_config:
+        cc_mounts = claude_config_mounts(include_credentials=claude_credentials)
+        # Suppress auto mounts that overlap with user mounts (exact or ancestry)
+        user_targets = {Path(m.target) for m in mount_specs}
+        cc_mounts = [m for m in cc_mounts if not _mount_overlaps(Path(m.target), user_targets)]
+        # Nag about credentials if not enabled
+        if not claude_credentials and has_claude_credentials():
+            click.echo(
+                "Tip: use --claude-credentials to mount Claude auth into this bubble.",
+                err=True,
+            )
 
     # Local flow
     if not machine_readable:
@@ -1663,7 +1825,7 @@ def open_cmd(
     # Resolve git source, detect language, and build image
     ensure_dirs()
     ref_path, mount_name = _resolve_ref_source(t, no_clone)
-    hook, image_name = _detect_and_build_image(runtime, ref_path, t)
+    hook, image_name = _detect_and_build_image(runtime, ref_path, t, editor=editor)
 
     # Pre-fetch dependency bare repos for Lake pre-population
     dep_mounts = {}  # repo_name -> host_path
@@ -1707,6 +1869,7 @@ def open_cmd(
             dep_mounts=dep_mounts,
             network=network,
             user_mounts=mount_specs,
+            claude_mounts=cc_mounts,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
 
@@ -1745,6 +1908,273 @@ def open_cmd(
         except Exception:
             pass
         raise
+
+
+def _find_existing_native(name: str) -> dict | None:
+    """Check if a native workspace already exists in the registry."""
+    info = get_bubble_info(name)
+    if info and info.get("native"):
+        return info
+    return None
+
+
+def _open_native(
+    target,
+    editor,
+    no_interactive,
+    custom_name,
+    command=None,
+):
+    """Open a native (non-containerized) workspace."""
+    registry = RepoRegistry()
+    try:
+        t = parse_target(target, registry)
+    except TargetParseError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    registry.register(t.owner, t.repo)
+
+    name = _generate_bubble_name(t, custom_name)
+
+    # Check for existing native workspace
+    existing = _find_existing_native(name)
+    if existing:
+        native_path = existing.get("native_path", "")
+        if native_path and Path(native_path).exists():
+            click.echo()
+            click.echo(
+                "WARNING: NATIVE MODE -- no containerization!\n"
+                "This workspace runs directly on your machine with full filesystem\n"
+                "and network access. Use bubble without --native for isolation."
+            )
+            click.echo()
+            click.echo(f"Reattaching to native workspace '{name}' at {native_path}")
+            if not no_interactive:
+                open_editor_native(editor, native_path, command=command)
+            return
+
+    ensure_dirs()
+
+    # Deduplicate name against all registered bubbles (native + container)
+    reg = load_registry()
+    existing_names = set(reg.get("bubbles", {}).keys())
+    name = deduplicate_name(name, existing_names)
+
+    workspace_path = NATIVE_DIR / name
+    if workspace_path.exists():
+        click.echo(f"Native workspace directory already exists: {workspace_path}", err=True)
+        sys.exit(1)
+
+    # Print warning
+    click.echo()
+    click.echo(
+        "WARNING: NATIVE MODE -- no containerization!\n"
+        "This workspace runs directly on your machine with full filesystem\n"
+        "and network access. Use bubble without --native for isolation."
+    )
+    click.echo()
+
+    # Resolve reference source and clone
+    url = github_url(t.org_repo)
+    try:
+        if t.local_path:
+            ref_path = t.local_path
+            click.echo("Cloning from local path (using shared objects)...")
+        else:
+            ref_path = str(init_bare_repo(t.org_repo))
+            if t.kind == "pr":
+                click.echo(f"Fetching PR #{t.ref}...")
+                try:
+                    fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
+                except Exception:
+                    pass
+            click.echo(f"Cloning {t.org_repo} (using shared objects)...")
+
+        subprocess.run(
+            ["git", "clone", "--reference", ref_path, url, str(workspace_path)],
+            check=True,
+        )
+
+        # Checkout appropriate ref
+        checkout_branch = ""
+        if t.kind == "pr":
+            click.echo(f"Checking out PR #{t.ref}...")
+            pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
+            pr_checkout_ok = False
+            if pr_meta:
+                head_ref, head_repo, clone_url = pr_meta
+                is_fork = head_repo.lower() != t.org_repo.lower()
+                try:
+                    if is_fork:
+                        fork_owner = head_repo.split("/")[0]
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "remote",
+                                "add",
+                                fork_owner,
+                                clone_url,
+                            ],
+                            capture_output=True,
+                        )
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "fetch",
+                                fork_owner,
+                                f"+refs/heads/{head_ref}:refs/remotes/{fork_owner}/{head_ref}",
+                            ],
+                            check=True,
+                        )
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "checkout",
+                                "-b",
+                                head_ref,
+                                "--track",
+                                f"{fork_owner}/{head_ref}",
+                            ],
+                            check=True,
+                        )
+                    else:
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "fetch",
+                                "origin",
+                                f"+refs/heads/{head_ref}:refs/remotes/origin/{head_ref}",
+                            ],
+                            check=True,
+                        )
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "checkout",
+                                "-b",
+                                head_ref,
+                                "--track",
+                                f"origin/{head_ref}",
+                            ],
+                            check=True,
+                        )
+                    checkout_branch = head_ref
+                    pr_checkout_ok = True
+                except subprocess.CalledProcessError:
+                    pass
+
+            if not pr_checkout_ok:
+                checkout_branch = f"pr-{t.ref}"
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(workspace_path),
+                        "fetch",
+                        "origin",
+                        f"pull/{t.ref}/head:{checkout_branch}",
+                    ],
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(workspace_path), "checkout", checkout_branch],
+                    check=True,
+                )
+        elif t.kind == "branch":
+            click.echo(f"Checking out branch '{t.ref}'...")
+            checkout_branch = t.ref
+            if t.local_path:
+                # Always fetch from local repo to pick up potentially unpushed commits.
+                # Use + refspec to force-update if origin already has an older version.
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(workspace_path),
+                        "fetch",
+                        t.local_path,
+                        f"+refs/heads/{t.ref}:refs/heads/{t.ref}",
+                    ],
+                    capture_output=True,
+                )
+            try:
+                subprocess.run(
+                    ["git", "-C", str(workspace_path), "switch", t.ref],
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError:
+                if t.local_path:
+                    # Branch wasn't on origin either; fetch and retry
+                    subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(workspace_path),
+                            "fetch",
+                            t.local_path,
+                            f"{t.ref}:{t.ref}",
+                        ],
+                        check=True,
+                    )
+                    subprocess.run(
+                        ["git", "-C", str(workspace_path), "switch", t.ref],
+                        check=True,
+                    )
+                else:
+                    raise
+        elif t.kind == "commit":
+            click.echo(f"Checking out commit {t.ref[:12]}...")
+            subprocess.run(
+                ["git", "-C", str(workspace_path), "checkout", t.ref],
+                check=True,
+            )
+
+        # Get commit hash
+        commit = ""
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workspace_path), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+            )
+            commit = result.stdout.strip()
+        except Exception:
+            pass
+
+        register_bubble(
+            name,
+            t.org_repo,
+            branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
+            commit=commit,
+            pr=int(t.ref) if t.kind == "pr" else 0,
+            native=True,
+            native_path=str(workspace_path),
+        )
+    except subprocess.CalledProcessError as e:
+        if workspace_path.exists():
+            shutil.rmtree(workspace_path)
+        click.echo(f"Failed to create native workspace: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Native workspace '{name}' created at {workspace_path}")
+
+    if not no_interactive:
+        if editor == "shell":
+            click.echo("Opening shell...")
+        else:
+            click.echo("Opening VSCode...")
+        open_editor_native(editor, str(workspace_path), command=command)
 
 
 def _reattach(
@@ -1792,10 +2222,7 @@ def _reattach(
         except RuntimeError:
             pass  # Can't check status, skip pull
 
-    if editor == "shell":
-        click.echo(f"Connecting to '{name}' via SSH...")
-    else:
-        click.echo(f"Opening VSCode for '{name}'...")
+    _echo_editor_opening(editor)
     open_editor(editor, name, project_dir, command=command)
 
 
@@ -1888,6 +2315,29 @@ def _remote_entries_from_registry() -> list[dict]:
                 "remote_host_spec": host_spec,
             }
         )
+    return entries
+
+
+def _native_entries_from_registry(show_clean: bool = False) -> list[dict]:
+    """Build list entries for native workspaces from the registry."""
+    registry = load_registry()
+    entries = []
+    for name, info in registry.get("bubbles", {}).items():
+        if not info.get("native"):
+            continue
+        native_path = info.get("native_path", "")
+        state = "exists" if native_path and Path(native_path).is_dir() else "missing"
+        entry = {
+            "name": name,
+            "state": state,
+            "location": "native",
+            "created_at": _parse_iso(info.get("created_at")),
+            "last_used_at": None,
+            "native_path": native_path,
+        }
+        if show_clean and state == "exists":
+            entry["clean_status"] = check_native_clean(native_path, name)
+        entries.append(entry)
     return entries
 
 
@@ -2048,6 +2498,13 @@ def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only
 
         entries.extend(remote_entries)
 
+    # --- Native workspaces from registry (always local) ---
+    native_entries = _native_entries_from_registry(show_clean=show_clean)
+    native_entries = [e for e in native_entries if e["name"] not in local_names]
+    entries.extend(native_entries)
+    if native_entries:
+        has_remote = True  # Force showing location column
+
     # --- Output ---
     if as_json:
         data = []
@@ -2143,8 +2600,11 @@ def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only
 @click.argument("name")
 def pause(name):
     """Pause (freeze) a bubble."""
-    # Auto-route to remote host if the bubble is registered there
     info = get_bubble_info(name)
+    if info and info.get("native"):
+        click.echo("Native workspaces don't support pause/resume (no container state).", err=True)
+        sys.exit(1)
+    # Auto-route to remote host if the bubble is registered there
     if info and info.get("remote_host"):
         from .remote import RemoteHost, apply_cloud_ssh_options, remote_command
 
@@ -2187,6 +2647,40 @@ def pop(name, force):
         remove_ssh_config(name)
         unregister_bubble(name)
         click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
+        return
+
+    # Handle native workspaces
+    if info and info.get("native"):
+        native_path = info.get("native_path", "")
+        if not force and native_path and Path(native_path).is_dir():
+            cs = check_native_clean(native_path, name)
+            if cs.clean:
+                click.echo(f"Native workspace '{name}' is clean. ", nl=False)
+            elif cs.error:
+                click.confirm(
+                    f"Cannot verify cleanness ({cs.error}). "
+                    f"Permanently pop native workspace '{name}'?",
+                    abort=True,
+                )
+            else:
+                reasons = format_reasons(cs.reasons)
+                click.echo("Warning: workspace has unsaved work:")
+                for r in reasons:
+                    click.echo(f"  - {r}")
+                click.confirm(f"Permanently pop native workspace '{name}'?", abort=True)
+
+        if native_path and Path(native_path).is_dir():
+            resolved = Path(native_path).resolve()
+            native_dir_resolved = NATIVE_DIR.resolve()
+            if not str(resolved).startswith(str(native_dir_resolved) + os.sep):
+                click.echo(
+                    f"Refusing to delete: path '{native_path}' is not under {NATIVE_DIR}",
+                    err=True,
+                )
+                sys.exit(1)
+            shutil.rmtree(resolved)
+        unregister_bubble(name)
+        click.echo(f"Native workspace '{name}' popped.")
         return
 
     config = load_config()
@@ -2375,20 +2869,19 @@ def images_build(image_name):
     config = load_config()
     runtime = get_runtime(config)
 
-    if image_name.startswith("lean-v"):
-        import re
+    # Parse toolchain images: lean-v4.X.Y, lean-emacs-v4.X.Y, lean-neovim-v4.X.Y
+    import re
 
+    tc_match = re.fullmatch(
+        r"(lean(?:-vscode|-emacs|-neovim)?)-(v\d+\.\d+\.\d+(?:-rc\d+)?)", image_name
+    )
+    if tc_match:
         from .images.builder import build_lean_toolchain_image
 
-        version = image_name[len("lean-") :]
-        if not re.fullmatch(r"v\d+\.\d+\.\d+(-rc\d+)?", version):
-            click.echo(
-                f"Invalid toolchain version: {version}. Expected format: v4.X.Y or v4.X.Y-rcN",
-                err=True,
-            )
-            sys.exit(1)
+        base_lean = tc_match.group(1)
+        version = tc_match.group(2)
         try:
-            build_lean_toolchain_image(runtime, version)
+            build_lean_toolchain_image(runtime, version, base_lean_image=base_lean)
         except Exception as e:
             click.echo(str(e), err=True)
             sys.exit(1)

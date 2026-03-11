@@ -16,7 +16,13 @@ SCRIPTS_DIR = Path(__file__).parent / "scripts"
 # Parent can be another image name (built recursively) or an Incus remote image.
 IMAGES = {
     "base": {"script": "base.sh", "parent": "images:ubuntu/24.04"},
+    "base-vscode": {"script": "vscode.sh", "parent": "base"},
+    "base-emacs": {"script": "emacs.sh", "parent": "base"},
+    "base-neovim": {"script": "neovim.sh", "parent": "base"},
     "lean": {"script": "lean.sh", "parent": "base"},
+    "lean-vscode": {"script": "vscode.sh", "parent": "lean"},
+    "lean-emacs": {"script": "lean.sh", "parent": "base-emacs"},
+    "lean-neovim": {"script": "lean.sh", "parent": "base-neovim"},
 }
 
 
@@ -228,27 +234,39 @@ def build_image(runtime: ContainerRuntime, image_name: str):
     runtime.publish(build_name, image_name)
     runtime.delete(build_name)
 
-    # Record the VS Code commit hash baked into the image
-    if vscode_commit:
+    # Record the VS Code commit hash baked into the image (only for vscode images)
+    if vscode_commit and spec["script"] == "vscode.sh":
         VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         VSCODE_COMMIT_FILE.write_text(vscode_commit + "\n")
 
     print(f"{image_name} image built successfully.")
 
 
-def build_lean_toolchain_image(runtime: ContainerRuntime, version: str):
+def build_lean_toolchain_image(
+    runtime: ContainerRuntime, version: str, base_lean_image: str = "lean"
+):
     """Build a toolchain-specific Lean image (e.g. lean-v4.16.0).
 
-    Launches from the base 'lean' image and installs one specific toolchain.
+    Launches from the base lean image (e.g. 'lean', 'lean-emacs', 'lean-neovim')
+    and installs one specific toolchain.
     """
     # Ensure base lean image exists
-    if not runtime.image_exists("lean"):
-        build_image(runtime, "lean")
+    if not runtime.image_exists(base_lean_image):
+        if base_lean_image in IMAGES:
+            build_image(runtime, base_lean_image)
+        elif not runtime.image_exists("lean"):
+            build_image(runtime, "lean")
+            base_lean_image = "lean"
 
-    alias = f"lean-{version}"
+    # Compute alias: lean-v4.16.0, lean-emacs-v4.16.0, lean-neovim-v4.16.0
+    if base_lean_image == "lean":
+        alias = f"lean-{version}"
+    else:
+        # e.g. "lean-emacs" + "v4.16.0" -> "lean-emacs-v4.16.0"
+        alias = f"{base_lean_image}-{version}"
     # Incus container names only allow alphanumeric + hyphens
-    safe_version = version.replace(".", "-")
-    build_name = f"lean-tc-{safe_version}-builder"
+    safe_alias = alias.replace(".", "-")
+    build_name = f"{safe_alias}-builder"
     print(f"Building {alias} image...")
 
     # Clean up any leftover builder from a previous failed attempt
@@ -257,7 +275,7 @@ def build_lean_toolchain_image(runtime: ContainerRuntime, version: str):
     except Exception:
         pass
 
-    runtime.launch(build_name, "lean")
+    runtime.launch(build_name, base_lean_image)
     try:
         _wait_for_container(runtime, build_name)
 
@@ -275,7 +293,7 @@ def build_lean_toolchain_image(runtime: ContainerRuntime, version: str):
         except Exception:
             pass
         # Remove lock file so future builds can proceed
-        lock_path = Path(f"/tmp/bubble-lean-{version}.lock")
+        lock_path = Path(f"/tmp/bubble-{alias}.lock")
         lock_path.unlink(missing_ok=True)
 
     print(f"{alias} image built successfully.")

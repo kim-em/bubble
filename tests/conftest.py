@@ -105,6 +105,8 @@ def tmp_data_dir(tmp_path, monkeypatch):
     config_file = data_dir / "config.toml"
     repos_file = data_dir / "repos.json"
 
+    native_dir = data_dir / "native"
+    native_dir.mkdir()
     cloud_state_file = data_dir / "cloud.json"
     cloud_key_file = data_dir / "cloud_key"
     cloud_known_hosts = data_dir / "known_hosts"
@@ -115,6 +117,7 @@ def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(config, "GIT_DIR", git_dir)
     monkeypatch.setattr(config, "REPOS_FILE", repos_file)
+    monkeypatch.setattr(config, "NATIVE_DIR", native_dir)
     monkeypatch.setattr(config, "CLOUD_STATE_FILE", cloud_state_file)
     monkeypatch.setattr(config, "CLOUD_KEY_FILE", cloud_key_file)
     monkeypatch.setattr(config, "CLOUD_KNOWN_HOSTS", cloud_known_hosts)
@@ -122,6 +125,10 @@ def tmp_data_dir(tmp_path, monkeypatch):
     # Also patch modules that do `from .config import X` (separate bindings)
     monkeypatch.setattr(lifecycle, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(git_store, "GIT_DIR", git_dir)
+
+    import bubble.cli as cli
+
+    monkeypatch.setattr(cli, "DATA_DIR", data_dir)
 
     # Patch cloud module if imported
     try:
