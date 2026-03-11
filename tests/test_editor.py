@@ -8,8 +8,8 @@ from bubble.vscode import open_editor
 
 
 class TestEditorImageSuffix:
-    def test_vscode_no_suffix(self):
-        assert _editor_image_suffix("vscode") == ""
+    def test_vscode_suffix(self):
+        assert _editor_image_suffix("vscode") == "-vscode"
 
     def test_shell_no_suffix(self):
         assert _editor_image_suffix("shell") == ""
@@ -23,7 +23,7 @@ class TestEditorImageSuffix:
 
 class TestApplyEditorToImage:
     def test_base_vscode(self):
-        assert _apply_editor_to_image("base", "vscode") == "base"
+        assert _apply_editor_to_image("base", "vscode") == "base-vscode"
 
     def test_base_emacs(self):
         assert _apply_editor_to_image("base", "emacs") == "base-emacs"
@@ -31,8 +31,11 @@ class TestApplyEditorToImage:
     def test_base_neovim(self):
         assert _apply_editor_to_image("base", "neovim") == "base-neovim"
 
+    def test_base_shell(self):
+        assert _apply_editor_to_image("base", "shell") == "base"
+
     def test_lean_vscode(self):
-        assert _apply_editor_to_image("lean", "vscode") == "lean"
+        assert _apply_editor_to_image("lean", "vscode") == "lean-vscode"
 
     def test_lean_emacs(self):
         assert _apply_editor_to_image("lean", "emacs") == "lean-emacs"
@@ -40,8 +43,11 @@ class TestApplyEditorToImage:
     def test_lean_neovim(self):
         assert _apply_editor_to_image("lean", "neovim") == "lean-neovim"
 
+    def test_lean_shell(self):
+        assert _apply_editor_to_image("lean", "shell") == "lean"
+
     def test_toolchain_vscode(self):
-        assert _apply_editor_to_image("lean-v4.27.0", "vscode") == "lean-v4.27.0"
+        assert _apply_editor_to_image("lean-v4.27.0", "vscode") == "lean-vscode-v4.27.0"
 
     def test_toolchain_emacs(self):
         assert _apply_editor_to_image("lean-v4.27.0", "emacs") == "lean-emacs-v4.27.0"
@@ -49,15 +55,20 @@ class TestApplyEditorToImage:
     def test_toolchain_neovim(self):
         assert _apply_editor_to_image("lean-v4.27.0", "neovim") == "lean-neovim-v4.27.0"
 
+    def test_toolchain_shell(self):
+        assert _apply_editor_to_image("lean-v4.27.0", "shell") == "lean-v4.27.0"
+
     def test_toolchain_rc_emacs(self):
         assert _apply_editor_to_image("lean-v4.27.0-rc2", "emacs") == "lean-emacs-v4.27.0-rc2"
-
-    def test_shell_passthrough(self):
-        assert _apply_editor_to_image("lean-v4.27.0", "shell") == "lean-v4.27.0"
 
 
 class TestImageRegistry:
     """Verify the IMAGES registry has the expected editor variants."""
+
+    def test_base_vscode_exists(self):
+        assert "base-vscode" in IMAGES
+        assert IMAGES["base-vscode"]["parent"] == "base"
+        assert IMAGES["base-vscode"]["script"] == "vscode.sh"
 
     def test_base_emacs_exists(self):
         assert "base-emacs" in IMAGES
@@ -67,6 +78,17 @@ class TestImageRegistry:
         assert "base-neovim" in IMAGES
         assert IMAGES["base-neovim"]["parent"] == "base"
 
+    def test_lean_is_core(self):
+        """lean image is the core image (elan + leantar, no editor)."""
+        assert "lean" in IMAGES
+        assert IMAGES["lean"]["parent"] == "base"
+        assert IMAGES["lean"]["script"] == "lean.sh"
+
+    def test_lean_vscode_exists(self):
+        assert "lean-vscode" in IMAGES
+        assert IMAGES["lean-vscode"]["parent"] == "lean"
+        assert IMAGES["lean-vscode"]["script"] == "vscode.sh"
+
     def test_lean_emacs_exists(self):
         assert "lean-emacs" in IMAGES
         assert IMAGES["lean-emacs"]["parent"] == "base-emacs"
@@ -75,20 +97,9 @@ class TestImageRegistry:
         assert "lean-neovim" in IMAGES
         assert IMAGES["lean-neovim"]["parent"] == "base-neovim"
 
-    def test_lean_core_exists(self):
-        assert "lean-core" in IMAGES
-        assert IMAGES["lean-core"]["parent"] == "base"
-
-    def test_lean_derives_from_core(self):
-        assert IMAGES["lean"]["parent"] == "lean-core"
-
-    def test_lean_emacs_no_vscode_script(self):
-        """Emacs lean image should use lean.sh (core), not lean-vscode.sh."""
-        assert IMAGES["lean-emacs"]["script"] == "lean.sh"
-
-    def test_lean_vscode_script(self):
-        """Standard lean image should use lean-vscode.sh for VS Code extensions."""
-        assert IMAGES["lean"]["script"] == "lean-vscode.sh"
+    def test_no_lean_core_image(self):
+        """lean-core was renamed to lean."""
+        assert "lean-core" not in IMAGES
 
 
 class TestOpenEditorEmacs:

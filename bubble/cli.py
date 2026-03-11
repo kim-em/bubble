@@ -759,14 +759,14 @@ def _spawn_background_bubble(args: list[str], log_path: str):
 
 
 def _maybe_rebuild_base_image():
-    """If VS Code has updated since the base image was built, rebuild in background."""
+    """If VS Code has updated since the base-vscode image was built, rebuild in background."""
     commit = get_vscode_commit()
     if not commit:
         return
     if VSCODE_COMMIT_FILE.exists() and VSCODE_COMMIT_FILE.read_text().strip() == commit:
         return
     _spawn_background_bubble(
-        ["images", "build", "base"],
+        ["images", "build", "base-vscode"],
         "/tmp/bubble-vscode-rebuild.log",
     )
 
@@ -823,8 +823,8 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
 
 
 def _editor_image_suffix(editor: str) -> str:
-    """Return the image name suffix for a given editor, or empty string for vscode/shell."""
-    if editor in ("emacs", "neovim"):
+    """Return the image name suffix for a given editor, or empty string for shell."""
+    if editor in ("vscode", "emacs", "neovim"):
         return f"-{editor}"
     return ""
 
@@ -2290,7 +2290,9 @@ def images_build(image_name):
     # Parse toolchain images: lean-v4.X.Y, lean-emacs-v4.X.Y, lean-neovim-v4.X.Y
     import re
 
-    tc_match = re.fullmatch(r"(lean(?:-emacs|-neovim)?)-(v\d+\.\d+\.\d+(?:-rc\d+)?)", image_name)
+    tc_match = re.fullmatch(
+        r"(lean(?:-vscode|-emacs|-neovim)?)-(v\d+\.\d+\.\d+(?:-rc\d+)?)", image_name
+    )
     if tc_match:
         from .images.builder import build_lean_toolchain_image
 

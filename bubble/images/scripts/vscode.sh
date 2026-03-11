@@ -3,7 +3,24 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-# Pre-install VS Code Lean 4 extension so it's ready on first connect
+# Pre-install VS Code Server if commit hash was provided at build time
+if [ -n "${VSCODE_COMMIT:-}" ]; then
+    echo "Installing VS Code Server (commit: $VSCODE_COMMIT)..."
+    ARCH=$(dpkg --print-architecture)
+    case "$ARCH" in
+        amd64) VSCODE_ARCH="x64" ;;
+        arm64) VSCODE_ARCH="arm64" ;;
+        *) VSCODE_ARCH="$ARCH" ;;
+    esac
+    SERVER_URL="https://update.code.visualstudio.com/commit:${VSCODE_COMMIT}/server-linux-${VSCODE_ARCH}/stable"
+    SERVER_DIR="/home/user/.vscode-server/cli/servers/Stable-${VSCODE_COMMIT}/server"
+    su - user -c "mkdir -p '$SERVER_DIR' && curl -sSL '$SERVER_URL' | tar xz -C '$SERVER_DIR' --strip-components=1" \
+        || echo "Warning: failed to pre-install VS Code Server"
+fi
+
+# If elan is installed, this is a Lean image — install Lean VS Code extensions
+if [ -d /home/user/.elan ]; then
+
 echo "Installing VS Code extensions for Lean 4..."
 python3 -c '
 import json, urllib.request, os, sys, subprocess, tempfile, glob, shutil
@@ -165,9 +182,11 @@ with open(manifest_path, "w") as f:
 print("  Registered bubble.lean-cache extension")
 '
 
+fi  # end of Lean extensions conditional
+
 # Fix ownership (script runs as root, extension dir must be owned by user)
 if [ -d /home/user/.vscode-server ]; then
     chown -R user:user /home/user/.vscode-server
 fi
 
-echo "Lean VS Code extensions setup complete."
+echo "VS Code setup complete."

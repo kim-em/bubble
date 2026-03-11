@@ -16,10 +16,11 @@ SCRIPTS_DIR = Path(__file__).parent / "scripts"
 # Parent can be another image name (built recursively) or an Incus remote image.
 IMAGES = {
     "base": {"script": "base.sh", "parent": "images:ubuntu/24.04"},
+    "base-vscode": {"script": "vscode.sh", "parent": "base"},
     "base-emacs": {"script": "emacs.sh", "parent": "base"},
     "base-neovim": {"script": "neovim.sh", "parent": "base"},
-    "lean-core": {"script": "lean.sh", "parent": "base"},
-    "lean": {"script": "lean-vscode.sh", "parent": "lean-core"},
+    "lean": {"script": "lean.sh", "parent": "base"},
+    "lean-vscode": {"script": "vscode.sh", "parent": "lean"},
     "lean-emacs": {"script": "lean.sh", "parent": "base-emacs"},
     "lean-neovim": {"script": "lean.sh", "parent": "base-neovim"},
 }
