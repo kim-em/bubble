@@ -7,7 +7,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Install Node.js from official tarball if not present
-if ! command -v node &>/dev/null; then
+if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
     ARCH=$(dpkg --print-architecture)
     case "$ARCH" in
         amd64) NODE_SHA256="$NODE_SHA256_X64" ; NODE_ARCH="x64" ;;

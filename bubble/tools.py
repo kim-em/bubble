@@ -210,4 +210,17 @@ def fetch_latest_pins() -> dict:
     ).read()
     pins["GH_GPG_KEY_SHA256"] = hl.sha256(gpg_key).hexdigest()
 
+    # Validate that all required keys were found
+    required = {
+        "NODE_VERSION",
+        "NODE_SHA256_X64",
+        "NODE_SHA256_ARM64",
+        "CLAUDE_CODE_VERSION",
+        "CODEX_VERSION",
+        "GH_GPG_KEY_SHA256",
+    }
+    missing = required - set(pins.keys())
+    if missing:
+        raise RuntimeError(f"Failed to fetch pins for: {', '.join(sorted(missing))}")
+
     return pins
