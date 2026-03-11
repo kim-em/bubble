@@ -1,6 +1,9 @@
 # Changelog
 
 ## 0.5.12 — 2026-03-11
+- User-defined image customization script: place `~/.bubble/customize.sh` to run custom setup in all container images (#34)
+- Script runs as root as the final build step (base, lean, lean-toolchain images)
+- Automatic background rebuild when the script is added, changed, or removed (hash-based detection)
 - Sync bubble Claude projects state via git-tracked symlink: on `bubble open`, if `~/.claude/projects/` is git-tracked, offer to replace `~/.bubble/claude-projects/` with a symlink so session state is synced across machines (#4)
 - Mount editor configs into containers for emacs/neovim (#44): config directories mounted read-only, data/state/cache directories mounted read-write so plugin managers work
 - Emacs: mounts `~/.config/emacs/` (preferred) or `~/.emacs.d/`, plus `~/.local/share/emacs/` and `~/.cache/emacs/` read-write
