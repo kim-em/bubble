@@ -642,10 +642,6 @@ def open_cmd(
         )
         return
 
-    # Print security posture warnings (for auto settings)
-    if not machine_readable:
-        print_warnings(config)
-
     # Resolve claude_credentials: CLI flag > config > default (False)
     if claude_credentials is None:
         claude_credentials = config.get("claude", {}).get("credentials", False)
@@ -856,6 +852,7 @@ from .commands.lifecycle import register_lifecycle_commands  # noqa: E402
 from .commands.list_cmd import register_list_command  # noqa: E402
 from .commands.relay_cmd import register_relay_commands  # noqa: E402
 from .commands.remote_cmd import register_remote_commands  # noqa: E402
+from .commands.security_cmd import register_security_commands  # noqa: E402
 from .commands.settings import register_settings_commands  # noqa: E402
 
 register_list_command(main)
@@ -865,6 +862,7 @@ register_infrastructure_commands(main)
 register_relay_commands(main)
 register_remote_commands(main)
 register_cloud_commands(main)
+register_security_commands(main)
 register_settings_commands(main)
 register_doctor_command(main)
 

@@ -302,32 +302,12 @@ def register_settings_commands(main):
 
     @config_group.command("security")
     def config_security():
-        """Show current security posture."""
+        """Show current security posture (use `bubble security` instead)."""
+        click.echo("Hint: use `bubble security` for the full security dashboard.\n")
+        from ..security import print_security_posture
+
         config = load_config()
-
-        click.echo(f"{'SETTING':<22} {'VALUE':<8} {'EFFECTIVE':<12} DESCRIPTION")
-        click.echo("-" * 80)
-
-        auto_count = 0
-        for name, defn in SECURITY_SETTINGS.items():
-            value = get_setting(config, name)
-            if value == "auto":
-                auto_count += 1
-                effective = defn.auto_default
-            else:
-                effective = value
-            click.echo(f"{name:<22} {value:<8} {effective:<12} {defn.description}")
-
-        if auto_count == len(SECURITY_SETTINGS):
-            click.echo(
-                "\nAll settings are 'auto'. Run 'bubble config accept-risks' to silence "
-                "on-by-default warnings,\nor 'bubble config lockdown' to disable "
-                "off-by-default features permanently."
-            )
-        elif auto_count > 0:
-            click.echo(
-                f"\n{auto_count} setting(s) still 'auto'. Set explicitly to silence warnings."
-            )
+        print_security_posture(config)
 
     @config_group.command("set")
     @click.argument("key")
@@ -355,7 +335,8 @@ def register_settings_commands(main):
 
     @config_group.command("lockdown")
     def config_lockdown():
-        """Set all auto-defaulting-to-off settings to off permanently."""
+        """Disable off-by-default features (use `bubble security lockdown` instead)."""
+        click.echo("Hint: use `bubble security lockdown` for full lockdown.\n")
         config = load_config()
         if "security" not in config:
             config["security"] = {}
@@ -378,7 +359,8 @@ def register_settings_commands(main):
 
     @config_group.command("accept-risks")
     def config_accept_risks():
-        """Set all auto-defaulting-to-on settings to on permanently (silences warnings)."""
+        """Accept on-by-default risks (use `bubble security permissive` instead)."""
+        click.echo("Hint: use `bubble security permissive` to enable all conveniences.\n")
         config = load_config()
         if "security" not in config:
             config["security"] = {}
