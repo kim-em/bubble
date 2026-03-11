@@ -1,6 +1,7 @@
 # Changelog
 
 ## 0.5.12 — 2026-03-11
+- Sync bubble Claude projects state via git-tracked symlink: on `bubble open`, if `~/.claude/projects/` is git-tracked, offer to replace `~/.bubble/claude-projects/` with a symlink so session state is synced across machines (#4)
 - Mount editor configs into containers for emacs/neovim (#44): config directories mounted read-only, data/state/cache directories mounted read-write so plugin managers work
 - Emacs: mounts `~/.config/emacs/` (preferred) or `~/.emacs.d/`, plus `~/.local/share/emacs/` and `~/.cache/emacs/` read-write
 - Neovim: mounts `~/.config/nvim/`, plus `~/.local/share/nvim/`, `~/.local/state/nvim/`, and `~/.cache/nvim/` read-write
