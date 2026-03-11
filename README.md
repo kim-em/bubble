@@ -94,6 +94,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble cloud provision\|destroy\|start\|stop\|status` | Manage Hetzner Cloud server |
 | `bubble cloud default on\|off` | Set cloud as the default for all bubbles |
 | `bubble cloud ssh` | SSH directly to the cloud server |
+| `bubble tools list\|set\|status` | Manage tools installed in container images |
 | `bubble doctor` | Diagnose and fix common issues |
 
 ## Images
@@ -137,7 +138,25 @@ allowlist = [
 
 [remote]
 default_host = ""        # e.g. "user@myserver" or "user@host:2222"
+
+[tools]
+claude = "auto"     # "yes" | "no" | "auto" (detect from host)
+codex = "auto"
+gh = "auto"
 ```
+
+### Tools
+
+Tools like Claude Code, GitHub CLI, and OpenAI Codex can be installed in container images. Each tool defaults to `"auto"`, which installs it if the corresponding command is found on your host.
+
+```bash
+bubble tools list                  # show all tools and their settings
+bubble tools set claude yes   # always install
+bubble tools set codex no          # never install
+bubble tools status                # show what would actually be installed
+```
+
+When the resolved tool set changes, a background image rebuild is triggered automatically.
 
 ## Hetzner Cloud
 

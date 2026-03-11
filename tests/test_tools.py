@@ -17,22 +17,22 @@ from bubble.tools import (
 
 def test_available_tools():
     tools = available_tools()
-    assert "claude-code" in tools
+    assert "claude" in tools
     assert "codex" in tools
     assert "gh" in tools
     assert tools == sorted(tools)
 
 
 def test_resolve_tools_yes():
-    config = {"tools": {"claude-code": "yes", "codex": "yes", "gh": "yes"}}
+    config = {"tools": {"claude": "yes", "codex": "yes", "gh": "yes"}}
     enabled = resolve_tools(config)
-    assert "claude-code" in enabled
+    assert "claude" in enabled
     assert "codex" in enabled
     assert "gh" in enabled
 
 
 def test_resolve_tools_no():
-    config = {"tools": {"claude-code": "no", "codex": "no", "gh": "no"}}
+    config = {"tools": {"claude": "no", "codex": "no", "gh": "no"}}
     enabled = resolve_tools(config)
     assert enabled == []
 
@@ -42,7 +42,7 @@ def test_resolve_tools_auto_with_host_cmd(monkeypatch):
     config = {"tools": {}}
     enabled = resolve_tools(config)
     assert "gh" in enabled
-    assert "claude-code" not in enabled
+    assert "claude" not in enabled
     assert "codex" not in enabled
 
 
@@ -55,9 +55,9 @@ def test_resolve_tools_auto_nothing_on_host(monkeypatch):
 
 def test_resolve_tools_mixed(monkeypatch):
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
-    config = {"tools": {"claude-code": "yes", "codex": "no"}}
+    config = {"tools": {"claude": "yes", "codex": "no"}}
     enabled = resolve_tools(config)
-    assert "claude-code" in enabled
+    assert "claude" in enabled
     assert "gh" in enabled
     assert "codex" not in enabled
 
@@ -70,19 +70,19 @@ def test_resolve_tools_default_is_auto(monkeypatch):
 
 
 def test_tools_hash_stable():
-    h1 = tools_hash(["claude-code", "gh"])
-    h2 = tools_hash(["claude-code", "gh"])
+    h1 = tools_hash(["claude", "gh"])
+    h2 = tools_hash(["claude", "gh"])
     assert h1 == h2
 
 
 def test_tools_hash_order_independent():
-    h1 = tools_hash(["gh", "claude-code"])
-    h2 = tools_hash(["claude-code", "gh"])
+    h1 = tools_hash(["gh", "claude"])
+    h2 = tools_hash(["claude", "gh"])
     assert h1 == h2
 
 
 def test_tools_hash_different_sets():
-    h1 = tools_hash(["claude-code"])
+    h1 = tools_hash(["claude"])
     h2 = tools_hash(["gh"])
     assert h1 != h2
 
@@ -105,13 +105,13 @@ def test_tool_network_domains():
 
 
 def test_tool_network_domains_combined():
-    domains = tool_network_domains(["claude-code", "gh"])
+    domains = tool_network_domains(["claude", "gh"])
     assert "registry.npmjs.org" in domains
     assert "cli.github.com" in domains
 
 
 def test_tool_network_domains_no_duplicates():
-    domains = tool_network_domains(["claude-code", "codex"])
+    domains = tool_network_domains(["claude", "codex"])
     assert domains.count("registry.npmjs.org") == 1
 
 
@@ -120,8 +120,8 @@ def test_combined_tool_script_none_when_empty():
 
 
 def test_combined_tool_script_includes_all():
-    script = combined_tool_script(["claude-code", "gh"])
-    assert "claude-code" in script
+    script = combined_tool_script(["claude", "gh"])
+    assert "claude" in script
     assert "gh" in script
     assert "#!/bin/bash" in script
 
@@ -135,7 +135,7 @@ def test_tools_list_cli(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["tools", "list"])
     assert result.exit_code == 0
-    assert "claude-code" in result.output
+    assert "claude" in result.output
     assert "gh" in result.output
     assert "TOOL" in result.output
 
@@ -187,11 +187,11 @@ def test_tools_config_roundtrip(tmp_data_dir):
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude-code": "yes", "gh": "no"}
+    config["tools"] = {"claude": "yes", "gh": "no"}
     save_config(config)
 
     reloaded = load_config()
-    assert reloaded["tools"]["claude-code"] == "yes"
+    assert reloaded["tools"]["claude"] == "yes"
     assert reloaded["tools"]["gh"] == "no"
 
 
@@ -227,7 +227,7 @@ def test_build_image_no_tools_when_none_enabled(mock_runtime, monkeypatch, tmp_d
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude-code": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
     save_config(config)
 
     from bubble.images.builder import build_image
@@ -279,7 +279,7 @@ def test_tools_hash_includes_script_content(tmp_path):
     h2 = tools_hash(["gh"])
     assert h1 == h2
     # Hash of gh should differ from hash of claude-code (different scripts)
-    h3 = tools_hash(["claude-code"])
+    h3 = tools_hash(["claude"])
     assert h1 != h3
 
 

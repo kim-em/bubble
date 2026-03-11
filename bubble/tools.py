@@ -12,8 +12,8 @@ SCRIPTS_DIR = Path(__file__).parent / "images" / "scripts" / "tools"
 #   host_cmd: command to check on host for "auto" detection
 #   network_domains: extra domains needed during install
 TOOLS = {
-    "claude-code": {
-        "script": "claude-code.sh",
+    "claude": {
+        "script": "claude.sh",
         "host_cmd": "claude",
         "network_domains": ["registry.npmjs.org", "deb.nodesource.com"],
     },

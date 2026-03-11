@@ -25,6 +25,7 @@ bubble/
 ├── remote.py           # Remote SSH host support: run bubbles on remote machines
 ├── cloud.py            # Hetzner Cloud auto-provisioning (provision, destroy, start, stop)
 ├── claude.py           # Claude Code integration: prompt generation, VS Code task injection
+├── tools.py            # Pluggable tool installation: registry, resolution, hash computation
 ├── hooks/
 │   ├── __init__.py     # Hook ABC, discover_hooks(), select_hook()
 │   └── lean.py         # LeanHook: detects lean-toolchain, uses lean image
@@ -37,7 +38,8 @@ bubble/
 │   └── scripts/
 │       ├── base.sh     # Ubuntu 24.04 + git + ssh + build-essential (user: "user")
 │       ├── lean.sh     # elan + VS Code Lean extension (derives from base, no toolchains)
-│       └── lean-toolchain.sh  # Installs one specific Lean toolchain (for versioned images)
+│       ├── lean-toolchain.sh  # Installs one specific Lean toolchain (for versioned images)
+│       └── tools/      # Per-tool install scripts (claude.sh, codex.sh, gh.sh)
 ```
 
 ## Key Design Decisions
@@ -63,6 +65,9 @@ The core performance optimization. Host maintains bare mirror repos (`git clone 
 
 ### Image Registry
 Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. Static images: `base` (from Ubuntu 24.04) and `lean` (from base, elan + VS Code extension only, no toolchains).
+
+### Pluggable Tool Installation
+Tools like Claude Code, GitHub CLI, and OpenAI Codex can be installed in container images via the `[tools]` config section. Each tool has a self-contained install script in `bubble/images/scripts/tools/` and is registered in the `TOOLS` dict in `tools.py` with its script filename, host detection command, and required network domains. Config values are `"yes"`, `"no"`, or `"auto"` (default). `"auto"` checks if the tool's command exists on the host via `shutil.which()`. Tools are installed into the `base` image during `build_image("base")` — derived images inherit them. When the resolved tool set changes (detected via a content-aware hash stored in `~/.bubble/tools-hash`), a background rebuild of `base` is triggered, and stale derived images are purged.
 
 ### Lazy Lean Toolchain Images
 The `lean` image has only elan (no toolchains pre-installed). When `LeanHook` detects a project, it reads `lean-toolchain` and parses the version. For stable/RC versions (v4.X.Y, v4.X.Y-rcK), it requests image `lean-v4.X.Y`. If that image exists, it's used directly. If not, the plain `lean` image is used (elan downloads the toolchain on demand) and a background build of the versioned image is triggered for next time. Dynamic images are built via `build_lean_toolchain_image()` in `builder.py`. Nightlies and custom toolchains always use the plain `lean` image.
@@ -114,6 +119,12 @@ The `user` account has no sudo and a locked password. Network allowlisting is ap
 4. Add image script in `images/scripts/<name>.sh` and entry in `builder.py`'s `IMAGES` dict
 5. Register the hook in `hooks/__init__.py`'s `discover_hooks()`
 
+## How to Add a New Tool
+
+1. Create `bubble/images/scripts/tools/<name>.sh` — a self-contained install script that runs as root
+2. Add an entry to the `TOOLS` dict in `bubble/tools.py` with `script`, `host_cmd`, and `network_domains`
+3. Test with `bubble tools set <name> yes && bubble images build base`
+
 ## Running Tests
 
 Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest`).
@@ -135,6 +146,7 @@ Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest
 - `~/.bubble/relay.log` — relay request log
 - `~/.bubble/mathlib-cache/` — shared writable mathlib cache (mounted into Lean containers)
 - `~/.bubble/vscode-commit` — VS Code commit hash baked into current base image
+- `~/.bubble/tools-hash` — hash of installed tools + script contents (for drift detection)
 - `~/.bubble/cloud.json` — Hetzner Cloud server state (ID, IP, SSH key ID)
 - `~/.bubble/cloud_key` — SSH private key for cloud server (ed25519, mode 0600)
 - `~/.bubble/known_hosts` — SSH known_hosts for cloud server (isolated from ~/.ssh/)
