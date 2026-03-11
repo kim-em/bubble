@@ -118,6 +118,15 @@ class TestOpenEditorEmacs:
         assert "cd" in cmd[3]
         assert "/home/user/project" in cmd[3]
 
+    def test_emacs_checks_build_marker(self, monkeypatch):
+        """Emacs SSH command should include marker file check for auto-build."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_editor("emacs", "test-bubble", "/home/user/project")
+        cmd = calls[0][3]
+        assert ".bubble-fetch-cache" in cmd
+        assert "build.log" in cmd
+
 
 class TestOpenEditorNeovim:
     def test_neovim_ssh_command(self, monkeypatch):
@@ -132,6 +141,15 @@ class TestOpenEditorNeovim:
         assert cmd[2] == "-t"
         assert "nvim ." in cmd[3]
         assert "/home/user/project" in cmd[3]
+
+    def test_neovim_checks_build_marker(self, monkeypatch):
+        """Neovim SSH command should include marker file check for auto-build."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_editor("neovim", "test-bubble", "/home/user/project")
+        cmd = calls[0][3]
+        assert ".bubble-fetch-cache" in cmd
+        assert "build.log" in cmd
 
 
 class TestOpenEditorShell:

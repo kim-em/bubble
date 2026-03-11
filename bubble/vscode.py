@@ -126,11 +126,21 @@ def open_editor(
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
     elif editor in ("emacs", "neovim"):
         editor_cmd = "emacs" if editor == "emacs" else "nvim"
+        # Check for build marker file (written by hooks like LeanHook.post_clone)
+        # and start the build in background before launching the editor.
+        marker_check = (
+            "if [ -f ~/.bubble-fetch-cache ]; then "
+            "_cmd=$(cat ~/.bubble-fetch-cache); rm -f ~/.bubble-fetch-cache; "
+            'if [ -n "$_cmd" ]; then '
+            'nohup bash -c "$_cmd" > ~/build.log 2>&1 & '
+            "echo 'Build started in background (tail -f ~/build.log to monitor)'; "
+            "fi; fi; "
+        )
         ssh_cmd = [
             "ssh",
             f"bubble-{bubble_name}",
             "-t",
-            f"cd {shlex.quote(remote_path)} && {editor_cmd} .",
+            f"{marker_check}cd {shlex.quote(remote_path)} && {editor_cmd} .",
         ]
         subprocess.run(ssh_cmd)
     elif editor == "shell":

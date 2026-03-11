@@ -16,6 +16,10 @@
   - Concurrent builds of the same image now serialize; the second skips if the first completed
   - Builder container cleanup is now in a `finally` block to prevent orphaned containers
   - Replace fragile touch-based lock files with proper `fcntl.flock()` locks
+- Lean cache/build workflow now triggers for emacs, neovim, and shell editors (#26):
+  - emacs/neovim: build starts in background when editor opens via SSH
+  - shell: build starts in background on first login via `.profile` hook
+  - Build output saved to `~/build.log` inside the container
 
 ## 0.5.15 — 2026-03-11
 - Split cli.py (~4200 lines) into focused modules (#45):

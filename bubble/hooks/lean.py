@@ -155,19 +155,20 @@ class LeanHook(Hook):
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
         """Pre-populate Lake dependencies, then set up auto build command."""
         if self._is_lean4:
-            self._setup_lean4_build(runtime, container)
+            self._setup_lean4_build(runtime, container, project_dir)
             return
 
         if self._git_deps:
             self._populate_lake_packages(runtime, container, project_dir)
 
+        q_dir = shlex.quote(project_dir)
         if self._needs_cache:
-            cmd = "lake exe cache get && lake build"
-            msg = "Mathlib cache download and build will start when VS Code connects."
+            cmd = f"cd {q_dir} && lake exe cache get && lake build"
+            msg = "Mathlib cache download and build will start automatically."
         else:
-            cmd = "lake build"
-            msg = "Build will start when VS Code connects."
-        # Write command for the bubble-lean-cache VS Code extension to pick up
+            cmd = f"cd {q_dir} && lake build"
+            msg = "Build will start automatically."
+        # Write command for the VS Code extension or shell login hook to pick up
         runtime.exec(
             container,
             [
@@ -180,9 +181,10 @@ class LeanHook(Hook):
         )
         click.echo(msg)
 
-    def _setup_lean4_build(self, runtime: ContainerRuntime, container: str):
+    def _setup_lean4_build(self, runtime: ContainerRuntime, container: str, project_dir: str):
         """Set up auto-build for the lean4 repo itself (cmake is in base image)."""
-        cmd = "cmake --preset release && make -C build/release -j$(nproc)"
+        q_dir = shlex.quote(project_dir)
+        cmd = f"cd {q_dir} && cmake --preset release && make -C build/release -j$(nproc)"
         runtime.exec(
             container,
             [
@@ -193,7 +195,7 @@ class LeanHook(Hook):
                 f"printf '%s' {shlex.quote(cmd)} > ~/.bubble-fetch-cache",
             ],
         )
-        click.echo("Lean 4 build will start when VS Code connects.")
+        click.echo("Lean 4 build will start automatically.")
 
     def _populate_lake_packages(self, runtime: ContainerRuntime, container: str, project_dir: str):
         """Clone each dependency into .lake/packages/<name>/ using alternates."""
