@@ -284,6 +284,25 @@ def _cleanup_builder(runtime: ContainerRuntime, build_name: str):
         )
 
 
+def _ancestor_chain(image_name: str) -> list[str]:
+    """Return the chain of ancestor images (root first) that are our own images.
+
+    For example, ``_ancestor_chain("lean-vscode")`` returns ``["base", "lean"]``
+    because lean-vscode's parent is lean, and lean's parent is base.
+    External parents (e.g. ``images:ubuntu/24.04``) are excluded.
+    """
+    ancestors: list[str] = []
+    current = image_name
+    while current in IMAGES:
+        parent = IMAGES[current]["parent"]
+        if parent not in IMAGES:
+            break
+        ancestors.append(parent)
+        current = parent
+    ancestors.reverse()  # root first for deterministic lock ordering
+    return ancestors
+
+
 def _collect_derived_images(base_name: str) -> list[str]:
     """Collect all images in IMAGES that transitively derive from base_name."""
     result = []
@@ -421,19 +440,19 @@ def build_image(runtime: ContainerRuntime, image_name: str):
     if parent in IMAGES and not runtime.image_exists(parent):
         build_image(runtime, parent)
 
-    # Acquire a shared lock on the parent (if it's one of our images) to
-    # prevent the parent from being rebuilt while we build from it.  This
-    # fixes the race where a concurrent parent rebuild could either:
-    #   (a) produce a derived image built from a stale parent, or
+    # Acquire shared locks on ALL ancestors (root-first to avoid deadlock)
+    # to prevent any ancestor from being rebuilt while we build from it.
+    # This fixes the race where a concurrent ancestor rebuild could either:
+    #   (a) produce a derived image built from a stale ancestor, or
     #   (b) purge the derived image we just published.
     # Multiple derived builds can proceed concurrently (shared locks coexist),
-    # but a parent rebuild (exclusive lock) waits for them all to finish.
+    # but an ancestor rebuild (exclusive lock) waits for them all to finish.
     #
     # Then acquire an exclusive lock on this image to prevent concurrent
     # builds of the same image.
     with ExitStack() as stack:
-        if parent in IMAGES:
-            stack.enter_context(_build_lock(parent, shared=True))
+        for ancestor in _ancestor_chain(image_name):
+            stack.enter_context(_build_lock(ancestor, shared=True))
         stack.enter_context(_build_lock(image_name))
 
         if runtime.image_exists(image_name):
@@ -515,11 +534,15 @@ def build_lean_toolchain_image(
     safe_alias = alias.replace(".", "-")
     build_name = f"{safe_alias}-builder"
 
-    # Acquire a shared lock on the base lean image to prevent it from being
-    # rebuilt while we build from it (same parent-lock pattern as build_image).
-    # Then acquire an exclusive lock on this toolchain image.
+    # Acquire shared locks on the base lean image AND all its ancestors
+    # (root-first to avoid deadlock), preventing any ancestor rebuild
+    # from racing with this toolchain build.
     with ExitStack() as stack:
-        # base_lean_image is always one of our images (e.g. "lean", "lean-emacs")
+        # Lock ancestors of the base lean image first (e.g. "base" for "lean")
+        if base_lean_image in IMAGES:
+            for ancestor in _ancestor_chain(base_lean_image):
+                stack.enter_context(_build_lock(ancestor, shared=True))
+        # Then the base lean image itself
         stack.enter_context(_build_lock(base_lean_image, shared=True))
         stack.enter_context(_build_lock(safe_alias))
 

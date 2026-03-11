@@ -3,7 +3,12 @@
 import threading
 import time
 
-from bubble.images.builder import _build_lock, build_image, is_build_locked
+from bubble.images.builder import (
+    _ancestor_chain,
+    _build_lock,
+    build_image,
+    is_build_locked,
+)
 
 
 def test_build_lock_prevents_concurrent_builds(mock_runtime, monkeypatch, tmp_data_dir):
@@ -265,3 +270,97 @@ def test_derived_build_holds_parent_lock(mock_runtime, monkeypatch, tmp_data_dir
     # The derived build (lean) must complete before the parent rebuild (base)
     # can proceed, because the derived build holds a shared lock on base.
     assert order.index("lean-published") < order.index("parent-building")
+
+
+def test_ancestor_chain():
+    """_ancestor_chain returns the full chain of ancestors, root first."""
+    # base has no ancestors (its parent is images:ubuntu/24.04)
+    assert _ancestor_chain("base") == []
+    # lean's parent is base
+    assert _ancestor_chain("lean") == ["base"]
+
+
+def test_ancestor_chain_deep(monkeypatch):
+    """_ancestor_chain works for deeper hierarchies (3+ levels)."""
+    from bubble.images import builder
+
+    # Temporarily add a grandchild image to test the full chain
+    original_images = builder.IMAGES.copy()
+    monkeypatch.setattr(
+        builder,
+        "IMAGES",
+        {
+            **original_images,
+            "lean-extra": {"script": "lean.sh", "parent": "lean"},
+        },
+    )
+    assert _ancestor_chain("lean-extra") == ["base", "lean"]
+
+
+def test_grandchild_build_holds_ancestor_locks(mock_runtime, monkeypatch, tmp_data_dir):
+    """Building a grandchild should block a grandparent (base) rebuild.
+
+    This tests the full ancestor chain locking: a grandchild holds shared
+    locks on both its parent and grandparent, so a concurrent grandparent
+    rebuild must wait until the grandchild build completes.
+    """
+    from bubble.images import builder
+
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
+
+    from bubble.config import load_config, save_config
+
+    config = load_config()
+    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    save_config(config)
+
+    # Temporarily add a grandchild image for this test
+    monkeypatch.setattr(
+        builder,
+        "IMAGES",
+        {
+            **builder.IMAGES,
+            "lean-extra": {"script": "lean.sh", "parent": "lean"},
+        },
+    )
+
+    order = []
+    derived_building = threading.Event()
+    parent_started = threading.Event()
+
+    def slow_derived_wait(*a, **kw):
+        order.append("grandchild-building")
+        derived_building.set()
+        parent_started.wait(timeout=5)
+        time.sleep(0.1)
+        order.append("grandchild-done")
+
+    def slow_parent_wait(*a, **kw):
+        order.append("grandparent-building")
+
+    # base and lean exist, lean-extra does not
+    mock_runtime._images = {"base", "lean"}
+
+    def build_grandchild():
+        monkeypatch.setattr("bubble.images.builder._wait_for_container", slow_derived_wait)
+        build_image(mock_runtime, "lean-extra")
+        order.append("lean-extra-published")
+
+    def rebuild_base():
+        derived_building.wait(timeout=5)
+        parent_started.set()
+        monkeypatch.setattr("bubble.images.builder._wait_for_container", slow_parent_wait)
+        mock_runtime._images.discard("base")
+        build_image(mock_runtime, "base")
+        order.append("base-published")
+
+    t1 = threading.Thread(target=build_grandchild)
+    t2 = threading.Thread(target=rebuild_base)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    # The grandchild build must complete before the grandparent rebuild
+    assert order.index("lean-extra-published") < order.index("grandparent-building")
