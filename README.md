@@ -176,7 +176,7 @@ bubble leanprover-community/mathlib4     # goes to cloud automatically
 bubble leanprover/lean4 --local          # override: run locally instead
 ```
 
-Multiple bubbles share one cloud server. If the server is stopped (manually or by idle auto-shutdown), it restarts automatically when you run `bubble --cloud` or `bubble open` with cloud as default.
+Multiple bubbles share one cloud server. If the server is stopped (manually or by idle auto-shutdown), it restarts automatically when you run `bubble --cloud <target>` or `bubble <target>` with cloud as default.
 
 ### Server Types and Pricing
 
@@ -194,27 +194,28 @@ Common types:
 | `ccx33` | 8 dedicated vCPU, 32 GB RAM | ~€0.09/hr |
 | `ccx43` | 16 dedicated vCPU, 64 GB RAM | ~€0.17/hr |
 
+Prices are approximate and vary by datacenter. Run `bubble cloud provision --list` for current pricing from the Hetzner API.
+
 Dedicated vCPU types (`ccx*`) may require a limit increase on new Hetzner accounts — the CLI will guide you if so.
 
-Billing stops when the server is powered off. With idle auto-shutdown, you only pay for hours you're actively using.
+Hetzner bills servers hourly while they exist, even when powered off. To stop billing entirely, use `bubble cloud destroy`. The idle auto-shutdown reduces costs by keeping the server off when not in use, but the only way to fully stop charges is to destroy the server.
 
 ### Idle Auto-Shutdown
 
-The cloud server monitors for activity every 5 minutes. After 15 minutes with **no SSH connections** and **low CPU load** (normalized load < 0.5), the server shuts down automatically.
+A systemd timer checks every 5 minutes for SSH connections and CPU load. If there are **no SSH connections** and **low CPU** (normalized load < 0.5) for the configured idle timeout (default: 15 minutes), the server shuts down automatically. A 15-minute boot grace period prevents shutdown during initial setup, so a freshly booted idle server won't shut down for roughly 25 minutes.
 
 - Running containers do **not** prevent shutdown — only active SSH sessions and high CPU load do
 - Containers survive shutdown: they're still on disk when the server restarts
-- The server restarts automatically on your next `bubble --cloud` command
-- A 15-minute grace period after boot prevents immediate shutdown during setup
+- The server restarts automatically on your next `bubble --cloud <target>` command
 
 ### Lifecycle Commands
 
 ```bash
 bubble cloud status                      # show server info and current state
-bubble cloud stop                        # power off (stops billing)
+bubble cloud stop                        # power off manually
 bubble cloud start                       # power on and wait for SSH
 bubble cloud destroy                     # delete server and all containers permanently
-bubble cloud ssh                         # SSH directly to the cloud server
+bubble cloud ssh                         # SSH directly to the cloud server (requires server running)
 ```
 
 ### Configuration

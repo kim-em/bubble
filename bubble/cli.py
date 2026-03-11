@@ -2567,8 +2567,8 @@ def cloud_provision(server_type, location, list_types):
     """Provision a Hetzner Cloud server for bubble.
 
     Creates a server with Incus pre-installed. The server auto-shuts down
-    after 15 minutes of idle (no SSH connections + low CPU), stopping
-    hourly billing. It auto-starts again on next 'bubble open --cloud'.
+    after 15 minutes of idle (no SSH connections + low CPU) to reduce costs.
+    It auto-starts again on next 'bubble --cloud <target>'.
 
     \b
     Common server types (default: cx43):
@@ -2603,9 +2603,10 @@ def cloud_destroy(force):
 
 @cloud_group.command("stop")
 def cloud_stop():
-    """Power off the cloud server (stops hourly billing).
+    """Power off the cloud server.
 
     Containers are preserved on disk and will be available after restart.
+    Note: Hetzner bills servers until deleted. Use 'bubble cloud destroy' to stop billing.
     """
     from .cloud import stop_server
 

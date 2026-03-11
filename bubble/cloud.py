@@ -701,7 +701,7 @@ def stop_server():
 
     click.echo(f"Powering off '{state['server_name']}'...")
     client.servers.power_off(server)
-    click.echo("Server powered off. Hourly billing stopped.")
+    click.echo("Server powered off. Use 'bubble cloud destroy' to stop billing entirely.")
 
 
 def start_server():
