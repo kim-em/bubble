@@ -194,9 +194,7 @@ def _make_git_repo(
     repo.mkdir()
     env = {**_GIT_ENV, "HOME": str(tmp_path)}
 
-    subprocess.run(
-        [GIT, "init", "-b", branch, str(repo)], capture_output=True, check=True, env=env
-    )
+    subprocess.run([GIT, "init", "-b", branch, str(repo)], capture_output=True, check=True, env=env)
     subprocess.run(
         [GIT, "-C", str(repo), "remote", "add", "origin", remote_url],
         capture_output=True,
@@ -206,9 +204,7 @@ def _make_git_repo(
 
     if commit:
         (repo / "README.md").write_text("# Test\n")
-        subprocess.run(
-            [GIT, "-C", str(repo), "add", "."], capture_output=True, check=True, env=env
-        )
+        subprocess.run([GIT, "-C", str(repo), "add", "."], capture_output=True, check=True, env=env)
         subprocess.run(
             [GIT, "-C", str(repo), "commit", "-m", "init"],
             capture_output=True,
@@ -334,9 +330,7 @@ class TestParseLocalPath:
         env = {**_GIT_ENV, "HOME": str(tmp_path)}
         subprocess.run([GIT, "init", str(repo)], capture_output=True, check=True, env=env)
         (repo / "f.txt").write_text("x\n")
-        subprocess.run(
-            [GIT, "-C", str(repo), "add", "."], capture_output=True, check=True, env=env
-        )
+        subprocess.run([GIT, "-C", str(repo), "add", "."], capture_output=True, check=True, env=env)
         subprocess.run(
             [GIT, "-C", str(repo), "commit", "-m", "init"],
             capture_output=True,
