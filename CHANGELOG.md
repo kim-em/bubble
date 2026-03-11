@@ -6,6 +6,15 @@
 - `lean` is now the core image (elan + leantar); VS Code Server and extensions live in `-vscode` variants
 - VS Code Server moved from `base` to `vscode.sh` script (shared by `base-vscode` and `lean-vscode`)
 - Lean VS Code extensions installed conditionally (only when elan is present in the image)
+- Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json)
+- Credentials (`.credentials.json`, `.current-account`) opt-in via `--claude-credentials` for security
+- Nag message reminds you about `--claude-credentials` when credentials exist on host
+- Writable per-bubble `projects/` directory (`~/.bubble/claude-projects/<name>/`) for persistent session memory
+- Session history and transient state are excluded by design
+- Symlink validation: rejects mounts that escape `~/.claude` directory
+- Path overlap detection: user mounts take precedence over auto mounts (ancestry-aware)
+- `--no-claude-config` properly forwarded to remote/cloud bubbles
+- Opt out with `--no-claude-config`
 
 ## 0.5.8 — 2026-03-10
 - User-configurable host directory mounts via `--mount` CLI flag and `[[mounts]]` config section
@@ -15,6 +24,13 @@
 - `bubble skill install/uninstall/status` commands for managing the Claude Code skill
 - Skill file bundled with the package at `bubble/data/skill.md`
 - Auto-install the skill on first `bubble open` when Claude Code is detected
+- Native mode: `bubble --native <target>` creates non-containerized workspaces
+- Clones into `~/.bubble/native/<name>/` with shared git objects
+- Prints prominent warning about lack of isolation
+- `bubble list` shows native workspaces with location "native"
+- `bubble pop` supports native workspaces with dirty-check confirmation
+- `bubble pause` rejects native workspaces (no container state to freeze)
+- Cleanness checking for native workspaces (dirty worktree, unpushed commits)
 
 ## 0.5.7 — 2026-02-17
 - Remote-aware `bubble list`: shows cloud and SSH-remote bubbles from registry

@@ -406,6 +406,7 @@ def remote_open(
     custom_name: str | None = None,
     git_name: str = "",
     git_email: str = "",
+    claude_config: bool = True,
 ) -> dict:
     """Open a bubble on a remote host.
 
@@ -420,6 +421,8 @@ def remote_open(
     args = ["open", "--no-interactive", "--machine-readable"]
     if not network:
         args.append("--no-network")
+    if not claude_config:
+        args.append("--no-claude-config")
     if custom_name:
         args += ["--name", custom_name]
     if git_name:
