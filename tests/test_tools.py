@@ -19,11 +19,15 @@ def test_available_tools():
     assert "claude" in tools
     assert "codex" in tools
     assert "gh" in tools
+    assert "elan" in tools
+    assert "vscode" in tools
+    assert "emacs" in tools
+    assert "neovim" in tools
     assert tools == sorted(tools)
 
 
 def test_resolve_tools_yes():
-    config = {"tools": {"claude": "yes", "codex": "yes", "gh": "yes"}}
+    config = {"tools": {"claude": "yes", "codex": "yes", "gh": "yes"}, "editor": "shell"}
     enabled = resolve_tools(config)
     assert "claude" in enabled
     assert "codex" in enabled
@@ -31,14 +35,17 @@ def test_resolve_tools_yes():
 
 
 def test_resolve_tools_no():
-    config = {"tools": {"claude": "no", "codex": "no", "gh": "no"}}
+    config = {
+        "tools": {"claude": "no", "codex": "no", "gh": "no", "elan": "no"},
+        "editor": "shell",
+    }
     enabled = resolve_tools(config)
     assert enabled == []
 
 
 def test_resolve_tools_auto_with_host_cmd(monkeypatch):
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
-    config = {"tools": {}}
+    config = {"tools": {}, "editor": "shell"}
     enabled = resolve_tools(config)
     assert "gh" in enabled
     assert "claude" not in enabled
@@ -47,14 +54,14 @@ def test_resolve_tools_auto_with_host_cmd(monkeypatch):
 
 def test_resolve_tools_auto_nothing_on_host(monkeypatch):
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
-    config = {"tools": {}}
+    config = {"editor": "shell"}
     enabled = resolve_tools(config)
     assert enabled == []
 
 
 def test_resolve_tools_mixed(monkeypatch):
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
-    config = {"tools": {"claude": "yes", "codex": "no"}}
+    config = {"tools": {"claude": "yes", "codex": "no"}, "editor": "shell"}
     enabled = resolve_tools(config)
     assert "claude" in enabled
     assert "gh" in enabled
@@ -63,9 +70,28 @@ def test_resolve_tools_mixed(monkeypatch):
 
 def test_resolve_tools_default_is_auto(monkeypatch):
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
-    config = {}  # No tools section at all
+    config = {"editor": "shell"}
     enabled = resolve_tools(config)
     assert enabled == []
+
+
+def test_resolve_tools_includes_default_editor(monkeypatch):
+    """Default editor (vscode) is included even when no tools on host."""
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+    config = {}  # defaults to editor=vscode
+    enabled = resolve_tools(config)
+    assert "vscode" in enabled
+
+
+def test_resolve_tools_priority_ordering(monkeypatch):
+    """Tools should be ordered by priority: elan (10) before claude (50) before vscode (90)."""
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: True)
+    config = {"editor": "vscode"}
+    enabled = resolve_tools(config)
+    elan_idx = enabled.index("elan")
+    claude_idx = enabled.index("claude")
+    vscode_idx = enabled.index("vscode")
+    assert elan_idx < claude_idx < vscode_idx
 
 
 def test_tools_hash_stable():
@@ -357,11 +383,12 @@ def test_build_image_no_tools_when_none_enabled(mock_runtime, monkeypatch, tmp_d
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
 
-    # Explicitly set all tools to "no" to avoid host detection
+    # Explicitly set all tools to "no" and editor to "shell" to skip everything
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no", "gh": "no", "elan": "no"}
+    config["editor"] = "shell"
     save_config(config)
 
     from bubble.images.builder import build_image
@@ -427,22 +454,16 @@ def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_di
 
     from bubble.images.builder import build_image
 
-    # Pre-populate direct and transitive derived images, remove base so it actually builds
+    # Pre-populate derived images, remove base so it actually builds
     mock_runtime._images.discard("base")
     mock_runtime._images.add("lean")
-    mock_runtime._images.add("base-vscode")
-    mock_runtime._images.add("lean-vscode")
-    mock_runtime._images.add("lean-emacs")
 
     build_image(mock_runtime, "base")
 
-    # All derived images (direct + transitive) should have been deleted
+    # Derived images should have been deleted
     delete_calls = [c for c in mock_runtime.calls if c[0] == "image_delete"]
     deleted_names = {c[1] for c in delete_calls}
     assert "lean" in deleted_names
-    assert "base-vscode" in deleted_names
-    assert "lean-vscode" in deleted_names
-    assert "lean-emacs" in deleted_names
 
 
 def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, tmp_data_dir):
@@ -456,10 +477,7 @@ def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, t
     # Pre-populate static + dynamic images, remove base so it actually builds
     mock_runtime._images.discard("base")
     mock_runtime._images.add("lean")
-    mock_runtime._images.add("lean-vscode")
     mock_runtime._images.add("lean-v4-16-0")
-    mock_runtime._images.add("lean-emacs")
-    mock_runtime._images.add("lean-emacs-v4-16-0")
 
     build_image(mock_runtime, "base")
 
@@ -467,32 +485,22 @@ def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, t
     deleted_names = {c[1] for c in delete_calls}
     # Dynamic toolchain images should also be purged
     assert "lean-v4-16-0" in deleted_names
-    assert "lean-emacs-v4-16-0" in deleted_names
 
 
 def test_collect_derived_images_recursive():
     """Verify _collect_derived_images walks the full dependency tree."""
     from bubble.images.builder import _collect_derived_images
 
-    # "base" -> lean, base-vscode, base-emacs, base-neovim
-    # "lean" -> lean-vscode
-    # "base-emacs" -> lean-emacs
-    # "base-neovim" -> lean-neovim
+    # "base" -> "lean" (only two images in simplified hierarchy)
     derived = set(_collect_derived_images("base"))
     assert "lean" in derived
-    assert "base-vscode" in derived
-    assert "base-emacs" in derived
-    assert "base-neovim" in derived
-    assert "lean-vscode" in derived
-    assert "lean-emacs" in derived
-    assert "lean-neovim" in derived
 
 
 def test_collect_derived_images_leaf():
     """Verify _collect_derived_images returns empty for leaf images."""
     from bubble.images.builder import _collect_derived_images
 
-    assert _collect_derived_images("lean-vscode") == []
+    assert _collect_derived_images("lean") == []
 
 
 def test_collect_dynamic_toolchain_aliases(mock_runtime):
@@ -503,22 +511,15 @@ def test_collect_dynamic_toolchain_aliases(mock_runtime):
         {
             "lean-v4-16-0",
             "lean-v4-17-0",
-            "lean-emacs-v4-16-0",
-            "base-vscode",
             "lean",
-            "lean-vscode",
         }
     )
 
     # Only lean-family images in purged set trigger scanning
-    aliases = set(_collect_dynamic_toolchain_aliases(mock_runtime, {"lean", "lean-emacs"}))
+    aliases = set(_collect_dynamic_toolchain_aliases(mock_runtime, {"lean"}))
     assert "lean-v4-16-0" in aliases
     assert "lean-v4-17-0" in aliases
-    assert "lean-emacs-v4-16-0" in aliases
-    # Static images must NOT be matched as dynamic toolchain aliases
-    assert "base-vscode" not in aliases
-    assert "lean-vscode" not in aliases
     assert "lean" not in aliases
 
     # No lean images in purged set -> no dynamic aliases
-    assert _collect_dynamic_toolchain_aliases(mock_runtime, {"base-vscode"}) == []
+    assert _collect_dynamic_toolchain_aliases(mock_runtime, {"base"}) == []

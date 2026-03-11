@@ -37,7 +37,8 @@ def test_build_image_runs_customize_script(mock_runtime, monkeypatch, tmp_data_d
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no", "gh": "no", "elan": "no"}
+    config["editor"] = "shell"
     save_config(config)
 
     builder.CUSTOMIZE_SCRIPT.write_text("#!/bin/bash\napt-get install -y ripgrep\n")
@@ -61,7 +62,8 @@ def test_build_image_skips_customize_when_absent(mock_runtime, monkeypatch, tmp_
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no", "gh": "no", "elan": "no"}
+    config["editor"] = "shell"
     save_config(config)
 
     mock_runtime._images.discard("base")
@@ -81,7 +83,8 @@ def test_customize_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no", "gh": "no", "elan": "no"}
+    config["editor"] = "shell"
     save_config(config)
 
     builder.CUSTOMIZE_SCRIPT.write_text("#!/bin/bash\necho hello\n")
@@ -104,7 +107,8 @@ def test_customize_hash_file_removed_when_no_script(mock_runtime, monkeypatch, t
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no", "gh": "no", "elan": "no"}
+    config["editor"] = "shell"
     save_config(config)
 
     # Pre-populate hash file as if a previous build had a customize script

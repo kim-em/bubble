@@ -65,15 +65,11 @@ def is_build_locked(image_name: str) -> bool:
 
 # Image hierarchy: name -> {"script": "...", "parent": "..."}
 # Parent can be another image name (built recursively) or an Incus remote image.
+# Editors (vscode, emacs, neovim) and elan are installed as pluggable tools on
+# the base image, eliminating the need for editor-specific image variants.
 IMAGES = {
     "base": {"script": "base.sh", "parent": "images:ubuntu/24.04"},
-    "base-vscode": {"script": "vscode.sh", "parent": "base"},
-    "base-emacs": {"script": "emacs.sh", "parent": "base"},
-    "base-neovim": {"script": "neovim.sh", "parent": "base"},
     "lean": {"script": "lean.sh", "parent": "base"},
-    "lean-vscode": {"script": "vscode.sh", "parent": "lean"},
-    "lean-emacs": {"script": "lean.sh", "parent": "base-emacs"},
-    "lean-neovim": {"script": "lean.sh", "parent": "base-neovim"},
 }
 
 
@@ -260,11 +256,11 @@ def is_builder_container(name: str) -> bool:
     if not name.endswith("-builder"):
         return False
     prefix = name[: -len("-builder")]
-    # Known static image builders (e.g. "base-builder", "lean-vscode-builder")
+    # Known static image builders (e.g. "base-builder", "lean-builder")
     if prefix in IMAGES:
         return True
-    # Lean toolchain builders (e.g. "lean-v4-16-0-builder", "lean-emacs-v4-16-0-builder")
-    if re.match(r"^lean(-[a-z]+)?-v\d+", prefix):
+    # Lean toolchain builders (e.g. "lean-v4-16-0-builder")
+    if re.match(r"^lean-v\d+", prefix):
         return True
     return False
 
@@ -297,8 +293,8 @@ def _is_toolchain_alias(alias: str, purged_names: set[str]) -> bool:
     """Check if an alias is a dynamic toolchain image derived from a purged lean image.
 
     Toolchain aliases follow the pattern: <base>-v<digits>... where <base> is
-    a purged lean-family image. We require a digit after 'v' to avoid matching
-    static images like 'lean-vscode'.
+    a purged lean-family image. We require a digit after 'v' to avoid false
+    matches on unrelated images.
     """
     for name in purged_names:
         if name == "lean":
@@ -340,11 +336,10 @@ def _purge_derived_images(runtime: ContainerRuntime, base_name: str):
     """Delete images that derive from base_name so they rebuild from the fresh base.
 
     When the base image is rebuilt (e.g. with new tools), derived images like
-    lean, base-vscode, lean-vscode etc. are stale snapshots. Deleting them
-    forces a rebuild on next use.
+    lean are stale snapshots. Deleting them forces a rebuild on next use.
 
     Walks the full dependency tree (not just direct children) and also purges
-    dynamic toolchain images (lean-v4.x.y, lean-emacs-v4.x.y, etc.).
+    dynamic toolchain images (lean-v4.x.y, etc.).
     """
     static_derived = _collect_derived_images(base_name)
 
@@ -366,7 +361,8 @@ def _install_tools_if_base(
     """Install configured tools into a builder container if this is the base image.
 
     Tools are only installed on the 'base' image since all other images
-    derive from it and inherit the tools automatically.
+    derive from it and inherit the tools automatically. This includes
+    editors (vscode, emacs, neovim) and language tools (elan).
 
     Returns the list of enabled tools if tools were installed, None otherwise.
     """
@@ -378,6 +374,10 @@ def _install_tools_if_base(
         return enabled
     script = combined_tool_script(enabled)
     if script:
+        # Inject VS Code commit hash for the vscode tool script
+        vscode_commit = get_vscode_commit()
+        if vscode_commit and "vscode" in enabled:
+            script = f"export VSCODE_COMMIT='{vscode_commit}'\n" + script
         print(f"  Installing tools: {', '.join(enabled)}")
         runtime.exec(build_name, ["bash", "-c", script])
     return enabled
@@ -434,11 +434,8 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         try:
             _wait_for_container(runtime, build_name)
 
-            # Run setup script, injecting VS Code commit hash if available
+            # Run setup script
             script = (SCRIPTS_DIR / spec["script"]).read_text()
-            vscode_commit = get_vscode_commit()
-            if vscode_commit:
-                script = f"export VSCODE_COMMIT='{vscode_commit}'\n" + script
             runtime.exec(build_name, ["bash", "-c", script])
 
             # Install configured tools (only on base image — derived images inherit them)
@@ -456,10 +453,12 @@ def build_image(runtime: ContainerRuntime, image_name: str):
             except Exception:
                 pass
 
-        # Record the VS Code commit hash baked into the image (only for vscode images)
-        if vscode_commit and spec["script"] == "vscode.sh":
-            VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-            VSCODE_COMMIT_FILE.write_text(vscode_commit + "\n")
+        # Record the VS Code commit hash baked into the image (when vscode is a tool)
+        if enabled_tools and "vscode" in enabled_tools:
+            vc = get_vscode_commit()
+            if vc:
+                VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+                VSCODE_COMMIT_FILE.write_text(vc + "\n")
 
         # Record the tools hash baked into the image and purge stale derived images
         if enabled_tools is not None:
@@ -484,8 +483,7 @@ def build_lean_toolchain_image(
 ):
     """Build a toolchain-specific Lean image (e.g. lean-v4.16.0).
 
-    Launches from the base lean image (e.g. 'lean', 'lean-emacs', 'lean-neovim')
-    and installs one specific toolchain.
+    Launches from the base lean image and installs one specific toolchain.
     """
     # Ensure base lean image exists
     if not runtime.image_exists(base_lean_image):
@@ -495,12 +493,7 @@ def build_lean_toolchain_image(
             build_image(runtime, "lean")
             base_lean_image = "lean"
 
-    # Compute alias: lean-v4.16.0, lean-emacs-v4.16.0, lean-neovim-v4.16.0
-    if base_lean_image == "lean":
-        alias = f"lean-{version}"
-    else:
-        # e.g. "lean-emacs" + "v4.16.0" -> "lean-emacs-v4.16.0"
-        alias = f"{base_lean_image}-{version}"
+    alias = f"lean-{version}"
     # Incus container names only allow alphanumeric + hyphens
     safe_alias = alias.replace(".", "-")
     build_name = f"{safe_alias}-builder"
