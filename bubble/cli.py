@@ -17,6 +17,7 @@ from . import __version__
 from .clean import CleanStatus, check_clean, format_reasons
 from .config import (
     DATA_DIR,
+    claude_config_mounts,
     ensure_dirs,
     load_config,
     parse_mounts,
@@ -902,6 +903,7 @@ def _provision_container(
     dep_mounts=None,
     network=False,
     user_mounts=None,
+    claude_mounts=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     click.echo("  Launching container...", nl=False)
@@ -968,6 +970,21 @@ def _provision_container(
                     "-c",
                     f"printf '{script}\\n' > /etc/profile.d/bubble-shared.sh",
                 ],
+            )
+
+    # Mount Claude Code config (read-only individual files/dirs from ~/.claude)
+    if claude_mounts:
+        runtime.exec(
+            name,
+            ["bash", "-c", "mkdir -p /home/user/.claude && chown user:user /home/user/.claude"],
+        )
+        for i, m in enumerate(claude_mounts):
+            runtime.add_disk(
+                name,
+                f"claude-config-{i}",
+                m.source,
+                m.target,
+                readonly=m.readonly,
             )
 
     # Add user-specified mounts (from --mount flags and [[mounts]] config)
@@ -1424,6 +1441,11 @@ def _open_remote(
     multiple=True,
     help="Mount host dir: /host/path:/container/path[:ro|rw] (repeatable)",
 )
+@click.option(
+    "--claude-config/--no-claude-config",
+    default=True,
+    help="Mount ~/.claude config read-only into container (default: enabled)",
+)
 def open_cmd(
     target,
     editor_choice,
@@ -1441,6 +1463,7 @@ def open_cmd(
     git_name,
     git_email,
     mounts,
+    claude_config,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
@@ -1523,6 +1546,14 @@ def open_cmd(
             command=command_args,
         )
         return
+
+    # Claude Code config mounts (local only, opt-out via --no-claude-config)
+    cc_mounts = []
+    if claude_config:
+        cc_mounts = claude_config_mounts()
+        # Don't override explicit user mounts to the same target
+        user_targets = {m.target for m in mount_specs}
+        cc_mounts = [m for m in cc_mounts if m.target not in user_targets]
 
     # Local flow
     if not machine_readable:
@@ -1619,6 +1650,7 @@ def open_cmd(
             dep_mounts=dep_mounts,
             network=network,
             user_mounts=mount_specs,
+            claude_mounts=cc_mounts,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
         _finalize_bubble(

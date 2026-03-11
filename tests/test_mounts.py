@@ -1,8 +1,10 @@
 """Tests for user-specified mount support."""
 
+from pathlib import Path
+
 import pytest
 
-from bubble.config import MountSpec, parse_mounts
+from bubble.config import MountSpec, claude_config_mounts, parse_mounts
 
 
 class TestMountSpecFromCli:
@@ -353,3 +355,182 @@ class TestMountProvisioning:
         disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
         user_disk_calls = [c for c in disk_calls if "user-mount" in c[2]]
         assert len(user_disk_calls) == 0
+
+
+class TestClaudeConfigMounts:
+    """Test automatic ~/.claude config mounting."""
+
+    def test_returns_existing_files(self, tmp_path, monkeypatch):
+        """Mounts returned for all config items that exist."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "CLAUDE.md").write_text("# test")
+        (claude_dir / "settings.json").write_text("{}")
+        (claude_dir / "skills").mkdir()
+        (claude_dir / "keybindings.json").write_text("{}")
+
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+
+        mounts = claude_config_mounts()
+
+        assert len(mounts) == 4
+        targets = {m.target for m in mounts}
+        assert "/home/user/.claude/CLAUDE.md" in targets
+        assert "/home/user/.claude/settings.json" in targets
+        assert "/home/user/.claude/skills" in targets
+        assert "/home/user/.claude/keybindings.json" in targets
+        assert all(m.readonly for m in mounts)
+
+    def test_skips_missing_files(self, tmp_path, monkeypatch):
+        """Only existing files are mounted."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "CLAUDE.md").write_text("# test")
+
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+
+        mounts = claude_config_mounts()
+
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.claude/CLAUDE.md"
+
+    def test_no_claude_dir(self, tmp_path, monkeypatch):
+        """Returns empty when ~/.claude doesn't exist."""
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", tmp_path / "nonexistent")
+
+        mounts = claude_config_mounts()
+
+        assert mounts == []
+
+    def test_excludes_sensitive_files(self, tmp_path, monkeypatch):
+        """Sensitive files like credentials are NOT mounted."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".credentials.json").write_text("{}")
+        (claude_dir / "projects").mkdir()
+        (claude_dir / "stats-cache.json").write_text("{}")
+        (claude_dir / ".current-account").write_text("acct")
+
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+
+        mounts = claude_config_mounts()
+
+        assert mounts == []
+
+    def test_sources_are_absolute(self, tmp_path, monkeypatch):
+        """Mount sources use absolute paths."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "CLAUDE.md").write_text("# test")
+
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+
+        mounts = claude_config_mounts()
+
+        assert Path(mounts[0].source).is_absolute()
+
+
+class TestClaudeConfigProvisioning:
+    """Test that claude config mounts are applied during container provisioning."""
+
+    def test_claude_mounts_applied(self, mock_runtime, tmp_path):
+        """Verify add_disk calls with claude-config device names."""
+        from bubble.cli import _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        claude_mounts = [
+            MountSpec(
+                source="/home/testuser/.claude/CLAUDE.md",
+                target="/home/user/.claude/CLAUDE.md",
+                readonly=True,
+            ),
+            MountSpec(
+                source="/home/testuser/.claude/skills",
+                target="/home/user/.claude/skills",
+                readonly=True,
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            claude_mounts=claude_mounts,
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        claude_disk_calls = [c for c in disk_calls if "claude-config" in c[2]]
+        assert len(claude_disk_calls) == 2
+        assert claude_disk_calls[0] == (
+            "add_disk",
+            "test-container",
+            "claude-config-0",
+            "/home/testuser/.claude/CLAUDE.md",
+            "/home/user/.claude/CLAUDE.md",
+            True,
+        )
+        assert claude_disk_calls[1] == (
+            "add_disk",
+            "test-container",
+            "claude-config-1",
+            "/home/testuser/.claude/skills",
+            "/home/user/.claude/skills",
+            True,
+        )
+
+    def test_creates_claude_dir_in_container(self, mock_runtime, tmp_path):
+        """Verify .claude directory is created before mounting."""
+        from bubble.cli import _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        claude_mounts = [
+            MountSpec(
+                source="/home/testuser/.claude/CLAUDE.md",
+                target="/home/user/.claude/CLAUDE.md",
+                readonly=True,
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            claude_mounts=claude_mounts,
+        )
+
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        mkdir_calls = [c for c in exec_calls if ".claude" in " ".join(c[2])]
+        assert len(mkdir_calls) == 1
+        assert "mkdir -p /home/user/.claude" in " ".join(mkdir_calls[0][2])
+        assert "chown user:user" in " ".join(mkdir_calls[0][2])
+
+    def test_no_claude_mounts(self, mock_runtime, tmp_path):
+        """No claude mount calls when claude_mounts is empty."""
+        from bubble.cli import _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            claude_mounts=[],
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        claude_disk_calls = [c for c in disk_calls if "claude-config" in c[2]]
+        assert len(claude_disk_calls) == 0

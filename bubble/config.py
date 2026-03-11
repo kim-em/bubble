@@ -171,6 +171,36 @@ def _validate_exclude(entry: str) -> None:
         raise ValueError(f"Exclude entry must not contain '..': {entry!r}")
 
 
+CLAUDE_CONFIG_DIR = Path.home() / ".claude"
+
+# Specific items from ~/.claude to mount read-only into containers.
+# Only these are mounted; credentials, session history, and transient
+# state are excluded by omission.
+_CLAUDE_CONFIG_ITEMS = [
+    "CLAUDE.md",
+    "settings.json",
+    "skills",
+    "keybindings.json",
+]
+
+
+def claude_config_mounts() -> list[MountSpec]:
+    """Return read-only mounts for Claude Code config files that exist on the host.
+
+    Mounts specific files/directories from ~/.claude into /home/user/.claude/
+    inside containers, giving Claude Code sessions access to global config.
+    """
+    mounts = []
+    if not CLAUDE_CONFIG_DIR.is_dir():
+        return mounts
+    for item in _CLAUDE_CONFIG_ITEMS:
+        source = CLAUDE_CONFIG_DIR / item
+        if source.exists():
+            target = f"/home/user/.claude/{item}"
+            mounts.append(MountSpec(source=str(source), target=target, readonly=True))
+    return mounts
+
+
 def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSpec]:
     """Merge mounts from config file and CLI flags.
 

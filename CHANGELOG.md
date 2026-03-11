@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.9 — 2026-03-11
+- Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json)
+- Credentials, session history, and transient state are excluded by design
+- Opt out with `--no-claude-config`
+
 ## 0.5.8 — 2026-03-10
 - User-configurable host directory mounts via `--mount` CLI flag and `[[mounts]]` config section
 - Supports read-only (default) and read-write modes
