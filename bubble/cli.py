@@ -19,6 +19,7 @@ from .config import (
     DATA_DIR,
     NATIVE_DIR,
     claude_config_mounts,
+    editor_config_mounts,
     ensure_dirs,
     has_claude_credentials,
     load_config,
@@ -994,6 +995,7 @@ def _provision_container(
     network=False,
     user_mounts=None,
     claude_mounts=None,
+    editor_mounts=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     click.echo("  Launching container...", nl=False)
@@ -1093,6 +1095,42 @@ def _provision_container(
                 str(projects_dir),
                 "/home/user/.claude/projects",
             )
+
+    # Mount editor config directories (read-only config, read-write data/state)
+    if editor_mounts:
+        for i, m in enumerate(editor_mounts):
+            # Ensure parent directories exist in the container
+            parent = str(Path(m.target).parent)
+            runtime.exec(
+                name,
+                [
+                    "bash",
+                    "-c",
+                    f"mkdir -p {shlex.quote(parent)} && chown -R user:user {shlex.quote(parent)}",
+                ],
+            )
+            runtime.add_disk(
+                name,
+                f"editor-config-{i}",
+                m.source,
+                m.target,
+                readonly=m.readonly,
+            )
+            # Apply exclusions by overmounting with writable tmpfs (same pattern
+            # as user mounts). This lets the editor write to plugin/cache subdirs
+            # within a read-only config mount.
+            for excluded in m.exclude:
+                exc_path = f"{m.target.rstrip('/')}/{excluded}"
+                runtime.exec(
+                    name,
+                    [
+                        "bash",
+                        "-c",
+                        f"mkdir -p {shlex.quote(exc_path)}"
+                        f" && mount -t tmpfs tmpfs {shlex.quote(exc_path)}"
+                        f" && chown user:user {shlex.quote(exc_path)}",
+                    ],
+                )
 
     # Add user-specified mounts (from --mount flags and [[mounts]] config)
     if user_mounts:
@@ -1502,6 +1540,8 @@ def _open_remote(
     git_email="",
     command=None,
     claude_config=True,
+    new_branch=None,
+    base_ref=None,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -1515,6 +1555,8 @@ def _open_remote(
             git_name=git_name,
             git_email=git_email,
             claude_config=claude_config,
+            new_branch=new_branch,
+            base_ref=base_ref,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -1758,6 +1800,8 @@ def open_cmd(
                 err=True,
             )
             sys.exit(1)
+        if base_ref and not new_branch:
+            click.echo("Warning: --base has no effect without -b/--new-branch", err=True)
         _open_remote(
             remote_host,
             target,
@@ -1770,6 +1814,8 @@ def open_cmd(
             git_email=git_email,
             command=command_args,
             claude_config=claude_config,
+            new_branch=new_branch,
+            base_ref=base_ref,
         )
         return
 
@@ -1789,6 +1835,12 @@ def open_cmd(
         # Offer to symlink ~/.bubble/claude-projects/ to ~/.claude/projects/
         if not machine_readable:
             maybe_symlink_claude_projects()
+
+    # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
+    ec_mounts = editor_config_mounts(editor)
+    if ec_mounts:
+        user_targets = {Path(m.target) for m in mount_specs}
+        ec_mounts = [m for m in ec_mounts if not _mount_overlaps(Path(m.target), user_targets)]
 
     # Local flow
     runtime = get_runtime(config)
@@ -1902,6 +1954,7 @@ def open_cmd(
             network=network,
             user_mounts=mount_specs,
             claude_mounts=cc_mounts,
+            editor_mounts=ec_mounts,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
 
@@ -3328,7 +3381,7 @@ def cloud_provision(server_type, location, list_types):
     Use --list to see all available server types with current pricing.
     """
     if list_types:
-        from .cloud import list_server_types
+        from .cloud_types import list_server_types
 
         config = load_config()
         list_server_types(config, location=location)

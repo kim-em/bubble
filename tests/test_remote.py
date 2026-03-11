@@ -1,10 +1,11 @@
 """Tests for remote SSH host support."""
 
 import tarfile
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from bubble.remote import RemoteHost, _create_bundle, _find_package_dirs
+from bubble.remote import RemoteHost, _create_bundle, _find_package_dirs, remote_open
 
 
 class TestRemoteHostParse:
@@ -187,6 +188,65 @@ class TestFindPackageDirs:
         dirs = _find_package_dirs()
         assert "tomli_w" in dirs
         assert dirs["tomli_w"].is_dir()
+
+
+class TestRemoteOpenFlagForwarding:
+    """Test that CLI flags are forwarded to the remote bubble open command."""
+
+    def _run_remote_open(self, **kwargs):
+        """Helper: call remote_open with mocks, return the command string."""
+        host = RemoteHost(hostname="test.example.com", user="root")
+        defaults = {"host": host, "target": "owner/repo"}
+        defaults.update(kwargs)
+        host = defaults.pop("host")
+        target = defaults.pop("target")
+
+        with (
+            patch("bubble.remote.ensure_remote_bubble"),
+            patch("bubble.remote._find_remote_python", return_value="python3"),
+            patch("subprocess.Popen") as mock_popen,
+        ):
+            proc = MagicMock()
+            proc.stdout.__iter__ = MagicMock(
+                return_value=iter(['{"name": "test", "status": "ok"}\n'])
+            )
+            proc.stderr = MagicMock()
+            proc.stderr.read = MagicMock(return_value="")
+            proc.wait = MagicMock(return_value=0)
+            proc.returncode = 0
+            mock_popen.return_value = proc
+
+            try:
+                remote_open(host, target, **defaults)
+            except Exception:
+                pass
+
+            call_args = mock_popen.call_args
+            cmd = call_args[0][0] if call_args[0] else call_args[1].get("args", [])
+            return " ".join(cmd) if isinstance(cmd, list) else cmd
+
+    def test_new_branch_forwarded(self):
+        cmd_str = self._run_remote_open(new_branch="my-feature")
+        assert "-b" in cmd_str
+        assert "my-feature" in cmd_str
+
+    def test_base_ref_forwarded(self):
+        cmd_str = self._run_remote_open(new_branch="feat", base_ref="develop")
+        assert "-b" in cmd_str
+        assert "feat" in cmd_str
+        assert "--base" in cmd_str
+        assert "develop" in cmd_str
+
+    def test_no_branch_flags_by_default(self):
+        cmd_str = self._run_remote_open()
+        assert " -b " not in cmd_str
+        assert "--base" not in cmd_str
+
+    def test_base_ref_alone_forwarded(self):
+        """--base without -b is still forwarded to the remote command."""
+        cmd_str = self._run_remote_open(base_ref="main")
+        assert "--base" in cmd_str
+        assert "main" in cmd_str
 
 
 class TestCreateBundle:

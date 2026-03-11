@@ -36,7 +36,7 @@ def _make_hook_repo(tmp_path, work_name, files):
         env={**GIT_ENV, "HOME": str(tmp_path)},
     )
     subprocess.run(
-        [GIT, "-C", str(work), "push", "origin", "master"],
+        [GIT, "-C", str(work), "push", "origin", "HEAD"],
         capture_output=True,
         check=True,
     )
@@ -78,7 +78,7 @@ def _make_lean_bare_repo(tmp_path, repo_name, work_name, toolchain="leanprover/l
         env={**GIT_ENV, "HOME": str(tmp_path)},
     )
     subprocess.run(
-        [GIT, "-C", str(work), "push", "origin", "master"],
+        [GIT, "-C", str(work), "push", "origin", "HEAD"],
         capture_output=True,
         check=True,
     )
