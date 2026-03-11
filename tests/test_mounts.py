@@ -52,44 +52,54 @@ class TestMountSpecFromConfig:
     """Test parsing [[mounts]] config entries."""
 
     def test_basic(self):
-        m = MountSpec.from_config({
-            "source": "~/.config/git",
-            "target": "/home/user/.config/git",
-            "mode": "ro",
-        })
+        m = MountSpec.from_config(
+            {
+                "source": "~/.config/git",
+                "target": "/home/user/.config/git",
+                "mode": "ro",
+            }
+        )
         assert "~" not in m.source
         assert m.target == "/home/user/.config/git"
         assert m.readonly is True
 
     def test_readwrite(self):
-        m = MountSpec.from_config({
-            "source": "/data",
-            "target": "/mnt/data",
-            "mode": "rw",
-        })
+        m = MountSpec.from_config(
+            {
+                "source": "/data",
+                "target": "/mnt/data",
+                "mode": "rw",
+            }
+        )
         assert m.readonly is False
 
     def test_default_mode_readonly(self):
-        m = MountSpec.from_config({
-            "source": "/data",
-            "target": "/mnt/data",
-        })
+        m = MountSpec.from_config(
+            {
+                "source": "/data",
+                "target": "/mnt/data",
+            }
+        )
         assert m.readonly is True
 
     def test_exclude_list(self):
-        m = MountSpec.from_config({
-            "source": "/data",
-            "target": "/mnt/data",
-            "exclude": [".cache", "tmp"],
-        })
+        m = MountSpec.from_config(
+            {
+                "source": "/data",
+                "target": "/mnt/data",
+                "exclude": [".cache", "tmp"],
+            }
+        )
         assert m.exclude == [".cache", "tmp"]
 
     def test_exclude_string_converted_to_list(self):
-        m = MountSpec.from_config({
-            "source": "/data",
-            "target": "/mnt/data",
-            "exclude": ".cache",
-        })
+        m = MountSpec.from_config(
+            {
+                "source": "/data",
+                "target": "/mnt/data",
+                "exclude": ".cache",
+            }
+        )
         assert m.exclude == [".cache"]
 
     def test_missing_source_raises(self):
@@ -102,35 +112,43 @@ class TestMountSpecFromConfig:
 
     def test_invalid_mode_raises(self):
         with pytest.raises(ValueError, match="mode"):
-            MountSpec.from_config({
-                "source": "/data",
-                "target": "/mnt/data",
-                "mode": "wx",
-            })
+            MountSpec.from_config(
+                {
+                    "source": "/data",
+                    "target": "/mnt/data",
+                    "mode": "wx",
+                }
+            )
 
     def test_exclude_absolute_path_raises(self):
         with pytest.raises(ValueError, match="relative"):
-            MountSpec.from_config({
-                "source": "/data",
-                "target": "/mnt/data",
-                "exclude": ["/etc"],
-            })
+            MountSpec.from_config(
+                {
+                    "source": "/data",
+                    "target": "/mnt/data",
+                    "exclude": ["/etc"],
+                }
+            )
 
     def test_exclude_parent_traversal_raises(self):
         with pytest.raises(ValueError, match="\\.\\."):
-            MountSpec.from_config({
-                "source": "/data",
-                "target": "/mnt/data",
-                "exclude": ["../etc"],
-            })
+            MountSpec.from_config(
+                {
+                    "source": "/data",
+                    "target": "/mnt/data",
+                    "exclude": ["../etc"],
+                }
+            )
 
     def test_exclude_empty_raises(self):
         with pytest.raises(ValueError, match="Empty"):
-            MountSpec.from_config({
-                "source": "/data",
-                "target": "/mnt/data",
-                "exclude": [""],
-            })
+            MountSpec.from_config(
+                {
+                    "source": "/data",
+                    "target": "/mnt/data",
+                    "exclude": [""],
+                }
+            )
 
 
 class TestParseMounts:
@@ -167,18 +185,24 @@ class TestParseMounts:
         assert result[1].source == "/cli-src"
 
     def test_multiple_cli(self):
-        result = parse_mounts({}, cli_mounts=(
-            "/a:/x:ro",
-            "/b:/y:rw",
-        ))
+        result = parse_mounts(
+            {},
+            cli_mounts=(
+                "/a:/x:ro",
+                "/b:/y:rw",
+            ),
+        )
         assert len(result) == 2
 
     def test_duplicate_target_raises(self):
         with pytest.raises(ValueError, match="Duplicate mount target"):
-            parse_mounts({}, cli_mounts=(
-                "/a:/mnt/data:ro",
-                "/b:/mnt/data:rw",
-            ))
+            parse_mounts(
+                {},
+                cli_mounts=(
+                    "/a:/mnt/data:ro",
+                    "/b:/mnt/data:rw",
+                ),
+            )
 
     def test_duplicate_target_config_and_cli_raises(self):
         config = {
@@ -211,8 +235,12 @@ class TestMountProvisioning:
         ]
 
         _provision_container(
-            mock_runtime, "test-container", "base",
-            ref_path, "repo.git", {},
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
             user_mounts=mounts,
         )
 
@@ -224,8 +252,22 @@ class TestMountProvisioning:
         # Check user mount calls
         user_disk_calls = [c for c in disk_calls if "user-mount" in c[2]]
         assert len(user_disk_calls) == 2
-        assert user_disk_calls[0] == ("add_disk", "test-container", "user-mount-0", str(src1), "/mnt/src1", True)
-        assert user_disk_calls[1] == ("add_disk", "test-container", "user-mount-1", str(src2), "/mnt/src2", False)
+        assert user_disk_calls[0] == (
+            "add_disk",
+            "test-container",
+            "user-mount-0",
+            str(src1),
+            "/mnt/src1",
+            True,
+        )
+        assert user_disk_calls[1] == (
+            "add_disk",
+            "test-container",
+            "user-mount-1",
+            str(src2),
+            "/mnt/src2",
+            False,
+        )
 
     def test_rw_mount_does_not_mutate_host_permissions(self, mock_runtime, tmp_path):
         """Verify rw mounts do NOT chmod the host source directory."""
@@ -241,8 +283,12 @@ class TestMountProvisioning:
         ]
 
         _provision_container(
-            mock_runtime, "test-container", "base",
-            ref_path, "repo.git", {},
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
             user_mounts=mounts,
         )
 
@@ -260,14 +306,20 @@ class TestMountProvisioning:
 
         mounts = [
             MountSpec(
-                source=str(src), target="/mnt/data", readonly=True,
+                source=str(src),
+                target="/mnt/data",
+                readonly=True,
                 exclude=[".cache", "tmp"],
             ),
         ]
 
         _provision_container(
-            mock_runtime, "test-container", "base",
-            ref_path, "repo.git", {},
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
             user_mounts=mounts,
         )
 
@@ -289,8 +341,12 @@ class TestMountProvisioning:
         ref_path.mkdir()
 
         _provision_container(
-            mock_runtime, "test-container", "base",
-            ref_path, "repo.git", {},
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
             user_mounts=[],
         )
 

@@ -126,9 +126,7 @@ class MountSpec:
             mode = parts.pop()
         elif len(parts) >= 3 and not parts[-1].startswith("/"):
             # Third field present but not a valid mode — reject it
-            raise ValueError(
-                f"Invalid mount mode {parts[-1]!r} in {spec!r}: expected 'ro' or 'rw'"
-            )
+            raise ValueError(f"Invalid mount mode {parts[-1]!r} in {spec!r}: expected 'ro' or 'rw'")
         # Rejoin remaining parts — source:target with possible extra colons
         if len(parts) < 2:
             raise ValueError(
@@ -138,11 +136,9 @@ class MountSpec:
         raw = ":".join(parts)
         idx = raw.find(":/")
         if idx == -1:
-            raise ValueError(
-                f"Invalid mount spec {spec!r}: container path must be absolute"
-            )
+            raise ValueError(f"Invalid mount spec {spec!r}: container path must be absolute")
         source = raw[:idx]
-        target = raw[idx + 1:]
+        target = raw[idx + 1 :]
         source = str(Path(source).expanduser())
         return cls(source=source, target=target, readonly=(mode == "ro"))
 
