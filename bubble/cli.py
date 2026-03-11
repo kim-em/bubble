@@ -210,13 +210,13 @@ def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -
     """Resolve a Claude prompt on the local machine for remote bubbles.
 
     Checks BUBBLE_CLAUDE_PROMPT env var first, then auto-generates for issue
-    targets using the local gh CLI (which may not exist on remote hosts).
+    and PR targets using the local gh CLI (which may not exist on remote hosts).
     """
     prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
     if prompt:
         return prompt
 
-    # Try to parse the target to detect issue targets
+    # Try to parse the target to detect issue/PR targets
     try:
         from .repo_registry import RepoRegistry
         from .target import parse_target
@@ -228,6 +228,12 @@ def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -
             branch = new_branch or f"issue-{t.ref}"
             click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
             prompt = generate_issue_prompt(t.owner, t.repo, t.ref, branch) or ""
+        elif t.kind == "pr":
+            from .claude import generate_pr_prompt
+
+            branch = new_branch or f"pr-{t.ref}"
+            click.echo(f"Fetching PR #{t.ref} for Claude prompt...")
+            prompt = generate_pr_prompt(t.owner, t.repo, t.ref, branch) or ""
     except Exception:
         pass
 

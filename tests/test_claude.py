@@ -368,6 +368,20 @@ class TestResolveClaudePromptLocally:
             assert "issue #42" in result
             assert "issue-42" in result
 
+    def test_pr_target_generates_prompt(self):
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bubble.claude.subprocess.run") as mock_run,
+        ):
+            pr_result = MagicMock()
+            pr_result.returncode = 0
+            pr_result.stdout = "Add feature\nPR body"
+            mock_run.return_value = pr_result
+
+            result = _resolve_claude_prompt_locally("https://github.com/owner/repo/pull/99")
+            assert "#99" in result
+            assert "pr-99" in result
+
     def test_non_issue_target_returns_empty(self):
         with patch.dict("os.environ", {}, clear=True):
             result = _resolve_claude_prompt_locally("owner/repo")
