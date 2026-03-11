@@ -169,6 +169,107 @@ def test_load_raw_config_legacy_no_claude(tmp_data_dir):
     assert merged["claude"]["credentials"] is False
 
 
+def test_default_config_has_codex_credentials_false(tmp_data_dir):
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["codex"]["credentials"] is False
+
+
+def test_codex_credentials_roundtrip(tmp_data_dir):
+    from bubble.config import load_config, save_config
+
+    config = load_config()
+    config["codex"]["credentials"] = True
+    save_config(config)
+
+    reloaded = load_config()
+    assert reloaded["codex"]["credentials"] is True
+
+
+def test_codex_credentials_on_cli(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["codex", "credentials", "on"])
+    assert result.exit_code == 0
+    assert "enabled" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["codex"]["credentials"] is True
+
+
+def test_codex_credentials_off_cli(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    # First enable
+    runner.invoke(main, ["codex", "credentials", "on"])
+    # Then disable
+    result = runner.invoke(main, ["codex", "credentials", "off"])
+    assert result.exit_code == 0
+    assert "disabled" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["codex"]["credentials"] is False
+
+
+def test_codex_credentials_show_current(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["codex", "credentials"])
+    assert result.exit_code == 0
+    assert "off" in result.output
+
+
+def test_codex_status_cli(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["codex", "status"])
+    assert result.exit_code == 0
+    assert "credentials: off" in result.output
+
+    # Enable and check again
+    runner.invoke(main, ["codex", "credentials", "on"])
+    result = runner.invoke(main, ["codex", "status"])
+    assert result.exit_code == 0
+    assert "credentials: on" in result.output
+
+
+def test_load_raw_config_legacy_no_codex(tmp_data_dir):
+    """Legacy config file without [codex] section should show no explicit setting."""
+    import tomli_w
+
+    import bubble.config as config
+
+    legacy = {
+        "editor": "vscode",
+        "runtime": {"backend": "incus"},
+    }
+    with open(config.CONFIG_FILE, "wb") as f:
+        tomli_w.dump(legacy, f)
+
+    raw = load_raw_config()
+    assert "codex" not in raw
+    # But merged config should still have defaults
+    merged = config.load_config()
+    assert merged["codex"]["credentials"] is False
+
+
 def test_deep_merge_does_not_mutate_default(tmp_data_dir):
     """Verify _deep_merge doesn't mutate DEFAULT_CONFIG nested dicts."""
     from bubble.config import DEFAULT_CONFIG

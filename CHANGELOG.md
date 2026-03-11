@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.5 — 2026-03-12
+- Forward Codex/OpenAI credentials into containers (#96)
+  - `--codex-credentials` / `--no-codex-credentials` flag on `bubble open`
+  - `[codex] credentials` config option (`bubble codex credentials on/off`)
+  - Mounts `~/.codex/auth.json` (credentials, opt-in) and `~/.codex/config.toml` (config) read-only
+  - `security.codex_credentials` setting for security posture control
+  - Same symlink-escape safety validation as Claude credential mounts
+- Fix security lockoff bypass: `security.{claude,codex}_credentials=off` now overrides config
+
 ## 0.6.4 — 2026-03-12
 - Make GitHub auth proxy on-by-default via `security.github_auth` setting (#89)
   - New `github_auth` security setting (auto defaults to on) controls repo-scoped auth proxy

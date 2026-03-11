@@ -66,6 +66,12 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         warning="credentials give containers access to Claude API auth",
         category="Authentication",
     ),
+    "codex_credentials": SecuritySettingDef(
+        description="Mount ~/.codex credentials into containers",
+        auto_default="off",
+        warning="credentials give containers access to OpenAI/Codex API auth",
+        category="Authentication",
+    ),
     "github_auth": SecuritySettingDef(
         description="Repo-scoped GitHub auth via host proxy",
         auto_default="on",

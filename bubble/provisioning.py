@@ -41,6 +41,7 @@ def provision_container(
     network=False,
     user_mounts=None,
     claude_mounts=None,
+    codex_mounts=None,
     editor_mounts=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
@@ -145,6 +146,21 @@ def provision_container(
                 "claude-projects",
                 str(projects_dir),
                 "/home/user/.claude/projects",
+            )
+
+    # Mount Codex config (read-only individual files from ~/.codex)
+    if codex_mounts:
+        runtime.exec(
+            name,
+            ["bash", "-c", "mkdir -p /home/user/.codex && chown user:user /home/user/.codex"],
+        )
+        for i, m in enumerate(codex_mounts):
+            runtime.add_disk(
+                name,
+                f"codex-config-{i}",
+                m.source,
+                m.target,
+                readonly=m.readonly,
             )
 
     # Mount editor config directories (read-only config, read-write data/state)
