@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.17 — 2026-03-12
+- Fix Claude integration for remote/cloud bubbles (#24):
+  - Issue prompts are now auto-generated locally and forwarded to remote hosts
+  - `BUBBLE_CLAUDE_PROMPT` env var now works with `--ssh` and `--cloud`
+  - Claude task injection runs on the remote container host as expected
+
 ## 0.5.16 — 2026-03-12
 - Fix `_purge_derived_images()` to recursively walk the full dependency tree (#69)
   - Previously only purged direct children (e.g. `lean`, `base-vscode`) when `base` was rebuilt

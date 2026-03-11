@@ -4,6 +4,7 @@ import subprocess
 from unittest.mock import MagicMock, patch
 
 from bubble.claude import CLAUDE_TASK_COMMAND, generate_issue_prompt, inject_claude_task
+from bubble.cli import _resolve_claude_prompt_locally
 
 
 class TestGenerateIssuePrompt:
@@ -136,3 +137,39 @@ class TestInjectClaudeTask:
         assert "hasCompletedOnboarding" in script
         assert "numStartups" in script
         assert "isinstance" in script  # defensive coercion
+
+
+class TestResolveClaudePromptLocally:
+    def test_env_var_takes_priority(self):
+        with patch.dict("os.environ", {"BUBBLE_CLAUDE_PROMPT": "env prompt"}):
+            result = _resolve_claude_prompt_locally("owner/repo/issues/1")
+            assert result == "env prompt"
+
+    def test_issue_target_generates_prompt(self):
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bubble.claude.subprocess.run") as mock_run,
+        ):
+            issue_result = MagicMock()
+            issue_result.returncode = 0
+            issue_result.stdout = "Fix bug\nDescription"
+            comments_result = MagicMock()
+            comments_result.returncode = 0
+            comments_result.stdout = ""
+            mock_run.side_effect = [issue_result, comments_result]
+
+            result = _resolve_claude_prompt_locally(
+                "https://github.com/owner/repo/issues/42"
+            )
+            assert "issue #42" in result
+            assert "issue-42" in result
+
+    def test_non_issue_target_returns_empty(self):
+        with patch.dict("os.environ", {}, clear=True):
+            result = _resolve_claude_prompt_locally("owner/repo")
+            assert result == ""
+
+    def test_parse_failure_returns_empty(self):
+        with patch.dict("os.environ", {}, clear=True):
+            result = _resolve_claude_prompt_locally("")
+            assert result == ""

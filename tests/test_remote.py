@@ -248,6 +248,16 @@ class TestRemoteOpenFlagForwarding:
         assert "--base" in cmd_str
         assert "main" in cmd_str
 
+    def test_claude_prompt_forwarded(self):
+        """Claude prompt is forwarded via --claude-prompt flag."""
+        cmd_str = self._run_remote_open(claude_prompt="Fix the bug")
+        assert "--claude-prompt" in cmd_str
+        assert "Fix the bug" in cmd_str
+
+    def test_no_claude_prompt_by_default(self):
+        cmd_str = self._run_remote_open()
+        assert "--claude-prompt" not in cmd_str
+
 
 class TestCreateBundle:
     def test_creates_tarball(self):

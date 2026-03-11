@@ -206,6 +206,34 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
     return ref_path, mount_name
 
 
+def _resolve_claude_prompt_locally(target: str) -> str:
+    """Resolve a Claude prompt on the local machine for remote bubbles.
+
+    Checks BUBBLE_CLAUDE_PROMPT env var first, then auto-generates for issue
+    targets using the local gh CLI (which may not exist on remote hosts).
+    """
+    prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
+    if prompt:
+        return prompt
+
+    # Try to parse the target to detect issue targets
+    try:
+        from .repo_registry import RepoRegistry
+        from .target import parse_target
+
+        t = parse_target(target, RepoRegistry())
+        if t.kind == "issue":
+            from .claude import generate_issue_prompt
+
+            branch = f"issue-{t.ref}"
+            click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
+            prompt = generate_issue_prompt(t.owner, t.repo, t.ref, branch) or ""
+    except Exception:
+        pass
+
+    return prompt
+
+
 def _open_remote(
     remote_host,
     target,
@@ -225,6 +253,9 @@ def _open_remote(
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
 
+    # Resolve Claude prompt locally (gh CLI may not exist on the remote)
+    claude_prompt = _resolve_claude_prompt_locally(target)
+
     try:
         result = remote_open(
             remote_host,
@@ -236,6 +267,7 @@ def _open_remote(
             claude_config=claude_config,
             new_branch=new_branch,
             base_ref=base_ref,
+            claude_prompt=claude_prompt,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -420,6 +452,12 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     default=None,
     help="Inject GitHub auth token into container (default: from config or disabled)",
 )
+@click.option(
+    "--claude-prompt",
+    default=None,
+    hidden=True,
+    help="Claude prompt to inject (used internally by remote open).",
+)
 def open_cmd(
     target,
     editor_choice,
@@ -445,6 +483,7 @@ def open_cmd(
     claude_config,
     claude_credentials,
     gh_token,
+    claude_prompt,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
@@ -748,8 +787,10 @@ def open_cmd(
         )
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 
-        # Resolve Claude prompt: env var > auto-generate for issues
-        claude_prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
+        # Resolve Claude prompt: CLI arg > env var > auto-generate for issues
+        # The CLI arg is set by _open_remote() which generates the prompt locally.
+        if not claude_prompt:
+            claude_prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
         if not claude_prompt and t.kind == "issue" and not machine_readable:
             from .claude import generate_issue_prompt
 
