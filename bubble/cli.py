@@ -1501,6 +1501,8 @@ def _open_remote(
     git_email="",
     command=None,
     claude_config=True,
+    new_branch=None,
+    base_ref=None,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -1514,6 +1516,8 @@ def _open_remote(
             git_name=git_name,
             git_email=git_email,
             claude_config=claude_config,
+            new_branch=new_branch,
+            base_ref=base_ref,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -1769,6 +1773,8 @@ def open_cmd(
             git_email=git_email,
             command=command_args,
             claude_config=claude_config,
+            new_branch=new_branch,
+            base_ref=base_ref,
         )
         return
 
