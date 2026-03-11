@@ -121,13 +121,9 @@ def start_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
                 shutil.rmtree(lima_dir)
             result = _run_colima_start(args)
             if result.returncode != 0:
-                raise subprocess.CalledProcessError(
-                    result.returncode, args, output=result.stdout
-                )
+                raise subprocess.CalledProcessError(result.returncode, args, output=result.stdout)
         else:
-            raise subprocess.CalledProcessError(
-                result.returncode, args, output=result.stdout
-            )
+            raise subprocess.CalledProcessError(result.returncode, args, output=result.stdout)
 
 
 def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
