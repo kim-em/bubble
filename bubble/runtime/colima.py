@@ -7,7 +7,10 @@ def is_colima_running() -> bool:
     try:
         result = subprocess.run(
             ["colima", "status"],
-            capture_output=True, text=True, check=False, stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
         )
         return result.returncode == 0
     except FileNotFoundError:
@@ -19,7 +22,10 @@ def _colima_supports_vm_type() -> bool:
     try:
         result = subprocess.run(
             ["colima", "start", "--help"],
-            capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         return "--vm-type" in result.stdout
     except (FileNotFoundError, subprocess.TimeoutExpired):

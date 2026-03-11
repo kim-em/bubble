@@ -174,8 +174,7 @@ def _ensure_ssh_key() -> tuple[str, str]:
         pub.unlink(missing_ok=True)
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["ssh-keygen", "-t", "ed25519", "-f", str(priv),
-             "-N", "", "-C", "bubble-cloud"],
+            ["ssh-keygen", "-t", "ed25519", "-f", str(priv), "-N", "", "-C", "bubble-cloud"],
             check=True,
             capture_output=True,
         )
@@ -188,15 +187,22 @@ def _ssh_cmd_base() -> list[str]:
     """Base SSH command with bubble cloud key and known_hosts."""
     return [
         "ssh",
-        "-i", str(CLOUD_KEY_FILE),
-        "-o", "IdentitiesOnly=yes",
-        "-o", f"UserKnownHostsFile={CLOUD_KNOWN_HOSTS}",
-        "-o", "StrictHostKeyChecking=accept-new",
+        "-i",
+        str(CLOUD_KEY_FILE),
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        f"UserKnownHostsFile={CLOUD_KNOWN_HOSTS}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
     ]
 
 
 def _ssh_run(
-    host: str, command: str, timeout: int = 30, check: bool = True,
+    host: str,
+    command: str,
+    timeout: int = 30,
+    check: bool = True,
 ) -> subprocess.CompletedProcess:
     """Run a command on the cloud server via SSH."""
     cmd = _ssh_cmd_base() + [f"root@{host}", command]
@@ -461,8 +467,8 @@ def list_server_types(config: dict, location: str | None = None):
             f"{price_str}{note_str}"
         )
 
-    click.echo(f"\nTo provision:  bubble cloud provision --type <name>")
-    click.echo(f"Other locations: --location nbg1|hel1|ash|hil")
+    click.echo("\nTo provision:  bubble cloud provision --type <name>")
+    click.echo("Other locations: --location nbg1|hel1|ash|hil")
 
 
 # ---------------------------------------------------------------------------
@@ -519,16 +525,15 @@ def provision_server(config: dict, server_type: str | None = None, location: str
                     ssh_key = k
                     break
             else:
-                raise click.ClickException(
-                    f"SSH key '{key_name}' exists but not found: {e}"
-                )
+                raise click.ClickException(f"SSH key '{key_name}' exists but not found: {e}")
             # Verify the remote key matches our local key
             remote_pub = ssh_key.data_model.public_key.strip()
             if remote_pub != pub_content:
                 click.echo("  Existing key doesn't match local key, replacing...")
                 client.ssh_keys.delete(ssh_key)
                 ssh_key = client.ssh_keys.create(
-                    name=key_name, public_key=pub_content,
+                    name=key_name,
+                    public_key=pub_content,
                 )
         else:
             raise
@@ -648,10 +653,7 @@ def destroy_server(force: bool = False):
                 client.servers.delete(server)
         except Exception as e:
             click.echo(f"Warning: could not delete server: {e}")
-            click.echo(
-                "State preserved for retry. "
-                "Use 'bubble cloud destroy -f' to force cleanup."
-            )
+            click.echo("State preserved for retry. Use 'bubble cloud destroy -f' to force cleanup.")
             return
 
     # Delete SSH key from Hetzner
@@ -671,7 +673,8 @@ def destroy_server(force: bool = False):
         try:
             subprocess.run(
                 ["ssh-keygen", "-R", ipv4, "-f", str(CLOUD_KNOWN_HOSTS)],
-                capture_output=True, check=False,
+                capture_output=True,
+                check=False,
             )
         except FileNotFoundError:
             pass
@@ -745,7 +748,8 @@ def _update_ip(client, state: dict):
             if old_ip and CLOUD_KNOWN_HOSTS.exists():
                 subprocess.run(
                     ["ssh-keygen", "-R", old_ip, "-f", str(CLOUD_KNOWN_HOSTS)],
-                    capture_output=True, check=False,
+                    capture_output=True,
+                    check=False,
                 )
 
 
@@ -800,8 +804,7 @@ def get_cloud_remote_host(config: dict) -> RemoteHost:
     state = _load_state()
     if not state:
         raise click.ClickException(
-            "No cloud server provisioned.\n"
-            "Set one up with: bubble cloud provision"
+            "No cloud server provisioned.\nSet one up with: bubble cloud provision"
         )
 
     client = _get_client()
@@ -821,8 +824,7 @@ def get_cloud_remote_host(config: dict) -> RemoteHost:
         _wait_for_ssh(state["ipv4"])
     elif status != "running":
         raise click.ClickException(
-            f"Cloud server is in unexpected state: {status}\n"
-            "Check with: bubble cloud status"
+            f"Cloud server is in unexpected state: {status}\nCheck with: bubble cloud status"
         )
     else:
         # Running — refresh IP just in case
@@ -833,10 +835,14 @@ def get_cloud_remote_host(config: dict) -> RemoteHost:
         user="root",
         port=22,
         ssh_options=[
-            "-i", str(CLOUD_KEY_FILE),
-            "-o", "IdentitiesOnly=yes",
-            "-o", f"UserKnownHostsFile={CLOUD_KNOWN_HOSTS}",
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-i",
+            str(CLOUD_KEY_FILE),
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            f"UserKnownHostsFile={CLOUD_KNOWN_HOSTS}",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
         ],
     )
 

@@ -154,7 +154,7 @@ def _parse_check_output(output: str) -> CleanStatus:
             clean = parts[0] == "CLEAN=true"
             reasons_str = "none"
             if len(parts) > 1 and parts[1].startswith("REASONS="):
-                reasons_str = parts[1][len("REASONS="):]
+                reasons_str = parts[1][len("REASONS=") :]
             if reasons_str == "none" or not reasons_str:
                 reasons = []
             else:

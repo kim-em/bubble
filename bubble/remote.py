@@ -66,8 +66,7 @@ class RemoteHost:
             )
         if user and not _SAFE_NAME_RE.match(user):
             raise ValueError(
-                f"Invalid user: {user!r} "
-                f"(must be alphanumeric, dots, hyphens; cannot start with -)"
+                f"Invalid user: {user!r} (must be alphanumeric, dots, hyphens; cannot start with -)"
             )
 
         return cls(hostname=spec, user=user, port=port)
@@ -484,8 +483,7 @@ def remote_open(
 
     if not stdout_lines:
         raise RuntimeError(
-            f"Empty output from remote bubble.\n"
-            f"stderr: {_sanitize_output(stderr_output)}"
+            f"Empty output from remote bubble.\nstderr: {_sanitize_output(stderr_output)}"
         )
     try:
         data = json.loads(stdout_lines[-1])

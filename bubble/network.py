@@ -96,15 +96,21 @@ def _build_allowlist_script(domains: list[str]) -> str:
         if domain.startswith("*."):
             # Wildcard domains: resolve the base domain, warn if it has no A record
             resolve_domain = domain[2:]
-            lines.append(f"IPS=$(getent ahostsv4 {resolve_domain} 2>/dev/null"
-                         " | awk '{print $1}' | sort -u)")
+            lines.append(
+                f"IPS=$(getent ahostsv4 {resolve_domain} 2>/dev/null"
+                " | awk '{print $1}' | sort -u)"
+            )
             lines.append('if [ -z "$IPS" ]; then')
-            lines.append(f'  echo "Warning: wildcard domain {domain} did not resolve.'
-                         f' Use explicit subdomains instead." >&2')
+            lines.append(
+                f'  echo "Warning: wildcard domain {domain} did not resolve.'
+                f' Use explicit subdomains instead." >&2'
+            )
             lines.append("else")
-            lines.append("  for cidr in $(echo \"$IPS\""
-                         " | awk -F. '{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}'"
-                         " | sort -u); do")
+            lines.append(
+                '  for cidr in $(echo "$IPS"'
+                " | awk -F. '{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}'"
+                " | sort -u); do"
+            )
             lines.append("    iptables -A OUTPUT -d $cidr -j ACCEPT")
             lines.append("  done")
             lines.append("fi")

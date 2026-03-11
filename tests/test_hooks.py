@@ -121,12 +121,14 @@ def _make_lean_bare_repo(tmp_path, repo_name, work_name, toolchain="leanprover/l
     subprocess.run(["git", "-C", str(work), "add", "."], capture_output=True, check=True)
     subprocess.run(
         ["git", "-C", str(work), "commit", "-m", "init"],
-        capture_output=True, check=True,
+        capture_output=True,
+        check=True,
         env={**GIT_ENV, "HOME": str(tmp_path)},
     )
     subprocess.run(
         ["git", "-C", str(work), "push", "origin", "master"],
-        capture_output=True, check=True,
+        capture_output=True,
+        check=True,
     )
     return repo
 

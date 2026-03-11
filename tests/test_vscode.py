@@ -133,7 +133,8 @@ class TestOpenVscodeWorkspace:
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
         open_vscode(
-            "test-bubble", "/home/user/lean4",
+            "test-bubble",
+            "/home/user/lean4",
             workspace_file="/home/user/lean4/lean.code-workspace",
         )
         assert len(calls) == 1
@@ -145,13 +146,11 @@ class TestOpenVscodeWorkspace:
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
         open_vscode(
-            "test-bubble", "/home/user/lean4",
+            "test-bubble",
+            "/home/user/lean4",
             workspace_file="/home/user/lean4/lean.code-workspace",
         )
         uri = calls[0][-1]
         assert uri == (
-            "vscode-remote://ssh-remote+bubble-test-bubble"
-            "/home/user/lean4/lean.code-workspace"
+            "vscode-remote://ssh-remote+bubble-test-bubble/home/user/lean4/lean.code-workspace"
         )
-
-

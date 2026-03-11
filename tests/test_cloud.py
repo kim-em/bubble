@@ -7,6 +7,7 @@ import pytest
 
 try:
     import hcloud  # noqa: F401
+
     HAS_HCLOUD = True
 except ImportError:
     HAS_HCLOUD = False
@@ -160,8 +161,10 @@ class TestProvisionValidation:
         from bubble.cloud import provision_server
 
         config = {"cloud": {"server_type": "", "location": "fsn1"}}
-        with patch("bubble.cloud._get_client") as mock_client, \
-             patch("bubble.cloud._ensure_ssh_key", return_value=("/tmp/key", "ssh-ed25519 AAAA")):
+        with (
+            patch("bubble.cloud._get_client") as mock_client,
+            patch("bubble.cloud._ensure_ssh_key", return_value=("/tmp/key", "ssh-ed25519 AAAA")),
+        ):
             client = MagicMock()
             mock_client.return_value = client
             # Make SSH key creation succeed
@@ -170,6 +173,7 @@ class TestProvisionValidation:
             client.ssh_keys.create.return_value = ssh_key
             # Make server creation fail so we don't need full setup
             from hcloud._exceptions import APIException
+
             client.servers.create.side_effect = APIException(
                 code="test", message="test error", details={}
             )

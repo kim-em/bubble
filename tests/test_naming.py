@@ -14,9 +14,16 @@ def test_generate_name_branch():
 
 
 def test_generate_name_main_uses_date(monkeypatch):
-    monkeypatch.setattr("bubble.naming.date", type("D", (), {
-        "today": staticmethod(lambda: date(2026, 3, 14)),
-    })())
+    monkeypatch.setattr(
+        "bubble.naming.date",
+        type(
+            "D",
+            (),
+            {
+                "today": staticmethod(lambda: date(2026, 3, 14)),
+            },
+        )(),
+    )
     assert generate_name("lean4", "main", "") == "lean4-main-20260314"
 
 

@@ -33,7 +33,10 @@ def _get_bridge_cidr() -> str | None:
     try:
         result = subprocess.run(
             ["incus", "network", "get", "incusbr0", "ipv4.address"],
-            capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             cidr = result.stdout.strip()
@@ -70,11 +73,15 @@ def _fix_ipv4_static(runtime: ContainerRuntime, name: str) -> bool:
     static_ip = f"{parts[0]}.200"
 
     try:
-        runtime.exec(name, [
-            "bash", "-c",
-            f"ip addr replace {static_ip}/{prefix} dev eth0 && "
-            f"ip route replace default via {gateway}",
-        ])
+        runtime.exec(
+            name,
+            [
+                "bash",
+                "-c",
+                f"ip addr replace {static_ip}/{prefix} dev eth0 && "
+                f"ip route replace default via {gateway}",
+            ],
+        )
         # Verify connectivity to gateway
         runtime.exec(name, ["ping", "-c1", "-W2", gateway])
         return True
@@ -100,13 +107,17 @@ def _fix_dns_with_proxy(runtime: ContainerRuntime, name: str) -> bool:
         runtime.exec(name, ["systemctl", "stop", "systemd-resolved"])
         runtime.exec(name, ["bash", "-c", "echo nameserver 127.0.0.53 > /etc/resolv.conf"])
         runtime.add_device(
-            name, "dns-proxy", "proxy",
+            name,
+            "dns-proxy",
+            "proxy",
             connect=f"udp:{dns_ip}:53",
             listen="udp:127.0.0.53:53",
             bind="container",
         )
         runtime.add_device(
-            name, "dns-proxy-tcp", "proxy",
+            name,
+            "dns-proxy-tcp",
+            "proxy",
             connect=f"tcp:{dns_ip}:53",
             listen="tcp:127.0.0.53:53",
             bind="container",
@@ -169,9 +180,7 @@ def _wait_for_container(runtime: ContainerRuntime, name: str, timeout: int = 60)
 def get_vscode_commit() -> str | None:
     """Get the VS Code commit hash from `code --version`. Returns None if unavailable."""
     try:
-        result = subprocess.run(
-            ["code", "--version"], capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(["code", "--version"], capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
             lines = result.stdout.strip().splitlines()
             if len(lines) >= 2 and re.fullmatch(r"[0-9a-f]{40}", lines[1]):
