@@ -1,11 +1,8 @@
 """Tests for the pluggable tool installation system."""
 
-from unittest.mock import patch
-
 from click.testing import CliRunner
 
 from bubble.tools import (
-    TOOLS,
     available_tools,
     combined_tool_script,
     resolve_tools,

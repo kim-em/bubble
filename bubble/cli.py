@@ -3483,7 +3483,7 @@ def tools_group():
 @tools_group.command("list")
 def tools_list():
     """List available tools and their current settings."""
-    from .tools import TOOLS, available_tools
+    from .tools import available_tools
 
     config = load_config()
     tools_config = config.get("tools", {})
