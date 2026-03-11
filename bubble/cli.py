@@ -14,9 +14,10 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .clean import CleanStatus, check_clean, format_reasons
+from .clean import CleanStatus, check_clean, check_native_clean, format_reasons
 from .config import (
     DATA_DIR,
+    NATIVE_DIR,
     claude_config_mounts,
     ensure_dirs,
     has_claude_credentials,
@@ -41,7 +42,13 @@ from .repo_registry import RepoRegistry
 from .runtime.base import ContainerRuntime
 from .runtime.incus import IncusRuntime
 from .target import TargetParseError, parse_target
-from .vscode import SSH_CONFIG_FILE, add_ssh_config, open_editor, remove_ssh_config
+from .vscode import (
+    SSH_CONFIG_FILE,
+    add_ssh_config,
+    open_editor,
+    open_editor_native,
+    remove_ssh_config,
+)
 
 
 def _is_command_available(cmd: str) -> bool:
@@ -1461,6 +1468,11 @@ def _open_remote(
     default=None,
     help="Run a command via SSH instead of interactive shell",
 )
+@click.option(
+    "--native",
+    is_flag=True,
+    help="Non-containerized workspace (local clone, no isolation)",
+)
 @click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
 @click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
@@ -1502,6 +1514,7 @@ def open_cmd(
     network,
     custom_name,
     command,
+    native,
     force_path,
     no_clone,
     git_name,
@@ -1552,6 +1565,26 @@ def open_cmd(
         if editor not in ("vscode", "shell"):
             click.echo(f"Warning: unknown editor '{editor}' in config, using vscode.", err=True)
             editor = "vscode"
+
+    # Native mode: skip all container/remote logic
+    if native:
+        incompatible = []
+        if ssh_host:
+            incompatible.append("--ssh")
+        if cloud:
+            incompatible.append("--cloud")
+        if not network:
+            incompatible.append("--no-network")
+        if machine_readable:
+            incompatible.append("--machine-readable")
+        if incompatible:
+            click.echo(
+                f"--native cannot be combined with {', '.join(incompatible)}",
+                err=True,
+            )
+            sys.exit(1)
+        _open_native(target, editor, no_interactive, custom_name, command=command_args)
+        return
 
     # Priority: --local > --ssh > --cloud > [cloud] default > [remote] default_host
     remote_host = None
@@ -1733,6 +1766,273 @@ def open_cmd(
         raise
 
 
+def _find_existing_native(name: str) -> dict | None:
+    """Check if a native workspace already exists in the registry."""
+    info = get_bubble_info(name)
+    if info and info.get("native"):
+        return info
+    return None
+
+
+def _open_native(
+    target,
+    editor,
+    no_interactive,
+    custom_name,
+    command=None,
+):
+    """Open a native (non-containerized) workspace."""
+    registry = RepoRegistry()
+    try:
+        t = parse_target(target, registry)
+    except TargetParseError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    registry.register(t.owner, t.repo)
+
+    name = _generate_bubble_name(t, custom_name)
+
+    # Check for existing native workspace
+    existing = _find_existing_native(name)
+    if existing:
+        native_path = existing.get("native_path", "")
+        if native_path and Path(native_path).exists():
+            click.echo()
+            click.echo(
+                "WARNING: NATIVE MODE -- no containerization!\n"
+                "This workspace runs directly on your machine with full filesystem\n"
+                "and network access. Use bubble without --native for isolation."
+            )
+            click.echo()
+            click.echo(f"Reattaching to native workspace '{name}' at {native_path}")
+            if not no_interactive:
+                open_editor_native(editor, native_path, command=command)
+            return
+
+    ensure_dirs()
+
+    # Deduplicate name against all registered bubbles (native + container)
+    reg = load_registry()
+    existing_names = set(reg.get("bubbles", {}).keys())
+    name = deduplicate_name(name, existing_names)
+
+    workspace_path = NATIVE_DIR / name
+    if workspace_path.exists():
+        click.echo(f"Native workspace directory already exists: {workspace_path}", err=True)
+        sys.exit(1)
+
+    # Print warning
+    click.echo()
+    click.echo(
+        "WARNING: NATIVE MODE -- no containerization!\n"
+        "This workspace runs directly on your machine with full filesystem\n"
+        "and network access. Use bubble without --native for isolation."
+    )
+    click.echo()
+
+    # Resolve reference source and clone
+    url = github_url(t.org_repo)
+    try:
+        if t.local_path:
+            ref_path = t.local_path
+            click.echo("Cloning from local path (using shared objects)...")
+        else:
+            ref_path = str(init_bare_repo(t.org_repo))
+            if t.kind == "pr":
+                click.echo(f"Fetching PR #{t.ref}...")
+                try:
+                    fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
+                except Exception:
+                    pass
+            click.echo(f"Cloning {t.org_repo} (using shared objects)...")
+
+        subprocess.run(
+            ["git", "clone", "--reference", ref_path, url, str(workspace_path)],
+            check=True,
+        )
+
+        # Checkout appropriate ref
+        checkout_branch = ""
+        if t.kind == "pr":
+            click.echo(f"Checking out PR #{t.ref}...")
+            pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
+            pr_checkout_ok = False
+            if pr_meta:
+                head_ref, head_repo, clone_url = pr_meta
+                is_fork = head_repo.lower() != t.org_repo.lower()
+                try:
+                    if is_fork:
+                        fork_owner = head_repo.split("/")[0]
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "remote",
+                                "add",
+                                fork_owner,
+                                clone_url,
+                            ],
+                            capture_output=True,
+                        )
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "fetch",
+                                fork_owner,
+                                f"+refs/heads/{head_ref}:refs/remotes/{fork_owner}/{head_ref}",
+                            ],
+                            check=True,
+                        )
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "checkout",
+                                "-b",
+                                head_ref,
+                                "--track",
+                                f"{fork_owner}/{head_ref}",
+                            ],
+                            check=True,
+                        )
+                    else:
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "fetch",
+                                "origin",
+                                f"+refs/heads/{head_ref}:refs/remotes/origin/{head_ref}",
+                            ],
+                            check=True,
+                        )
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(workspace_path),
+                                "checkout",
+                                "-b",
+                                head_ref,
+                                "--track",
+                                f"origin/{head_ref}",
+                            ],
+                            check=True,
+                        )
+                    checkout_branch = head_ref
+                    pr_checkout_ok = True
+                except subprocess.CalledProcessError:
+                    pass
+
+            if not pr_checkout_ok:
+                checkout_branch = f"pr-{t.ref}"
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(workspace_path),
+                        "fetch",
+                        "origin",
+                        f"pull/{t.ref}/head:{checkout_branch}",
+                    ],
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(workspace_path), "checkout", checkout_branch],
+                    check=True,
+                )
+        elif t.kind == "branch":
+            click.echo(f"Checking out branch '{t.ref}'...")
+            checkout_branch = t.ref
+            if t.local_path:
+                # Always fetch from local repo to pick up potentially unpushed commits.
+                # Use + refspec to force-update if origin already has an older version.
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(workspace_path),
+                        "fetch",
+                        t.local_path,
+                        f"+refs/heads/{t.ref}:refs/heads/{t.ref}",
+                    ],
+                    capture_output=True,
+                )
+            try:
+                subprocess.run(
+                    ["git", "-C", str(workspace_path), "switch", t.ref],
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError:
+                if t.local_path:
+                    # Branch wasn't on origin either; fetch and retry
+                    subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(workspace_path),
+                            "fetch",
+                            t.local_path,
+                            f"{t.ref}:{t.ref}",
+                        ],
+                        check=True,
+                    )
+                    subprocess.run(
+                        ["git", "-C", str(workspace_path), "switch", t.ref],
+                        check=True,
+                    )
+                else:
+                    raise
+        elif t.kind == "commit":
+            click.echo(f"Checking out commit {t.ref[:12]}...")
+            subprocess.run(
+                ["git", "-C", str(workspace_path), "checkout", t.ref],
+                check=True,
+            )
+
+        # Get commit hash
+        commit = ""
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workspace_path), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+            )
+            commit = result.stdout.strip()
+        except Exception:
+            pass
+
+        register_bubble(
+            name,
+            t.org_repo,
+            branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
+            commit=commit,
+            pr=int(t.ref) if t.kind == "pr" else 0,
+            native=True,
+            native_path=str(workspace_path),
+        )
+    except subprocess.CalledProcessError as e:
+        if workspace_path.exists():
+            shutil.rmtree(workspace_path)
+        click.echo(f"Failed to create native workspace: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Native workspace '{name}' created at {workspace_path}")
+
+    if not no_interactive:
+        if editor == "shell":
+            click.echo("Opening shell...")
+        else:
+            click.echo("Opening VSCode...")
+        open_editor_native(editor, str(workspace_path), command=command)
+
+
 def _reattach(
     runtime: ContainerRuntime, name: str, editor: str, no_interactive: bool, command=None
 ):
@@ -1841,6 +2141,29 @@ def _remote_entries_from_registry() -> list[dict]:
                 "remote_host_spec": host_spec,
             }
         )
+    return entries
+
+
+def _native_entries_from_registry(show_clean: bool = False) -> list[dict]:
+    """Build list entries for native workspaces from the registry."""
+    registry = load_registry()
+    entries = []
+    for name, info in registry.get("bubbles", {}).items():
+        if not info.get("native"):
+            continue
+        native_path = info.get("native_path", "")
+        state = "exists" if native_path and Path(native_path).is_dir() else "missing"
+        entry = {
+            "name": name,
+            "state": state,
+            "location": "native",
+            "created_at": _parse_iso(info.get("created_at")),
+            "last_used_at": None,
+            "native_path": native_path,
+        }
+        if show_clean and state == "exists":
+            entry["clean_status"] = check_native_clean(native_path, name)
+        entries.append(entry)
     return entries
 
 
@@ -2001,6 +2324,13 @@ def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only
 
         entries.extend(remote_entries)
 
+    # --- Native workspaces from registry (always local) ---
+    native_entries = _native_entries_from_registry(show_clean=show_clean)
+    native_entries = [e for e in native_entries if e["name"] not in local_names]
+    entries.extend(native_entries)
+    if native_entries:
+        has_remote = True  # Force showing location column
+
     # --- Output ---
     if as_json:
         data = []
@@ -2096,8 +2426,11 @@ def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only
 @click.argument("name")
 def pause(name):
     """Pause (freeze) a bubble."""
-    # Auto-route to remote host if the bubble is registered there
     info = get_bubble_info(name)
+    if info and info.get("native"):
+        click.echo("Native workspaces don't support pause/resume (no container state).", err=True)
+        sys.exit(1)
+    # Auto-route to remote host if the bubble is registered there
     if info and info.get("remote_host"):
         from .remote import RemoteHost, apply_cloud_ssh_options, remote_command
 
@@ -2140,6 +2473,40 @@ def pop(name, force):
         remove_ssh_config(name)
         unregister_bubble(name)
         click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
+        return
+
+    # Handle native workspaces
+    if info and info.get("native"):
+        native_path = info.get("native_path", "")
+        if not force and native_path and Path(native_path).is_dir():
+            cs = check_native_clean(native_path, name)
+            if cs.clean:
+                click.echo(f"Native workspace '{name}' is clean. ", nl=False)
+            elif cs.error:
+                click.confirm(
+                    f"Cannot verify cleanness ({cs.error}). "
+                    f"Permanently pop native workspace '{name}'?",
+                    abort=True,
+                )
+            else:
+                reasons = format_reasons(cs.reasons)
+                click.echo("Warning: workspace has unsaved work:")
+                for r in reasons:
+                    click.echo(f"  - {r}")
+                click.confirm(f"Permanently pop native workspace '{name}'?", abort=True)
+
+        if native_path and Path(native_path).is_dir():
+            resolved = Path(native_path).resolve()
+            native_dir_resolved = NATIVE_DIR.resolve()
+            if not str(resolved).startswith(str(native_dir_resolved) + os.sep):
+                click.echo(
+                    f"Refusing to delete: path '{native_path}' is not under {NATIVE_DIR}",
+                    err=True,
+                )
+                sys.exit(1)
+            shutil.rmtree(resolved)
+        unregister_bubble(name)
+        click.echo(f"Native workspace '{name}' popped.")
         return
 
     config = load_config()

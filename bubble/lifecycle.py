@@ -43,8 +43,10 @@ def register_bubble(
     branch: str = "",
     commit: str = "",
     pr: int = 0,
-    base_image: str = "base",
+    base_image: str = "",
     remote_host: str = "",
+    native: bool = False,
+    native_path: str = "",
 ):
     """Record a bubble's creation in the registry."""
     with _registry_lock():
@@ -54,11 +56,15 @@ def register_bubble(
             "branch": branch,
             "commit": commit,
             "pr": pr,
-            "base_image": base_image,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        if base_image:
+            entry["base_image"] = base_image
         if remote_host:
             entry["remote_host"] = remote_host
+        if native:
+            entry["native"] = True
+            entry["native_path"] = native_path
         registry["bubbles"][name] = entry
         _save_registry(registry)
 
