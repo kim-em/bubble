@@ -1,9 +1,11 @@
 """Container image construction."""
 
+import fcntl
 import hashlib
 import re
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..config import DATA_DIR, load_config
@@ -16,6 +18,28 @@ CUSTOMIZE_SCRIPT = DATA_DIR / "customize.sh"
 CUSTOMIZE_HASH_FILE = DATA_DIR / "customize-hash"
 
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
+
+BUILD_LOCK_DIR = Path("/tmp/bubble-build-locks")
+
+
+@contextmanager
+def _build_lock(image_name: str):
+    """Acquire an exclusive file lock for an image build.
+
+    Prevents concurrent builds of the same image from racing on the
+    shared builder container name. If another build is in progress,
+    this blocks until it completes.
+    """
+    BUILD_LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = BUILD_LOCK_DIR / f"{image_name}.lock"
+    fd = lock_path.open("w")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
+
 
 # Image hierarchy: name -> {"script": "...", "parent": "..."}
 # Parent can be another image name (built recursively) or an Incus remote image.
@@ -370,55 +394,67 @@ def build_image(runtime: ContainerRuntime, image_name: str):
     if parent in IMAGES and not runtime.image_exists(parent):
         build_image(runtime, parent)
 
-    build_name = f"{image_name}-builder"
-    print(f"Building {image_name} image...")
+    # Acquire exclusive lock to prevent concurrent builds of the same image.
+    # After acquiring, re-check whether the image was built by another process.
+    with _build_lock(image_name):
+        if runtime.image_exists(image_name):
+            print(f"{image_name} image already built (by concurrent process).")
+            return
 
-    # Clean up any leftover builder from a previous failed attempt
-    _cleanup_builder(runtime, build_name)
+        build_name = f"{image_name}-builder"
+        print(f"Building {image_name} image...")
 
-    # Launch from parent
-    runtime.launch(build_name, parent)
-    _wait_for_container(runtime, build_name)
+        # Clean up any leftover builder from a previous failed attempt
+        _cleanup_builder(runtime, build_name)
 
-    # Run setup script, injecting VS Code commit hash if available
-    script = (SCRIPTS_DIR / spec["script"]).read_text()
-    vscode_commit = get_vscode_commit()
-    if vscode_commit:
-        script = f"export VSCODE_COMMIT='{vscode_commit}'\n" + script
-    runtime.exec(build_name, ["bash", "-c", script])
+        # Launch from parent
+        runtime.launch(build_name, parent)
+        try:
+            _wait_for_container(runtime, build_name)
 
-    # Install configured tools (only on base image — derived images inherit them)
-    enabled_tools = _install_tools_if_base(runtime, build_name, image_name)
+            # Run setup script, injecting VS Code commit hash if available
+            script = (SCRIPTS_DIR / spec["script"]).read_text()
+            vscode_commit = get_vscode_commit()
+            if vscode_commit:
+                script = f"export VSCODE_COMMIT='{vscode_commit}'\n" + script
+            runtime.exec(build_name, ["bash", "-c", script])
 
-    # Run user customization script as the final build step
-    _run_customize_script(runtime, build_name)
+            # Install configured tools (only on base image — derived images inherit them)
+            enabled_tools = _install_tools_if_base(runtime, build_name, image_name)
 
-    # Publish as image
-    runtime.stop(build_name)
-    runtime.publish(build_name, image_name)
-    runtime.delete(build_name)
+            # Run user customization script as the final build step
+            _run_customize_script(runtime, build_name)
 
-    # Record the VS Code commit hash baked into the image (only for vscode images)
-    if vscode_commit and spec["script"] == "vscode.sh":
-        VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        VSCODE_COMMIT_FILE.write_text(vscode_commit + "\n")
+            # Publish as image
+            runtime.stop(build_name)
+            runtime.publish(build_name, image_name)
+        finally:
+            try:
+                runtime.delete(build_name, force=True)
+            except Exception:
+                pass
 
-    # Record the tools hash baked into the image and purge stale derived images
-    if enabled_tools is not None:
-        TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        TOOLS_HASH_FILE.write_text(tools_hash(enabled_tools) + "\n")
-        _purge_derived_images(runtime, image_name)
+        # Record the VS Code commit hash baked into the image (only for vscode images)
+        if vscode_commit and spec["script"] == "vscode.sh":
+            VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            VSCODE_COMMIT_FILE.write_text(vscode_commit + "\n")
 
-    # Record the customize script hash (only on base — derived images inherit it)
-    if image_name == "base":
-        c_hash = customize_hash()
-        if c_hash:
-            CUSTOMIZE_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-            CUSTOMIZE_HASH_FILE.write_text(c_hash + "\n")
-        else:
-            CUSTOMIZE_HASH_FILE.unlink(missing_ok=True)
+        # Record the tools hash baked into the image and purge stale derived images
+        if enabled_tools is not None:
+            TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+            TOOLS_HASH_FILE.write_text(tools_hash(enabled_tools) + "\n")
+            _purge_derived_images(runtime, image_name)
 
-    print(f"{image_name} image built successfully.")
+        # Record the customize script hash (only on base — derived images inherit it)
+        if image_name == "base":
+            c_hash = customize_hash()
+            if c_hash:
+                CUSTOMIZE_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+                CUSTOMIZE_HASH_FILE.write_text(c_hash + "\n")
+            else:
+                CUSTOMIZE_HASH_FILE.unlink(missing_ok=True)
+
+        print(f"{image_name} image built successfully.")
 
 
 def build_lean_toolchain_image(
@@ -446,33 +482,38 @@ def build_lean_toolchain_image(
     # Incus container names only allow alphanumeric + hyphens
     safe_alias = alias.replace(".", "-")
     build_name = f"{safe_alias}-builder"
-    print(f"Building {alias} image...")
 
-    # Clean up any leftover builder from a previous failed attempt
-    _cleanup_builder(runtime, build_name)
-
-    runtime.launch(build_name, base_lean_image)
-    try:
-        _wait_for_container(runtime, build_name)
-
-        script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
-        script = f"export LEAN_TOOLCHAIN='{version}'\n" + script
-        runtime.exec(build_name, ["bash", "-c", script])
-
-        # Run user customization script as the final build step
-        _run_customize_script(runtime, build_name)
-
-        runtime.stop(build_name)
+    # Acquire exclusive lock to prevent concurrent builds of the same image.
+    # After acquiring, re-check whether the image was built by another process.
+    with _build_lock(safe_alias):
         if runtime.image_exists(alias):
-            runtime.image_delete(alias)
-        runtime.publish(build_name, alias)
-    finally:
+            print(f"{alias} image already built (by concurrent process).")
+            return
+
+        print(f"Building {alias} image...")
+
+        # Clean up any leftover builder from a previous failed attempt
+        _cleanup_builder(runtime, build_name)
+
+        runtime.launch(build_name, base_lean_image)
         try:
-            runtime.delete(build_name, force=True)
-        except Exception:
-            pass
-        # Remove lock file so future builds can proceed
-        lock_path = Path(f"/tmp/bubble-{alias}.lock")
-        lock_path.unlink(missing_ok=True)
+            _wait_for_container(runtime, build_name)
+
+            script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
+            script = f"export LEAN_TOOLCHAIN='{version}'\n" + script
+            runtime.exec(build_name, ["bash", "-c", script])
+
+            # Run user customization script as the final build step
+            _run_customize_script(runtime, build_name)
+
+            runtime.stop(build_name)
+            if runtime.image_exists(alias):
+                runtime.image_delete(alias)
+            runtime.publish(build_name, alias)
+        finally:
+            try:
+                runtime.delete(build_name, force=True)
+            except Exception:
+                pass
 
     print(f"{alias} image built successfully.")

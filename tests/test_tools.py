@@ -339,6 +339,7 @@ def test_build_image_installs_tools(mock_runtime, monkeypatch, tmp_data_dir):
 
     from bubble.images.builder import build_image
 
+    mock_runtime._images.discard("base")
     build_image(mock_runtime, "base")
 
     # Should have exec calls: one for the main script, one for tools
@@ -365,6 +366,7 @@ def test_build_image_no_tools_when_none_enabled(mock_runtime, monkeypatch, tmp_d
 
     from bubble.images.builder import build_image
 
+    mock_runtime._images.discard("base")
     build_image(mock_runtime, "base")
 
     exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
@@ -397,6 +399,7 @@ def test_tools_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
 
     from bubble.images.builder import TOOLS_HASH_FILE, build_image
 
+    mock_runtime._images.discard("base")
     build_image(mock_runtime, "base")
 
     assert TOOLS_HASH_FILE.exists()
@@ -424,7 +427,8 @@ def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_di
 
     from bubble.images.builder import build_image
 
-    # Pre-populate direct and transitive derived images
+    # Pre-populate direct and transitive derived images, remove base so it actually builds
+    mock_runtime._images.discard("base")
     mock_runtime._images.add("lean")
     mock_runtime._images.add("base-vscode")
     mock_runtime._images.add("lean-vscode")
@@ -449,7 +453,8 @@ def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, t
 
     from bubble.images.builder import build_image
 
-    # Pre-populate static + dynamic images
+    # Pre-populate static + dynamic images, remove base so it actually builds
+    mock_runtime._images.discard("base")
     mock_runtime._images.add("lean")
     mock_runtime._images.add("lean-vscode")
     mock_runtime._images.add("lean-v4-16-0")

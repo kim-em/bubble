@@ -3,8 +3,6 @@
 import shutil
 import subprocess
 import sys
-import time
-from pathlib import Path
 
 import click
 
@@ -188,20 +186,6 @@ def detect_and_build_image(runtime, ref_path, t, editor="vscode"):
 def _background_build_lean_toolchain(version: str, editor: str = "vscode"):
     """Fire off a background build of a toolchain-specific Lean image."""
     image_alias = apply_editor_to_image(f"lean-{version}", editor)
-    # Lock file prevents duplicate concurrent builds for the same version
-    lock_path = Path(f"/tmp/bubble-{image_alias}.lock")
-    try:
-        lock_path.touch(exist_ok=False)
-    except FileExistsError:
-        # Stale lock from a killed build? Delete if older than 1 hour.
-        try:
-            age = time.time() - lock_path.stat().st_mtime
-            if age < 3600:
-                return  # Build likely still in progress
-            lock_path.unlink(missing_ok=True)
-            lock_path.touch(exist_ok=False)
-        except (OSError, FileExistsError):
-            return
     click.echo(f"  Building {image_alias} image in background for next time...")
     _spawn_background_bubble(
         ["images", "build", image_alias],
