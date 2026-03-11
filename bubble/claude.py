@@ -163,7 +163,7 @@ def inject_claude_task(runtime: ContainerRuntime, container: str, project_dir: s
         f"p=os.path.expanduser('~/.claude.json'); "
         f"d=json.load(open(p)) if os.path.exists(p) else {{}}; "
         f"d['hasCompletedOnboarding']=True; "
-        f"d['numStartups']=d.get('numStartups',0)+1; "
+        f"n=d.get('numStartups',0); d['numStartups']=(n if isinstance(n,int) else 0)+1; "
         f"d.setdefault('projects',{{}}); "
         f"proj=d['projects'].setdefault({shlex.quote(project_dir)!r},{{}}); "  # noqa: E501
         f"proj['hasTrustDialogAccepted']=True; "
