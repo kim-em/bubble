@@ -1,9 +1,14 @@
 # Changelog
 
 ## 0.5.9 — 2026-03-11
-- Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json, credentials)
+- Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json)
+- Credentials (`.credentials.json`, `.current-account`) opt-in via `--claude-credentials` for security
+- Nag message reminds you about `--claude-credentials` when credentials exist on host
 - Writable per-bubble `projects/` directory (`~/.bubble/claude-projects/<name>/`) for persistent session memory
 - Session history and transient state are excluded by design
+- Symlink validation: rejects mounts that escape `~/.claude` directory
+- Path overlap detection: user mounts take precedence over auto mounts (ancestry-aware)
+- `--no-claude-config` properly forwarded to remote/cloud bubbles
 - Opt out with `--no-claude-config`
 
 ## 0.5.8 — 2026-03-10

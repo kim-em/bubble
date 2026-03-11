@@ -19,6 +19,7 @@ from .config import (
     DATA_DIR,
     claude_config_mounts,
     ensure_dirs,
+    has_claude_credentials,
     load_config,
     parse_mounts,
     repo_short_name,
@@ -892,6 +893,25 @@ def _background_build_lean_toolchain(version: str):
     )
 
 
+def _mount_overlaps(target: Path, user_targets: set[Path]) -> bool:
+    """Check if target overlaps with any user mount (exact match or ancestry)."""
+    for ut in user_targets:
+        # Exact match, or one is an ancestor of the other
+        if target == ut:
+            return True
+        try:
+            target.relative_to(ut)
+            return True  # target is inside a user mount
+        except ValueError:
+            pass
+        try:
+            ut.relative_to(target)
+            return True  # user mount is inside this auto mount
+        except ValueError:
+            pass
+    return False
+
+
 def _provision_container(
     runtime,
     name,
@@ -990,15 +1010,19 @@ def _provision_container(
         # Each bubble gets its own isolated subdir so bubbles can't see each
         # other's sessions, but all accumulate under ~/.bubble/claude-projects/
         # on the host (useful for backing up with a git repo).
-        projects_dir = DATA_DIR / "claude-projects" / name
-        projects_dir.mkdir(parents=True, exist_ok=True)
-        projects_dir.chmod(0o770)
-        runtime.add_disk(
-            name,
-            "claude-projects",
-            str(projects_dir),
-            "/home/user/.claude/projects",
-        )
+        # Skip if a user mount overlaps with this target.
+        projects_target = Path("/home/user/.claude/projects")
+        user_targets = {Path(m.target) for m in (user_mounts or [])}
+        if not _mount_overlaps(projects_target, user_targets):
+            projects_dir = DATA_DIR / "claude-projects" / name
+            projects_dir.mkdir(parents=True, exist_ok=True)
+            projects_dir.chmod(0o770)
+            runtime.add_disk(
+                name,
+                "claude-projects",
+                str(projects_dir),
+                "/home/user/.claude/projects",
+            )
 
     # Add user-specified mounts (from --mount flags and [[mounts]] config)
     if user_mounts:
@@ -1346,6 +1370,7 @@ def _open_remote(
     git_name="",
     git_email="",
     command=None,
+    claude_config=True,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -1358,6 +1383,7 @@ def _open_remote(
             custom_name=custom_name,
             git_name=git_name,
             git_email=git_email,
+            claude_config=claude_config,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -1459,6 +1485,11 @@ def _open_remote(
     default=True,
     help="Mount ~/.claude config read-only into container (default: enabled)",
 )
+@click.option(
+    "--claude-credentials/--no-claude-credentials",
+    default=False,
+    help="Mount ~/.claude credentials into container (default: disabled for security)",
+)
 def open_cmd(
     target,
     editor_choice,
@@ -1477,6 +1508,7 @@ def open_cmd(
     git_email,
     mounts,
     claude_config,
+    claude_credentials,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
@@ -1557,16 +1589,27 @@ def open_cmd(
             git_name=git_name,
             git_email=git_email,
             command=command_args,
+            claude_config=claude_config,
         )
         return
 
-    # Claude Code config mounts (local only, opt-out via --no-claude-config)
+    # Claude Code config mounts (opt-out via --no-claude-config)
     cc_mounts = []
     if claude_config:
-        cc_mounts = claude_config_mounts()
-        # Don't override explicit user mounts to the same target
-        user_targets = {m.target for m in mount_specs}
-        cc_mounts = [m for m in cc_mounts if m.target not in user_targets]
+        cc_mounts = claude_config_mounts(include_credentials=claude_credentials)
+        # Suppress auto mounts that overlap with user mounts (exact or ancestry)
+        user_targets = {Path(m.target) for m in mount_specs}
+        cc_mounts = [
+            m
+            for m in cc_mounts
+            if not _mount_overlaps(Path(m.target), user_targets)
+        ]
+        # Nag about credentials if not enabled
+        if not claude_credentials and has_claude_credentials():
+            click.echo(
+                "Tip: use --claude-credentials to mount Claude auth into this bubble.",
+                err=True,
+            )
 
     # Local flow
     if not machine_readable:

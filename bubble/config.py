@@ -181,26 +181,65 @@ _CLAUDE_CONFIG_ITEMS = [
     "settings.json",
     "skills",
     "keybindings.json",
+]
+
+# Credential files — opt-in only (--claude-credentials).
+_CLAUDE_CREDENTIAL_ITEMS = [
     ".credentials.json",
     ".current-account",
 ]
 
 
-def claude_config_mounts() -> list[MountSpec]:
+def _safe_claude_path(item: str) -> Path | None:
+    """Return resolved path for a claude config item, or None if unsafe.
+
+    Rejects symlinks that escape ~/.claude to prevent exposing arbitrary
+    host files into containers.
+    """
+    source = CLAUDE_CONFIG_DIR / item
+    if not source.exists():
+        return None
+    resolved = source.resolve()
+    claude_resolved = CLAUDE_CONFIG_DIR.resolve()
+    # Ensure the resolved path is inside ~/.claude
+    try:
+        resolved.relative_to(claude_resolved)
+    except ValueError:
+        return None
+    return resolved
+
+
+def claude_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
     """Return read-only mounts for Claude Code config files that exist on the host.
 
     Mounts specific files/directories from ~/.claude into /home/user/.claude/
     inside containers, giving Claude Code sessions access to global config.
+
+    Args:
+        include_credentials: If True, also mount .credentials.json and
+            .current-account. Off by default for security.
     """
     mounts = []
     if not CLAUDE_CONFIG_DIR.is_dir():
         return mounts
-    for item in _CLAUDE_CONFIG_ITEMS:
-        source = CLAUDE_CONFIG_DIR / item
-        if source.exists():
+    items = list(_CLAUDE_CONFIG_ITEMS)
+    if include_credentials:
+        items.extend(_CLAUDE_CREDENTIAL_ITEMS)
+    for item in items:
+        resolved = _safe_claude_path(item)
+        if resolved is not None:
             target = f"/home/user/.claude/{item}"
-            mounts.append(MountSpec(source=str(source), target=target, readonly=True))
+            mounts.append(MountSpec(source=str(resolved), target=target, readonly=True))
     return mounts
+
+
+def has_claude_credentials() -> bool:
+    """Check if the host has Claude credential files."""
+    if not CLAUDE_CONFIG_DIR.is_dir():
+        return False
+    return any(
+        (CLAUDE_CONFIG_DIR / item).exists() for item in _CLAUDE_CREDENTIAL_ITEMS
+    )
 
 
 def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSpec]:
