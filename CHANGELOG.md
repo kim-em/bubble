@@ -1,6 +1,10 @@
 # Changelog
 
 ## 0.5.12 — 2026-03-11
+- Mount editor configs into containers for emacs/neovim (#44): config directories mounted read-only, data/state/cache directories mounted read-write so plugin managers work
+- Emacs: mounts `~/.config/emacs/` (preferred) or `~/.emacs.d/`, plus `~/.local/share/emacs/` and `~/.cache/emacs/` read-write
+- Neovim: mounts `~/.config/nvim/`, plus `~/.local/share/nvim/`, `~/.local/state/nvim/`, and `~/.cache/nvim/` read-write
+- User mounts (`--mount`) take precedence and suppress overlapping editor config mounts
 - Forward `-b`/`--new-branch` and `--base` flags to remote host in `--ssh` and `--cloud` modes (#25)
 
 ## 0.5.11 — 2026-03-11

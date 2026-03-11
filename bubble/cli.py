@@ -19,6 +19,7 @@ from .config import (
     DATA_DIR,
     NATIVE_DIR,
     claude_config_mounts,
+    editor_config_mounts,
     ensure_dirs,
     has_claude_credentials,
     load_config,
@@ -993,6 +994,7 @@ def _provision_container(
     network=False,
     user_mounts=None,
     claude_mounts=None,
+    editor_mounts=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     click.echo("  Launching container...", nl=False)
@@ -1092,6 +1094,42 @@ def _provision_container(
                 str(projects_dir),
                 "/home/user/.claude/projects",
             )
+
+    # Mount editor config directories (read-only config, read-write data/state)
+    if editor_mounts:
+        for i, m in enumerate(editor_mounts):
+            # Ensure parent directories exist in the container
+            parent = str(Path(m.target).parent)
+            runtime.exec(
+                name,
+                [
+                    "bash",
+                    "-c",
+                    f"mkdir -p {shlex.quote(parent)} && chown -R user:user {shlex.quote(parent)}",
+                ],
+            )
+            runtime.add_disk(
+                name,
+                f"editor-config-{i}",
+                m.source,
+                m.target,
+                readonly=m.readonly,
+            )
+            # Apply exclusions by overmounting with writable tmpfs (same pattern
+            # as user mounts). This lets the editor write to plugin/cache subdirs
+            # within a read-only config mount.
+            for excluded in m.exclude:
+                exc_path = f"{m.target.rstrip('/')}/{excluded}"
+                runtime.exec(
+                    name,
+                    [
+                        "bash",
+                        "-c",
+                        f"mkdir -p {shlex.quote(exc_path)}"
+                        f" && mount -t tmpfs tmpfs {shlex.quote(exc_path)}"
+                        f" && chown user:user {shlex.quote(exc_path)}",
+                    ],
+                )
 
     # Add user-specified mounts (from --mount flags and [[mounts]] config)
     if user_mounts:
@@ -1794,6 +1832,12 @@ def open_cmd(
                 err=True,
             )
 
+    # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
+    ec_mounts = editor_config_mounts(editor)
+    if ec_mounts:
+        user_targets = {Path(m.target) for m in mount_specs}
+        ec_mounts = [m for m in ec_mounts if not _mount_overlaps(Path(m.target), user_targets)]
+
     # Local flow
     runtime = get_runtime(config)
 
@@ -1906,6 +1950,7 @@ def open_cmd(
             network=network,
             user_mounts=mount_specs,
             claude_mounts=cc_mounts,
+            editor_mounts=ec_mounts,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
 
