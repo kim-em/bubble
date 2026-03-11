@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.12 — 2026-03-11
+- User-defined image customization script: place `~/.bubble/customize.sh` to run custom setup in all container images (#34)
+- Script runs as root as the final build step (base, lean, lean-toolchain images)
+- Automatic background rebuild when the script is added, changed, or removed (hash-based detection)
+
 ## 0.5.11 — 2026-03-11
 - Tools now declare runtime network domains (e.g. `api.anthropic.com` for Claude Code) that persist in the container firewall, fixing connectivity for tools at runtime (#49)
 

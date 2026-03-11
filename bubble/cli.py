@@ -807,6 +807,43 @@ def _maybe_rebuild_tools(runtime: ContainerRuntime):
     build_image(runtime, "base")
 
 
+def _maybe_rebuild_customize():
+    """If the user customization script has changed, trigger a background rebuild of all images.
+
+    Compares the current hash of ~/.bubble/customize.sh against the stored
+    hash from the last build. If different (or script was added/removed),
+    triggers a background base image rebuild. Derived images are purged
+    during the rebuild so they pick up the changes on next use.
+    """
+    from .images.builder import CUSTOMIZE_HASH_FILE, customize_hash
+
+    current = customize_hash()
+
+    if CUSTOMIZE_HASH_FILE.exists():
+        stored = CUSTOMIZE_HASH_FILE.read_text().strip()
+    else:
+        stored = None
+
+    # No script and no previous hash — nothing to do
+    if current is None and stored is None:
+        return
+    # Hash matches — nothing to do
+    if current == stored:
+        return
+
+    if current is None:
+        click.echo("Customization script removed, rebuilding base image in background...")
+    elif stored is None:
+        click.echo("Customization script detected, rebuilding base image in background...")
+    else:
+        click.echo("Customization script changed, rebuilding base image in background...")
+
+    _spawn_background_bubble(
+        ["images", "build", "base"],
+        "/tmp/bubble-customize-rebuild.log",
+    )
+
+
 def _generate_bubble_name(t, custom_name: str | None) -> str:
     """Generate a container name from a parsed target."""
     if custom_name:
@@ -1792,6 +1829,7 @@ def open_cmd(
     if not machine_readable:
         _maybe_rebuild_base_image()
         _maybe_rebuild_tools(runtime)
+        _maybe_rebuild_customize()
 
     # Check if target matches an existing container
     existing = _find_existing_container(runtime, target)

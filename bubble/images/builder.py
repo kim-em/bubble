@@ -1,5 +1,6 @@
 """Container image construction."""
 
+import hashlib
 import re
 import subprocess
 import time
@@ -11,6 +12,8 @@ from ..tools import combined_tool_script, resolve_tools, tools_hash
 
 VSCODE_COMMIT_FILE = DATA_DIR / "vscode-commit"
 TOOLS_HASH_FILE = DATA_DIR / "tools-hash"
+CUSTOMIZE_SCRIPT = DATA_DIR / "customize.sh"
+CUSTOMIZE_HASH_FILE = DATA_DIR / "customize-hash"
 
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
 
@@ -274,6 +277,26 @@ def _install_tools_if_base(
     return enabled
 
 
+def customize_hash() -> str | None:
+    """Compute a hash of the user customization script, or None if it doesn't exist."""
+    if not CUSTOMIZE_SCRIPT.exists():
+        return None
+    return hashlib.sha256(CUSTOMIZE_SCRIPT.read_bytes()).hexdigest()[:16]
+
+
+def _run_customize_script(runtime: ContainerRuntime, build_name: str):
+    """Run the user customization script (~/.bubble/customize.sh) if it exists.
+
+    The script runs as root inside the builder container as the final
+    build step, so it can apt-get install, copy dotfiles, etc.
+    """
+    if not CUSTOMIZE_SCRIPT.exists():
+        return
+    print("  Running user customization script...")
+    script = CUSTOMIZE_SCRIPT.read_text()
+    runtime.exec(build_name, ["bash", "-c", script])
+
+
 def build_image(runtime: ContainerRuntime, image_name: str):
     """Build any known image by name. Builds parent images recursively if needed."""
     if image_name not in IMAGES:
@@ -307,6 +330,9 @@ def build_image(runtime: ContainerRuntime, image_name: str):
     # Install configured tools (only on base image — derived images inherit them)
     enabled_tools = _install_tools_if_base(runtime, build_name, image_name)
 
+    # Run user customization script as the final build step
+    _run_customize_script(runtime, build_name)
+
     # Publish as image
     runtime.stop(build_name)
     runtime.publish(build_name, image_name)
@@ -322,6 +348,14 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
         TOOLS_HASH_FILE.write_text(tools_hash(enabled_tools) + "\n")
         _purge_derived_images(runtime, image_name)
+
+    # Record the customize script hash (or clear it if script was removed)
+    c_hash = customize_hash()
+    if c_hash:
+        CUSTOMIZE_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CUSTOMIZE_HASH_FILE.write_text(c_hash + "\n")
+    else:
+        CUSTOMIZE_HASH_FILE.unlink(missing_ok=True)
 
     print(f"{image_name} image built successfully.")
 
@@ -363,6 +397,9 @@ def build_lean_toolchain_image(
         script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
         script = f"export LEAN_TOOLCHAIN='{version}'\n" + script
         runtime.exec(build_name, ["bash", "-c", script])
+
+        # Run user customization script as the final build step
+        _run_customize_script(runtime, build_name)
 
         runtime.stop(build_name)
         if runtime.image_exists(alias):

@@ -130,6 +130,14 @@ def tmp_data_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "DATA_DIR", data_dir)
 
+    # Patch builder module constants that capture DATA_DIR at import time
+    import bubble.images.builder as builder
+
+    monkeypatch.setattr(builder, "VSCODE_COMMIT_FILE", data_dir / "vscode-commit")
+    monkeypatch.setattr(builder, "TOOLS_HASH_FILE", data_dir / "tools-hash")
+    monkeypatch.setattr(builder, "CUSTOMIZE_SCRIPT", data_dir / "customize.sh")
+    monkeypatch.setattr(builder, "CUSTOMIZE_HASH_FILE", data_dir / "customize-hash")
+
     # Patch cloud module if imported
     try:
         import bubble.cloud as cloud_mod
