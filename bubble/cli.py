@@ -595,20 +595,15 @@ def _maybe_install_automation():
 
 
 def _maybe_install_skill():
-    """Offer to install the Claude Code skill on first bubble creation."""
+    """Auto-install the Claude Code skill on first bubble creation."""
     from .skill import claude_code_detected, install_skill, is_installed
 
     try:
-        if not sys.stdin.isatty():
-            return
         if not claude_code_detected() or is_installed():
             return
-        click.echo()
-        click.echo("Claude Code detected at ~/.claude/ but the bubble skill isn't installed.")
-        if click.confirm("Install it now?", default=True):
-            msg = install_skill()
-            click.echo(f"  {msg}")
-            click.echo("  To manage later: bubble skill status")
+        msg = install_skill()
+        click.echo(f"  {msg}")
+        click.echo("  To manage later: bubble skill status")
     except Exception:
         pass
 
@@ -2788,10 +2783,8 @@ def skill_install():
     if is_installed():
         d = diff_skill()
         if d:
-            click.echo("Skill update available:")
+            click.echo("Updating bubble skill:")
             click.echo(d)
-            if not click.confirm("Update?"):
-                return
 
     msg = install_skill()
     click.echo(msg)
