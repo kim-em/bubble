@@ -322,8 +322,6 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
         TOOLS_HASH_FILE.write_text(tools_hash(enabled_tools) + "\n")
         _purge_derived_images(runtime, image_name)
-        # Clean up rebuild lock (may have been set by _maybe_rebuild_tools)
-        Path("/tmp/bubble-tools-rebuild.lock").unlink(missing_ok=True)
 
     print(f"{image_name} image built successfully.")
 
