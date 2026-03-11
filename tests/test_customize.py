@@ -42,6 +42,7 @@ def test_build_image_runs_customize_script(mock_runtime, monkeypatch, tmp_data_d
 
     builder.CUSTOMIZE_SCRIPT.write_text("#!/bin/bash\napt-get install -y ripgrep\n")
 
+    mock_runtime._images.discard("base")
     builder.build_image(mock_runtime, "base")
 
     exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
@@ -63,6 +64,7 @@ def test_build_image_skips_customize_when_absent(mock_runtime, monkeypatch, tmp_
     config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
     save_config(config)
 
+    mock_runtime._images.discard("base")
     builder.build_image(mock_runtime, "base")
 
     exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
@@ -84,6 +86,7 @@ def test_customize_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
 
     builder.CUSTOMIZE_SCRIPT.write_text("#!/bin/bash\necho hello\n")
 
+    mock_runtime._images.discard("base")
     builder.build_image(mock_runtime, "base")
 
     assert builder.CUSTOMIZE_HASH_FILE.exists()
@@ -108,6 +111,7 @@ def test_customize_hash_file_removed_when_no_script(mock_runtime, monkeypatch, t
     builder.CUSTOMIZE_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
     builder.CUSTOMIZE_HASH_FILE.write_text("oldhash\n")
 
+    mock_runtime._images.discard("base")
     builder.build_image(mock_runtime, "base")
 
     assert not builder.CUSTOMIZE_HASH_FILE.exists()
