@@ -822,7 +822,34 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
     return ref_path, mount_name
 
 
-def _detect_and_build_image(runtime, ref_path, t):
+def _editor_image_suffix(editor: str) -> str:
+    """Return the image name suffix for a given editor, or empty string for vscode/shell."""
+    if editor in ("emacs", "neovim"):
+        return f"-{editor}"
+    return ""
+
+
+def _apply_editor_to_image(image_name: str, editor: str) -> str:
+    """Transform an image name based on the editor.
+
+    Examples (editor="emacs"):
+      "base"         -> "base-emacs"
+      "lean"         -> "lean-emacs"
+      "lean-v4.27.0" -> "lean-emacs-v4.27.0"
+    """
+    suffix = _editor_image_suffix(editor)
+    if not suffix:
+        return image_name
+
+    # For toolchain-specific images like "lean-v4.27.0", insert editor before version
+    if image_name.startswith("lean-v"):
+        version = image_name[len("lean-"):]
+        return f"lean{suffix}-{version}"
+
+    return f"{image_name}{suffix}"
+
+
+def _detect_and_build_image(runtime, ref_path, t, editor="vscode"):
     """Detect language hook and ensure image exists. Returns (hook, image_name)."""
     if t.kind == "pr":
         hook_ref = f"refs/pull/{t.ref}/head"
@@ -834,44 +861,49 @@ def _detect_and_build_image(runtime, ref_path, t):
     hook = select_hook(ref_path, hook_ref)
     if hook:
         click.echo(f"  Detected: {hook.name()}")
-        image_name = hook.image_name()
+        base_image = hook.image_name()
     else:
-        image_name = "base"
+        base_image = "base"
+
+    image_name = _apply_editor_to_image(base_image, editor)
 
     pending_toolchain_build = None
+    # Check for toolchain-specific images (e.g. "lean-v4.27.0" or "lean-emacs-v4.27.0")
+    is_toolchain_image = base_image.startswith("lean-v")
     if not runtime.image_exists(image_name):
-        if image_name.startswith("lean-v"):
+        if is_toolchain_image:
             # Toolchain-specific image doesn't exist yet — fall back to base lean
             # and build the toolchain image in the background for next time.
-            # Defer the background build until after the lean image is ready,
-            # otherwise the background process races with the main build.
-            version = image_name[len("lean-") :]
+            version = base_image[len("lean-"):]
+            fallback = _apply_editor_to_image("lean", editor)
             click.echo(
-                f"  Toolchain {version} image not cached, using base lean image"
+                f"  Toolchain {version} image not cached, using {fallback} image"
                 f" (building {image_name} in background for next time)"
             )
-            pending_toolchain_build = version
-            image_name = "lean"
+            pending_toolchain_build = (version, editor)
+            image_name = fallback
         if not runtime.image_exists(image_name):
             click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
             from .images.builder import build_image
 
             build_image(runtime, image_name)
             click.echo(f"  {image_name} image ready.")
-    elif image_name.startswith("lean-v"):
-        version = image_name[len("lean-") :]
+    elif is_toolchain_image:
+        version = base_image[len("lean-"):]
         click.echo(f"  Using cached toolchain image ({version})")
 
     if pending_toolchain_build:
-        _background_build_lean_toolchain(pending_toolchain_build)
+        version, ed = pending_toolchain_build
+        _background_build_lean_toolchain(version, editor=ed)
 
     return hook, image_name
 
 
-def _background_build_lean_toolchain(version: str):
+def _background_build_lean_toolchain(version: str, editor: str = "vscode"):
     """Fire off a background build of a toolchain-specific Lean image."""
+    image_alias = _apply_editor_to_image(f"lean-{version}", editor)
     # Lock file prevents duplicate concurrent builds for the same version
-    lock_path = Path(f"/tmp/bubble-lean-{version}.lock")
+    lock_path = Path(f"/tmp/bubble-{image_alias}.lock")
     try:
         lock_path.touch(exist_ok=False)
     except FileExistsError:
@@ -884,10 +916,10 @@ def _background_build_lean_toolchain(version: str):
             lock_path.touch(exist_ok=False)
         except (OSError, FileExistsError):
             return
-    click.echo(f"  Building lean-{version} image in background for next time...")
+    click.echo(f"  Building {image_alias} image in background for next time...")
     _spawn_background_bubble(
-        ["images", "build", f"lean-{version}"],
-        f"/tmp/bubble-lean-{version}-build.log",
+        ["images", "build", image_alias],
+        f"/tmp/bubble-{image_alias}-build.log",
     )
 
 
@@ -1252,11 +1284,19 @@ def _finalize_bubble(
     click.echo(f"  SSH: ssh bubble-{name}")
 
     if not no_interactive:
-        if editor == "shell":
-            click.echo("Connecting via SSH...")
-        else:
-            click.echo("Opening VSCode...")
+        _echo_editor_opening(editor)
         open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
+
+
+def _echo_editor_opening(editor: str):
+    """Print a status message for the editor being opened."""
+    labels = {
+        "vscode": "Opening VSCode...",
+        "emacs": "Opening Emacs...",
+        "neovim": "Opening Neovim...",
+        "shell": "Connecting via SSH...",
+    }
+    click.echo(labels.get(editor, f"Opening {editor}..."))
 
 
 def _machine_readable_output(status: str, name: str, **kwargs):
@@ -1357,10 +1397,7 @@ def _open_remote(
     click.echo(f"  SSH: ssh bubble-{name}")
 
     if not no_interactive:
-        if editor == "shell":
-            click.echo("Connecting via SSH...")
-        else:
-            click.echo("Opening VSCode...")
+        _echo_editor_opening(editor)
         open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
 
 
@@ -1372,11 +1409,13 @@ def _open_remote(
 @click.option(
     "--editor",
     "editor_choice",
-    type=click.Choice(["vscode", "shell"]),
+    type=click.Choice(["vscode", "emacs", "neovim", "shell"]),
     default=None,
     help="Editor to use (default: from config or vscode)",
 )
 @click.option("--shell", is_flag=True, help="Drop into SSH session (shortcut for --editor shell)")
+@click.option("--emacs", is_flag=True, help="Use Emacs (shortcut for --editor emacs)")
+@click.option("--neovim", is_flag=True, help="Use Neovim (shortcut for --editor neovim)")
 @click.option(
     "--ssh",
     "ssh_host",
@@ -1428,6 +1467,8 @@ def open_cmd(
     target,
     editor_choice,
     shell,
+    emacs,
+    neovim,
     ssh_host,
     cloud,
     force_local,
@@ -1473,15 +1514,20 @@ def open_cmd(
     command_args = shlex.split(command) if command else None
 
     # Resolve editor: shortcut flags > --editor > config > vscode
+    valid_editors = ("vscode", "emacs", "neovim", "shell")
     if command_args:
         editor = "shell"
     elif shell:
         editor = "shell"
+    elif emacs:
+        editor = "emacs"
+    elif neovim:
+        editor = "neovim"
     elif editor_choice is not None:
         editor = editor_choice
     else:
         editor = config.get("editor", "vscode")
-        if editor not in ("vscode", "shell"):
+        if editor not in valid_editors:
             click.echo(f"Warning: unknown editor '{editor}' in config, using vscode.", err=True)
             editor = "vscode"
 
@@ -1575,7 +1621,7 @@ def open_cmd(
     # Resolve git source, detect language, and build image
     ensure_dirs()
     ref_path, mount_name = _resolve_ref_source(t, no_clone)
-    hook, image_name = _detect_and_build_image(runtime, ref_path, t)
+    hook, image_name = _detect_and_build_image(runtime, ref_path, t, editor=editor)
 
     # Pre-fetch dependency bare repos for Lake pre-population
     dep_mounts = {}  # repo_name -> host_path
@@ -1661,10 +1707,7 @@ def _reattach(
 
     project_dir = _detect_project_dir(runtime, name)
 
-    if editor == "shell":
-        click.echo(f"Connecting to '{name}' via SSH...")
-    else:
-        click.echo(f"Opening VSCode for '{name}'...")
+    _echo_editor_opening(editor)
     open_editor(editor, name, project_dir, command=command)
 
 
@@ -2244,20 +2287,17 @@ def images_build(image_name):
     config = load_config()
     runtime = get_runtime(config)
 
-    if image_name.startswith("lean-v"):
-        import re
+    # Parse toolchain images: lean-v4.X.Y, lean-emacs-v4.X.Y, lean-neovim-v4.X.Y
+    import re
 
+    tc_match = re.fullmatch(r"(lean(?:-emacs|-neovim)?)-(v\d+\.\d+\.\d+(?:-rc\d+)?)", image_name)
+    if tc_match:
         from .images.builder import build_lean_toolchain_image
 
-        version = image_name[len("lean-") :]
-        if not re.fullmatch(r"v\d+\.\d+\.\d+(-rc\d+)?", version):
-            click.echo(
-                f"Invalid toolchain version: {version}. Expected format: v4.X.Y or v4.X.Y-rcN",
-                err=True,
-            )
-            sys.exit(1)
+        base_lean = tc_match.group(1)
+        version = tc_match.group(2)
         try:
-            build_lean_toolchain_image(runtime, version)
+            build_lean_toolchain_image(runtime, version, base_lean_image=base_lean)
         except Exception as e:
             click.echo(str(e), err=True)
             sys.exit(1)

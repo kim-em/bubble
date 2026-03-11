@@ -118,6 +118,15 @@ def open_editor(
     """
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
+    elif editor in ("emacs", "neovim"):
+        editor_cmd = "emacs" if editor == "emacs" else "nvim"
+        ssh_cmd = [
+            "ssh",
+            f"bubble-{bubble_name}",
+            "-t",
+            f"cd {shlex.quote(remote_path)} && {editor_cmd} .",
+        ]
+        subprocess.run(ssh_cmd)
     elif editor == "shell":
         ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
         if command:

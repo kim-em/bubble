@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.9 — 2026-03-11
+- Emacs and Neovim editor support: `--emacs`, `--neovim` flags or `editor = "emacs"` / `editor = "neovim"` in config
+- Editor-specific container images: `base-emacs`, `base-neovim`, `lean-emacs`, `lean-neovim` with pre-installed editors
+- Lean image split: `lean-core` (elan + leantar) is now a separate base; `lean` adds VS Code extensions on top
+- Emacs/Neovim images don't include VS Code Server or extensions (smaller, faster builds)
+
 ## 0.5.8 — 2026-03-10
 - User-configurable host directory mounts via `--mount` CLI flag and `[[mounts]]` config section
 - Supports read-only (default) and read-write modes
