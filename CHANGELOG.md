@@ -8,6 +8,13 @@
 - `bubble skill install/uninstall/status` commands for managing the Claude Code skill
 - Skill file bundled with the package at `bubble/data/skill.md`
 - Auto-install the skill on first `bubble open` when Claude Code is detected
+- Native mode: `bubble --native <target>` creates non-containerized workspaces
+- Clones into `~/.bubble/native/<name>/` with shared git objects
+- Prints prominent warning about lack of isolation
+- `bubble list` shows native workspaces with location "native"
+- `bubble pop` supports native workspaces with dirty-check confirmation
+- `bubble pause` rejects native workspaces (no container state to freeze)
+- Cleanness checking for native workspaces (dirty worktree, unpushed commits)
 
 ## 0.5.7 — 2026-02-17
 - Remote-aware `bubble list`: shows cloud and SSH-remote bubbles from registry
