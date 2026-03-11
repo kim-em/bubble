@@ -7,6 +7,7 @@ import pytest
 
 from bubble.hooks import discover_hooks, select_hook
 from bubble.hooks.lean import LeanHook, _parse_lean_version
+from bubble.hooks.python import PythonHook
 
 GIT = shutil.which("git")
 if GIT is None:
@@ -222,11 +223,63 @@ class TestLean4Detection:
         assert hook.workspace_file("/home/user/mathlib4") is None
 
 
+@pytest.fixture
+def python_repo(tmp_path):
+    """Create a bare git repo with a pyproject.toml file."""
+    toml = '[project]\nname = "example"\n'
+    return _make_hook_repo(tmp_path, "pyproject", {"pyproject.toml": toml})
+
+
+class TestPythonHook:
+    def test_detect_python_repo(self, python_repo):
+        hook = PythonHook()
+        assert hook.detect(python_repo, "HEAD") is True
+
+    def test_detect_non_python_repo(self, non_lean_repo):
+        hook = PythonHook()
+        assert hook.detect(non_lean_repo, "HEAD") is False
+
+    def test_detect_nonexistent_ref(self, python_repo):
+        hook = PythonHook()
+        assert hook.detect(python_repo, "nonexistent-ref") is False
+
+    def test_name(self):
+        hook = PythonHook()
+        assert hook.name() == "Python"
+
+    def test_image_name(self):
+        hook = PythonHook()
+        assert hook.image_name() == "python"
+
+    def test_network_domains(self):
+        hook = PythonHook()
+        domains = hook.network_domains()
+        assert "pypi.org" in domains
+        assert "files.pythonhosted.org" in domains
+
+    def test_post_clone_writes_uv_sync(self, python_repo, mock_runtime):
+        hook = PythonHook()
+        hook.detect(python_repo, "HEAD")
+        hook.post_clone(mock_runtime, "test-container", "/home/user/project")
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        marker_calls = [c for c in exec_calls if ".bubble-fetch-cache" in " ".join(c[2])]
+        assert len(marker_calls) == 1
+        cmd_str = " ".join(marker_calls[0][2])
+        assert "uv sync" in cmd_str
+        assert "cd" in cmd_str
+        assert "/home/user/project" in cmd_str
+
+
 class TestSelectHook:
     def test_selects_lean_for_lean_repo(self, lean_repo):
         hook = select_hook(lean_repo, "HEAD")
         assert hook is not None
         assert hook.name() == "Lean 4"
+
+    def test_selects_python_for_python_repo(self, python_repo):
+        hook = select_hook(python_repo, "HEAD")
+        assert hook is not None
+        assert hook.name() == "Python"
 
     def test_returns_none_for_non_lean_repo(self, non_lean_repo):
         hook = select_hook(non_lean_repo, "HEAD")
@@ -237,5 +290,6 @@ class TestDiscoverHooks:
     def test_returns_list(self):
         hooks = discover_hooks()
         assert isinstance(hooks, list)
-        assert len(hooks) >= 1
+        assert len(hooks) >= 2
         assert any(h.name() == "Lean 4" for h in hooks)
+        assert any(h.name() == "Python" for h in hooks)

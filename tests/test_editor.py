@@ -74,8 +74,8 @@ class TestEditorToolResolution:
 class TestImageRegistry:
     """Verify the simplified IMAGES registry (no editor variants)."""
 
-    def test_only_base_and_lean(self):
-        assert set(IMAGES.keys()) == {"base", "lean"}
+    def test_only_base_lean_and_python(self):
+        assert set(IMAGES.keys()) == {"base", "lean", "python"}
 
     def test_base_exists(self):
         assert IMAGES["base"]["script"] == "base.sh"
