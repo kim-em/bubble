@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.16 — 2026-03-12
+- Fix `_purge_derived_images()` to recursively walk the full dependency tree (#69)
+  - Previously only purged direct children (e.g. `lean`, `base-vscode`) when `base` was rebuilt
+  - Now also purges second-level descendants (`lean-vscode`, `lean-emacs`, `lean-neovim`)
+  - Also purges dynamic toolchain images (`lean-v4.x.y`, `lean-emacs-v4.x.y`, etc.)
+
 ## 0.5.15 — 2026-03-11
 - Split cli.py (~4200 lines) into focused modules (#45):
   - `setup.py`: dependency installation, runtime setup

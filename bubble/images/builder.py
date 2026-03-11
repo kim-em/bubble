@@ -237,15 +237,63 @@ def _cleanup_builder(runtime: ContainerRuntime, build_name: str):
         )
 
 
+def _collect_derived_images(base_name: str) -> list[str]:
+    """Collect all images in IMAGES that transitively derive from base_name."""
+    result = []
+    direct = [name for name, spec in IMAGES.items() if spec["parent"] == base_name]
+    for name in direct:
+        result.append(name)
+        result.extend(_collect_derived_images(name))
+    return result
+
+
+def _collect_dynamic_toolchain_aliases(
+    runtime: ContainerRuntime, purged_names: set[str]
+) -> list[str]:
+    """Find dynamic toolchain image aliases that derive from purged lean images.
+
+    Dynamic toolchain images (e.g. lean-v4.16.0, lean-emacs-v4.16.0) are not
+    in IMAGES and must be discovered by scanning existing image aliases.
+    """
+    # Only look for toolchain images if a lean-family image is being purged
+    lean_prefixes = []
+    for name in purged_names:
+        if name == "lean":
+            lean_prefixes.append("lean-v")
+        elif name.startswith("lean-"):
+            # e.g. "lean-emacs" -> match "lean-emacs-v"
+            lean_prefixes.append(f"{name}-v")
+    if not lean_prefixes:
+        return []
+
+    aliases = []
+    try:
+        for img in runtime.list_images():
+            for alias_entry in img.get("aliases", []):
+                alias = alias_entry["name"]
+                if any(alias.startswith(p) for p in lean_prefixes):
+                    aliases.append(alias)
+    except Exception:
+        pass
+    return aliases
+
+
 def _purge_derived_images(runtime: ContainerRuntime, base_name: str):
     """Delete images that derive from base_name so they rebuild from the fresh base.
 
     When the base image is rebuilt (e.g. with new tools), derived images like
     lean, base-vscode, lean-vscode etc. are stale snapshots. Deleting them
     forces a rebuild on next use.
+
+    Walks the full dependency tree (not just direct children) and also purges
+    dynamic toolchain images (lean-v4.x.y, lean-emacs-v4.x.y, etc.).
     """
-    derived = [name for name, spec in IMAGES.items() if spec["parent"] == base_name]
-    for name in derived:
+    static_derived = _collect_derived_images(base_name)
+
+    # Also find dynamic toolchain images that derive from purged lean images
+    dynamic_aliases = _collect_dynamic_toolchain_aliases(runtime, set(static_derived))
+
+    for name in static_derived + dynamic_aliases:
         if runtime.image_exists(name):
             try:
                 runtime.image_delete(name)

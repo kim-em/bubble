@@ -78,7 +78,7 @@ class MockRuntime(ContainerRuntime):
 
     def list_images(self) -> list[dict]:
         self.calls.append(("list_images",))
-        return []
+        return [{"aliases": [{"name": a}]} for a in sorted(self._images)]
 
     def push_file(self, name: str, local_path: str, remote_path: str):
         self.calls.append(("push_file", name, local_path, remote_path))

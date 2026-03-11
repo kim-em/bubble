@@ -417,21 +417,93 @@ def test_tools_hash_includes_script_content(tmp_path):
 
 
 def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_dir):
-    """Verify that building base with tools deletes derived images."""
+    """Verify that building base with tools deletes all derived images recursively."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
 
     from bubble.images.builder import build_image
 
-    # Pre-populate derived images
+    # Pre-populate direct and transitive derived images
     mock_runtime._images.add("lean")
     mock_runtime._images.add("base-vscode")
+    mock_runtime._images.add("lean-vscode")
+    mock_runtime._images.add("lean-emacs")
 
     build_image(mock_runtime, "base")
 
-    # Derived images should have been deleted
+    # All derived images (direct + transitive) should have been deleted
     delete_calls = [c for c in mock_runtime.calls if c[0] == "image_delete"]
     deleted_names = {c[1] for c in delete_calls}
     assert "lean" in deleted_names
     assert "base-vscode" in deleted_names
+    assert "lean-vscode" in deleted_names
+    assert "lean-emacs" in deleted_names
+
+
+def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, tmp_data_dir):
+    """Verify that building base also purges dynamic toolchain images (lean-v4.x.y)."""
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
+    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
+    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+
+    from bubble.images.builder import build_image
+
+    # Pre-populate static + dynamic images
+    mock_runtime._images.add("lean")
+    mock_runtime._images.add("lean-vscode")
+    mock_runtime._images.add("lean-v4-16-0")
+    mock_runtime._images.add("lean-emacs")
+    mock_runtime._images.add("lean-emacs-v4-16-0")
+
+    build_image(mock_runtime, "base")
+
+    delete_calls = [c for c in mock_runtime.calls if c[0] == "image_delete"]
+    deleted_names = {c[1] for c in delete_calls}
+    # Dynamic toolchain images should also be purged
+    assert "lean-v4-16-0" in deleted_names
+    assert "lean-emacs-v4-16-0" in deleted_names
+
+
+def test_collect_derived_images_recursive():
+    """Verify _collect_derived_images walks the full dependency tree."""
+    from bubble.images.builder import _collect_derived_images
+
+    # "base" -> lean, base-vscode, base-emacs, base-neovim
+    # "lean" -> lean-vscode
+    # "base-emacs" -> lean-emacs
+    # "base-neovim" -> lean-neovim
+    derived = set(_collect_derived_images("base"))
+    assert "lean" in derived
+    assert "base-vscode" in derived
+    assert "base-emacs" in derived
+    assert "base-neovim" in derived
+    assert "lean-vscode" in derived
+    assert "lean-emacs" in derived
+    assert "lean-neovim" in derived
+
+
+def test_collect_derived_images_leaf():
+    """Verify _collect_derived_images returns empty for leaf images."""
+    from bubble.images.builder import _collect_derived_images
+
+    assert _collect_derived_images("lean-vscode") == []
+
+
+def test_collect_dynamic_toolchain_aliases(mock_runtime):
+    """Verify dynamic toolchain images are found by alias pattern."""
+    from bubble.images.builder import _collect_dynamic_toolchain_aliases
+
+    mock_runtime._images.update(
+        {"lean-v4-16-0", "lean-v4-17-0", "lean-emacs-v4-16-0", "base-vscode", "lean"}
+    )
+
+    # Only lean-family images in purged set trigger scanning
+    aliases = set(_collect_dynamic_toolchain_aliases(mock_runtime, {"lean", "lean-emacs"}))
+    assert "lean-v4-16-0" in aliases
+    assert "lean-v4-17-0" in aliases
+    assert "lean-emacs-v4-16-0" in aliases
+    assert "base-vscode" not in aliases
+
+    # No lean images in purged set -> no dynamic aliases
+    assert _collect_dynamic_toolchain_aliases(mock_runtime, {"base-vscode"}) == []
