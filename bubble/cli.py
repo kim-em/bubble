@@ -599,6 +599,8 @@ def _maybe_install_skill():
     from .skill import claude_code_detected, install_skill, is_installed
 
     try:
+        if not sys.stdin.isatty():
+            return
         if not claude_code_detected() or is_installed():
             return
         click.echo()

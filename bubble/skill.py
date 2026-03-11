@@ -28,22 +28,32 @@ def is_installed() -> bool:
     return INSTALLED_SKILL.is_file()
 
 
+def _read_installed() -> str | None:
+    """Read the installed skill file, returning None if unreadable."""
+    if not is_installed():
+        return None
+    try:
+        return INSTALLED_SKILL.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def is_up_to_date() -> bool:
     """Check if the installed skill matches the bundled version."""
-    if not is_installed():
+    installed = _read_installed()
+    if installed is None:
         return False
-    installed = INSTALLED_SKILL.read_text(encoding="utf-8")
-    bundled = _bundled_skill_content()
-    return installed == bundled
+    return installed == _bundled_skill_content()
 
 
 def diff_skill() -> str:
     """Return a unified diff between installed and bundled skill, or empty string."""
-    if not is_installed():
+    installed = _read_installed()
+    if installed is None:
         return ""
-    installed = INSTALLED_SKILL.read_text(encoding="utf-8").splitlines(keepends=True)
-    bundled = _bundled_skill_content().splitlines(keepends=True)
-    return "".join(difflib.unified_diff(installed, bundled, "installed", "bundled"))
+    installed_lines = installed.splitlines(keepends=True)
+    bundled_lines = _bundled_skill_content().splitlines(keepends=True)
+    return "".join(difflib.unified_diff(installed_lines, bundled_lines, "installed", "bundled"))
 
 
 def install_skill() -> str:
