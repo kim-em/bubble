@@ -4,6 +4,11 @@
 - User-defined image customization script: place `~/.bubble/customize.sh` to run custom setup in all container images (#34)
 - Script runs as root as the final build step (base, lean, lean-toolchain images)
 - Automatic background rebuild when the script is added, changed, or removed (hash-based detection)
+- Mount editor configs into containers for emacs/neovim (#44): config directories mounted read-only, data/state/cache directories mounted read-write so plugin managers work
+- Emacs: mounts `~/.config/emacs/` (preferred) or `~/.emacs.d/`, plus `~/.local/share/emacs/` and `~/.cache/emacs/` read-write
+- Neovim: mounts `~/.config/nvim/`, plus `~/.local/share/nvim/`, `~/.local/state/nvim/`, and `~/.cache/nvim/` read-write
+- User mounts (`--mount`) take precedence and suppress overlapping editor config mounts
+- Forward `-b`/`--new-branch` and `--base` flags to remote host in `--ssh` and `--cloud` modes (#25)
 
 ## 0.5.11 — 2026-03-11
 - Tools now declare runtime network domains (e.g. `api.anthropic.com` for Claude Code) that persist in the container firewall, fixing connectivity for tools at runtime (#49)

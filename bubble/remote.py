@@ -407,6 +407,8 @@ def remote_open(
     git_name: str = "",
     git_email: str = "",
     claude_config: bool = True,
+    new_branch: str | None = None,
+    base_ref: str | None = None,
 ) -> dict:
     """Open a bubble on a remote host.
 
@@ -429,6 +431,10 @@ def remote_open(
         args += ["--git-name", git_name]
     if git_email:
         args += ["--git-email", git_email]
+    if new_branch:
+        args += ["-b", new_branch]
+    if base_ref:
+        args += ["--base", base_ref]
     args.append(target)
 
     click_mod.echo(f"Creating bubble on {host.ssh_destination}...")
