@@ -206,7 +206,7 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
     return ref_path, mount_name
 
 
-def _resolve_claude_prompt_locally(target: str) -> str:
+def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -> str:
     """Resolve a Claude prompt on the local machine for remote bubbles.
 
     Checks BUBBLE_CLAUDE_PROMPT env var first, then auto-generates for issue
@@ -225,7 +225,7 @@ def _resolve_claude_prompt_locally(target: str) -> str:
         if t.kind == "issue":
             from .claude import generate_issue_prompt
 
-            branch = f"issue-{t.ref}"
+            branch = new_branch or f"issue-{t.ref}"
             click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
             prompt = generate_issue_prompt(t.owner, t.repo, t.ref, branch) or ""
     except Exception:
@@ -254,7 +254,7 @@ def _open_remote(
     from .remote import remote_open
 
     # Resolve Claude prompt locally (gh CLI may not exist on the remote)
-    claude_prompt = _resolve_claude_prompt_locally(target)
+    claude_prompt = _resolve_claude_prompt_locally(target, new_branch=new_branch)
 
     try:
         result = remote_open(
@@ -453,10 +453,10 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     help="Inject GitHub auth token into container (default: from config or disabled)",
 )
 @click.option(
-    "--claude-prompt",
-    default=None,
+    "--claude-prompt-stdin",
+    is_flag=True,
     hidden=True,
-    help="Claude prompt to inject (used internally by remote open).",
+    help="Read Claude prompt from stdin (used internally by remote open).",
 )
 def open_cmd(
     target,
@@ -483,7 +483,7 @@ def open_cmd(
     claude_config,
     claude_credentials,
     gh_token,
-    claude_prompt,
+    claude_prompt_stdin,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
@@ -787,8 +787,11 @@ def open_cmd(
         )
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 
-        # Resolve Claude prompt: CLI arg > env var > auto-generate for issues
-        # The CLI arg is set by _open_remote() which generates the prompt locally.
+        # Resolve Claude prompt: stdin flag > env var > auto-generate for issues
+        # The stdin flag is set by _open_remote() which generates the prompt locally.
+        claude_prompt = ""
+        if claude_prompt_stdin:
+            claude_prompt = sys.stdin.read()
         if not claude_prompt:
             claude_prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
         if not claude_prompt and t.kind == "issue" and not machine_readable:

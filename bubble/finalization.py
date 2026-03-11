@@ -47,7 +47,7 @@ def finalize_bubble(
     if claude_prompt:
         from .claude import inject_claude_task
 
-        inject_claude_task(runtime, name, project_dir, claude_prompt)
+        inject_claude_task(runtime, name, project_dir, claude_prompt, quiet=machine_readable)
 
     if not machine_readable:
         click.echo("Setting up SSH access...")

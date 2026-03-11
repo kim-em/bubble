@@ -158,9 +158,7 @@ class TestResolveClaudePromptLocally:
             comments_result.stdout = ""
             mock_run.side_effect = [issue_result, comments_result]
 
-            result = _resolve_claude_prompt_locally(
-                "https://github.com/owner/repo/issues/42"
-            )
+            result = _resolve_claude_prompt_locally("https://github.com/owner/repo/issues/42")
             assert "issue #42" in result
             assert "issue-42" in result
 

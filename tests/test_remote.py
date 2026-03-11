@@ -248,15 +248,16 @@ class TestRemoteOpenFlagForwarding:
         assert "--base" in cmd_str
         assert "main" in cmd_str
 
-    def test_claude_prompt_forwarded(self):
-        """Claude prompt is forwarded via --claude-prompt flag."""
+    def test_claude_prompt_uses_stdin_flag(self):
+        """Claude prompt triggers --claude-prompt-stdin flag (prompt sent via stdin)."""
         cmd_str = self._run_remote_open(claude_prompt="Fix the bug")
-        assert "--claude-prompt" in cmd_str
-        assert "Fix the bug" in cmd_str
+        assert "--claude-prompt-stdin" in cmd_str
+        # Prompt text should NOT appear in command line (sent via stdin instead)
+        assert "Fix the bug" not in cmd_str
 
     def test_no_claude_prompt_by_default(self):
         cmd_str = self._run_remote_open()
-        assert "--claude-prompt" not in cmd_str
+        assert "--claude-prompt-stdin" not in cmd_str
 
 
 class TestCreateBundle:
