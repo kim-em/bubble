@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.15 — 2026-03-11
+- Split cli.py (~4200 lines) into focused modules (#45):
+  - `setup.py`: dependency installation, runtime setup
+  - `image_management.py`: image detection, building, background rebuilds
+  - `provisioning.py`: container provisioning and mount setup
+  - `clone.py`: repo cloning and checkout inside containers
+  - `finalization.py`: post-clone setup, SSH, registration, editor launch
+  - `container_helpers.py`: shared container helpers (find, SSH, git config, network)
+  - `native.py`: non-containerized workspace mode
+  - `commands/list_cmd.py`: list command and formatting helpers
+  - `commands/lifecycle.py`: pause, pop, cleanup commands
+- cli.py reduced to ~1900 lines: Click infrastructure, open command orchestration, and small command groups
+- All extracted modules under 420 lines each
+- Pure refactor: no behavior changes
+
 ## 0.5.14 — 2026-03-11
 - Inject GitHub auth token into bubbles so `gh` CLI works inside containers (#38)
 - New `--gh-token` flag on `bubble open` (opt-in, default disabled)

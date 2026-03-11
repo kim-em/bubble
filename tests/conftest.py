@@ -129,9 +129,10 @@ def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(lifecycle, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(git_store, "GIT_DIR", git_dir)
 
-    import bubble.cli as cli
+    # Patch modules that import DATA_DIR from config
+    import bubble.provisioning as provisioning
 
-    monkeypatch.setattr(cli, "DATA_DIR", data_dir)
+    monkeypatch.setattr(provisioning, "DATA_DIR", data_dir)
 
     # Patch builder module constants that capture DATA_DIR at import time
     import bubble.images.builder as builder

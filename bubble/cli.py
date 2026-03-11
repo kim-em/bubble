@@ -2,22 +2,16 @@
 
 import json
 import os
-import platform
 import shlex
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
 from pathlib import Path
 
 import click
 
 from . import __version__
-from .clean import CleanStatus, check_clean, check_native_clean, format_reasons
+from .clone import clone_and_checkout
 from .config import (
-    DATA_DIR,
-    NATIVE_DIR,
     claude_config_mounts,
     editor_config_mounts,
     ensure_dirs,
@@ -27,651 +21,54 @@ from .config import (
     repo_short_name,
     save_config,
 )
+from .container_helpers import (
+    detect_project_dir,
+    ensure_running,
+    find_existing_container,
+    get_host_git_identity,
+)
+from .finalization import (
+    echo_editor_opening,
+    finalize_bubble,
+    inject_local_ssh_keys,
+    machine_readable_output,
+)
 from .git_store import (
     bare_repo_path,
     ensure_rev_available,
     fetch_ref,
-    github_url,
     init_bare_repo,
     update_all_repos,
 )
-from .hooks import select_hook
-from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
-from .lifecycle import get_bubble_info, load_registry, register_bubble, unregister_bubble
+from .image_management import (
+    detect_and_build_image,
+    maybe_rebuild_base_image,
+    maybe_rebuild_customize,
+    maybe_rebuild_tools,
+)
+from .lifecycle import load_registry, register_bubble, unregister_bubble
 from .naming import deduplicate_name, generate_name
+from .native import open_native
+from .provisioning import mount_overlaps, provision_container
 from .repo_registry import RepoRegistry
-from .runtime.base import ContainerRuntime
-from .runtime.incus import IncusRuntime
 from .security import SETTINGS as SECURITY_SETTINGS
 from .security import (
     VALID_VALUES as SECURITY_VALID_VALUES,
 )
 from .security import (
-    filter_github_domains,
     get_setting,
     is_enabled,
     is_locked_off,
     print_warnings,
 )
+from .setup import get_runtime
 from .target import Target, TargetParseError, parse_target
 from .vscode import (
     SSH_CONFIG_FILE,
     add_ssh_config,
     open_editor,
-    open_editor_native,
     remove_ssh_config,
 )
-
-
-def _is_command_available(cmd: str) -> bool:
-    """Check if a command is available on PATH."""
-    try:
-        subprocess.run([cmd, "--version"], capture_output=True, timeout=5)
-        return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
-def _ensure_homebrew_in_path():
-    """Add Homebrew's bin directory to PATH if brew exists but isn't on PATH.
-
-    On macOS, non-interactive SSH sessions may have a minimal PATH that
-    doesn't include /usr/local/bin (Intel) or /opt/homebrew/bin (Apple Silicon).
-    """
-    if _is_command_available("brew"):
-        return
-    for brew_path in ["/opt/homebrew/bin", "/usr/local/bin"]:
-        brew_bin = Path(brew_path) / "brew"
-        if brew_bin.exists():
-            os.environ["PATH"] = brew_path + ":" + os.environ.get("PATH", "")
-            return
-
-
-def _is_nixos() -> bool:
-    """Check if we're running on NixOS."""
-    return Path("/etc/nixos").is_dir() or Path("/etc/NIXOS").exists()
-
-
-def _is_debian_based() -> bool:
-    """Check if we're on a Debian/Ubuntu system with apt."""
-    return _is_command_available("apt-get") and Path("/etc/os-release").exists()
-
-
-def _install_incus_debian():
-    """Install Incus on Debian/Ubuntu via the Zabbly repository."""
-    click.echo("Installing Incus from the Zabbly repository...")
-
-    # Add GPG key
-    subprocess.run(
-        ["sudo", "mkdir", "-p", "/etc/apt/keyrings/"],
-        check=True,
-    )
-    key_data = subprocess.run(
-        ["curl", "-fsSL", "https://pkgs.zabbly.com/key.asc"],
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["sudo", "tee", "/etc/apt/keyrings/zabbly.asc"],
-        input=key_data.stdout,
-        capture_output=True,
-        check=True,
-    )
-
-    # Determine codename and architecture
-    os_release = {}
-    for line in Path("/etc/os-release").read_text().splitlines():
-        if "=" in line:
-            k, v = line.split("=", 1)
-            os_release[k] = v.strip('"')
-    codename = os_release.get("VERSION_CODENAME", "jammy")
-    arch = subprocess.run(
-        ["dpkg", "--print-architecture"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
-    # Add repository
-    sources_content = (
-        f"Enabled: yes\n"
-        f"Types: deb\n"
-        f"URIs: https://pkgs.zabbly.com/incus/stable\n"
-        f"Suites: {codename}\n"
-        f"Components: main\n"
-        f"Architectures: {arch}\n"
-        f"Signed-By: /etc/apt/keyrings/zabbly.asc\n"
-    )
-    subprocess.run(
-        ["sudo", "tee", "/etc/apt/sources.list.d/zabbly-incus-stable.sources"],
-        input=sources_content.encode(),
-        capture_output=True,
-        check=True,
-    )
-
-    # Install
-    subprocess.run(["sudo", "apt-get", "update"], check=True)
-    subprocess.run(["sudo", "apt-get", "install", "-y", "incus"], check=True)
-
-    _post_install_incus()
-
-
-def _install_incus_snap():
-    """Install Incus via snap."""
-    click.echo("Installing Incus via snap...")
-    subprocess.run(["sudo", "snap", "install", "incus", "--channel=latest/stable"], check=True)
-    _post_install_incus()
-
-
-def _user_can_sudo() -> bool:
-    """Check if current user is likely able to use sudo (in wheel or sudo group)."""
-    import getpass
-    import grp
-
-    try:
-        username = getpass.getuser()
-        user_groups = [g.gr_name for g in grp.getgrall() if username in g.gr_mem]
-        return "wheel" in user_groups or "sudo" in user_groups
-    except Exception:
-        return False
-
-
-def _nixos_incus_snippet(username: str) -> str:
-    """Return the NixOS configuration snippet for enabling Incus."""
-    return (
-        "    virtualisation.incus.enable = true;\n"
-        "    networking.nftables.enable = true;\n"
-        f'    users.users.{username}.extraGroups = [ "incus-admin" ];'
-    )
-
-
-def _install_incus_nixos():
-    """Install Incus on NixOS by editing configuration.nix or providing guidance."""
-    import getpass
-
-    username = getpass.getuser()
-    config_path = Path("/etc/nixos/configuration.nix")
-    snippet = _nixos_incus_snippet(username)
-
-    # Case 1: No sudo — tell the user to ask their admin
-    if not _user_can_sudo():
-        click.echo("Incus is required but not installed.")
-        click.echo("  Your system administrator needs to add to the NixOS configuration:")
-        click.echo()
-        click.echo(snippet)
-        click.echo()
-        click.echo("  Then rebuild: sudo nixos-rebuild switch")
-        click.echo("  And initialize: sudo incus admin init --minimal")
-        sys.exit(1)
-
-    # Case 2: Has sudo + configuration.nix exists — offer to auto-edit
-    if config_path.exists():
-        content = config_path.read_text()
-
-        if "virtualisation.incus.enable" in content:
-            click.echo("Incus appears configured in NixOS but is not available.")
-            click.echo("  Try running: sudo nixos-rebuild switch")
-            sys.exit(1)
-
-        click.echo("Incus is required but not installed.")
-        click.echo(f"  Will add to {config_path}:")
-        click.echo()
-        click.echo(snippet)
-        click.echo()
-
-        if click.confirm(
-            "  Edit configuration.nix and run nixos-rebuild switch? (requires sudo)",
-            default=True,
-        ):
-            # Insert before the last closing brace
-            last_brace = content.rfind("}")
-            if last_brace == -1:
-                click.echo(f"  Error: could not find closing '}}' in {config_path}", err=True)
-                click.echo(f"  Edit {config_path} manually.")
-                sys.exit(1)
-
-            insert = (
-                "\n"
-                "  # bubble: containerized dev environments\n"
-                "  virtualisation.incus.enable = true;\n"
-                "  networking.nftables.enable = true;\n"
-                f'  users.users.{username}.extraGroups = [ "incus-admin" ];\n'
-            )
-            new_content = content[:last_brace] + insert + content[last_brace:]
-
-            click.echo(f"  Backing up to {config_path}.bak...")
-            subprocess.run(
-                ["sudo", "cp", str(config_path), str(config_path) + ".bak"],
-                check=True,
-            )
-            subprocess.run(
-                ["sudo", "tee", str(config_path)],
-                input=new_content.encode(),
-                capture_output=True,
-                check=True,
-            )
-
-            click.echo("  Running nixos-rebuild switch (this may take a few minutes)...")
-            try:
-                subprocess.run(["sudo", "nixos-rebuild", "switch"], check=True)
-            except subprocess.CalledProcessError:
-                click.echo()
-                click.echo("  nixos-rebuild failed.", err=True)
-                click.echo(f"  Your original configuration is backed up at {config_path}.bak")
-                click.echo(f"  To restore: sudo cp {config_path}.bak {config_path}")
-                sys.exit(1)
-
-            _post_install_nixos()
-        else:
-            click.echo(f"  Edit {config_path} manually, then run: sudo nixos-rebuild switch")
-            sys.exit(1)
-
-    # Case 3: Has sudo but no configuration.nix (flake setup)
-    else:
-        click.echo("Incus is required but not installed.")
-        click.echo("  Add to your NixOS configuration:")
-        click.echo()
-        click.echo(snippet)
-        click.echo()
-        click.echo("  Then run: sudo nixos-rebuild switch")
-        click.echo("  And then: sudo incus admin init --minimal")
-        sys.exit(1)
-
-
-def _post_install_nixos():
-    """Post-install steps for Incus on NixOS."""
-    click.echo("Initializing Incus...")
-    subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
-
-    click.echo()
-    click.echo("Incus installed successfully.")
-    click.echo("NOTE: You need to log out and back in for group membership to take effect.")
-    click.echo("  Or run: newgrp incus-admin")
-    click.echo("  Then re-run your bubble command.")
-    sys.exit(0)
-
-
-def _post_install_incus():
-    """Common post-install steps for Incus on Linux."""
-    # Initialize with minimal defaults
-    click.echo("Initializing Incus...")
-    subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
-
-    # Add current user to incus-admin group
-    import getpass
-
-    username = getpass.getuser()
-    click.echo(f"Adding {username} to the incus-admin group...")
-    subprocess.run(["sudo", "usermod", "-aG", "incus-admin", username], check=True)
-
-    click.echo()
-    click.echo("Incus installed successfully.")
-    click.echo("NOTE: You need to log out and back in for group membership to take effect.")
-    click.echo("  Or run: newgrp incus-admin")
-    click.echo("  Then re-run your bubble command.")
-    sys.exit(0)
-
-
-def _ensure_dependencies():
-    """Check for required dependencies and offer to install them interactively."""
-    system = platform.system()
-
-    if system == "Darwin":
-        _ensure_homebrew_in_path()
-
-        # Check Homebrew
-        if not _is_command_available("brew"):
-            click.echo("Homebrew is required but not installed.")
-            click.echo("  Install it with:")
-            click.echo(
-                '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-            )
-            sys.exit(1)
-
-        # Check Colima, Incus, and QEMU (Intel Macs need QEMU; Apple Silicon uses vz)
-        missing = []
-        if not _is_command_available("colima"):
-            missing.append("colima")
-        if not _is_command_available("incus"):
-            missing.append("incus")
-        if platform.machine() == "x86_64" and not _is_command_available("qemu-img"):
-            missing.append("qemu")
-
-        if missing:
-            names = " and ".join(missing)
-            cmd = "brew install " + " ".join(missing)
-            click.echo(
-                f"{names} {'is' if len(missing) == 1 else 'are'} required but not installed."
-            )
-            # Auto-install if no TTY (remote/non-interactive), otherwise confirm
-            if not sys.stdin.isatty() or click.confirm(
-                f"  Install via Homebrew? ({cmd})", default=True
-            ):
-                click.echo(f"  Installing: {cmd}")
-                subprocess.run(["brew", "install"] + missing, check=True)
-            else:
-                click.echo(f"  To install manually: {cmd}")
-                sys.exit(1)
-
-    elif system == "Linux":
-        if not _is_command_available("incus"):
-            if _is_nixos():
-                _install_incus_nixos()
-            else:
-                click.echo("Incus is required but not installed.")
-                has_snap = _is_command_available("snap")
-                has_apt = _is_debian_based()
-
-                if has_apt and has_snap:
-                    choice = click.prompt(
-                        "  Install via [1] Zabbly apt repository or [2] snap?",
-                        type=click.Choice(["1", "2"]),
-                        default="1",
-                    )
-                    if choice == "1":
-                        _install_incus_debian()
-                    else:
-                        _install_incus_snap()
-                elif has_apt:
-                    if click.confirm(
-                        "  Install via the Zabbly repository? (requires sudo)", default=True
-                    ):
-                        _install_incus_debian()
-                    else:
-                        click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
-                        sys.exit(1)
-                elif has_snap:
-                    if click.confirm("  Install via snap? (requires sudo)", default=True):
-                        _install_incus_snap()
-                    else:
-                        click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
-                        sys.exit(1)
-                else:
-                    click.echo("  See: https://linuxcontainers.org/incus/docs/main/installing/")
-                    sys.exit(1)
-
-        # Incus is installed — check it's initialized (has a storage pool)
-        _ensure_incus_initialized()
-
-
-def _ensure_incus_initialized():
-    """Check that Incus has a storage pool; run 'incus admin init --auto' if not."""
-    try:
-        result = subprocess.run(
-            ["incus", "storage", "list", "--format=json"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode == 0:
-            pools = json.loads(result.stdout) if result.stdout.strip() else []
-            if pools:
-                return  # Already initialized
-    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
-        return  # Can't check — proceed optimistically
-
-    click.echo("Incus is installed but not initialized (no storage pool).")
-    click.echo("  Running: incus admin init --auto")
-    try:
-        subprocess.run(
-            ["incus", "admin", "init", "--auto"],
-            check=True,
-            timeout=30,
-            stdin=subprocess.DEVNULL,
-        )
-        click.echo("  Incus initialized.")
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        detail = getattr(e, "stderr", "") or ""
-        click.echo(f"  Failed to initialize Incus: {detail}".strip(), err=True)
-        click.echo("  Run manually: incus admin init --auto", err=True)
-        sys.exit(1)
-
-
-def _colima_host_ip() -> str:
-    """Get the host IP as seen from the Colima VM.
-
-    Resolves host.lima.internal from the VM's /etc/hosts.
-    Falls back to 192.168.5.2 (the default vz networking address).
-    """
-    try:
-        result = subprocess.run(
-            ["colima", "ssh", "--", "getent", "hosts", "host.lima.internal"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split()[0]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return "192.168.5.2"
-
-
-def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
-    """Get the configured container runtime. Ensures platform is ready by default."""
-    if ensure_ready:
-        _ensure_dependencies()
-        if platform.system() == "Darwin":
-            from .runtime.colima import ensure_colima
-
-            rt = config["runtime"]
-            ensure_colima(
-                cpu=rt["colima_cpu"],
-                memory=rt["colima_memory"],
-                disk=rt.get("colima_disk", 60),
-                vm_type=rt.get("colima_vm_type", "vz"),
-            )
-    backend = config["runtime"]["backend"]
-    if backend == "incus":
-        return IncusRuntime()
-    raise ValueError(f"Unknown runtime backend: {backend}")
-
-
-def _find_container(runtime: ContainerRuntime, name: str):
-    """Find a container by name. Returns ContainerInfo or exits."""
-    for c in runtime.list_containers():
-        if c.name == name:
-            return c
-    click.echo(f"Bubble '{name}' not found.", err=True)
-    sys.exit(1)
-
-
-def _ensure_running(runtime: ContainerRuntime, name: str):
-    """Ensure a container is running (unpause/start if needed)."""
-    info = _find_container(runtime, name)
-    if info.state == "frozen":
-        click.echo(f"Unpausing '{name}'...")
-        runtime.unfreeze(name)
-    elif info.state == "stopped":
-        click.echo(f"Starting '{name}'...")
-        runtime.start(name)
-    return info
-
-
-def _setup_ssh(runtime: ContainerRuntime, name: str, host_key_trust: bool = True):
-    """Start SSH and inject host public keys into a container."""
-    runtime.exec(name, ["bash", "-c", "service ssh start || /usr/sbin/sshd"])
-
-    ssh_dir = Path.home() / ".ssh"
-    pub_keys = []
-    for key_file in ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]:
-        key_path = ssh_dir / key_file
-        if key_path.exists():
-            pub_keys.append(key_path.read_text().strip())
-    if pub_keys:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".keys", delete=False) as f:
-            f.write("\n".join(pub_keys) + "\n")
-            tmp_keys = f.name
-        try:
-            runtime.exec(
-                name,
-                [
-                    "su",
-                    "-",
-                    "user",
-                    "-c",
-                    "mkdir -p ~/.ssh && chmod 700 ~/.ssh",
-                ],
-            )
-            runtime.push_file(name, tmp_keys, "/home/user/.ssh/authorized_keys")
-            runtime.exec(
-                name,
-                [
-                    "bash",
-                    "-c",
-                    "chown user:user /home/user/.ssh/authorized_keys"
-                    " && chmod 600 /home/user/.ssh/authorized_keys",
-                ],
-            )
-        finally:
-            Path(tmp_keys).unlink(missing_ok=True)
-
-    add_ssh_config(name, host_key_trust=host_key_trust)
-
-
-def _get_host_git_identity() -> tuple[str, str]:
-    """Read git user.name and user.email from host's git config."""
-    name = email = ""
-    for key in ("user.name", "user.email"):
-        try:
-            val = subprocess.run(
-                ["git", "config", key],
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.strip()
-        except subprocess.CalledProcessError:
-            val = ""
-        if key == "user.name":
-            name = val
-        else:
-            email = val
-    return name, email
-
-
-def _setup_git_config(runtime: ContainerRuntime, name: str, git_name: str, git_email: str):
-    """Inject git identity into a container."""
-    cmds = []
-    if git_name:
-        cmds.append(f"git config --global user.name {shlex.quote(git_name)}")
-    if git_email:
-        cmds.append(f"git config --global user.email {shlex.quote(git_email)}")
-    if cmds:
-        runtime.exec(name, ["su", "-", "user", "-c", " && ".join(cmds)])
-
-
-def _apply_network(
-    runtime: ContainerRuntime, name: str, config: dict, extra_domains: list[str] | None = None
-):
-    """Apply network allowlist to a container if configured."""
-    domains = list(config.get("network", {}).get("allowlist", []))
-    # Always include VSCode infrastructure domains — bubble is a VSCode-first tool
-    from .vscode import VSCODE_NETWORK_DOMAINS
-
-    for d in VSCODE_NETWORK_DOMAINS:
-        if d not in domains:
-            domains.append(d)
-    if extra_domains:
-        for d in extra_domains:
-            if d not in domains:
-                domains.append(d)
-    # Include runtime domains for enabled tools (e.g. API endpoints)
-    from .tools import resolve_tools, tool_runtime_domains
-
-    for d in tool_runtime_domains(resolve_tools(config)):
-        if d not in domains:
-            domains.append(d)
-    # Strip ALL GitHub domains after merging all sources (base, hooks, tools)
-    if not is_enabled(config, "network_github"):
-        domains = filter_github_domains(domains)
-    if domains:
-        try:
-            from .network import apply_allowlist
-
-            apply_allowlist(runtime, name, domains)
-            click.echo("  Network allowlist applied.")
-        except Exception as e:
-            raise click.ClickException(f"Failed to apply network allowlist: {e}")
-
-
-def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
-    """Detect the project directory inside a container."""
-    try:
-        return (
-            runtime.exec(name, ["bash", "-c", "ls -d /home/user/*/ 2>/dev/null | head -1"])
-            .strip()
-            .rstrip("/")
-        )
-    except Exception:
-        return "/home/user"
-
-
-def _maybe_install_automation():
-    """Install automation jobs on first use if not already present."""
-    from .automation import install_automation, is_automation_installed
-
-    try:
-        status = is_automation_installed()
-        if status and not any(status.values()):
-            click.echo("Installing automation (hourly git update, weekly image refresh)...")
-            click.echo("  To remove later: bubble automation remove")
-            installed = install_automation()
-            for item in installed:
-                click.echo(f"  {item}")
-    except Exception:
-        pass
-
-
-def _maybe_install_skill():
-    """Auto-install the Claude Code skill on first bubble creation."""
-    from .skill import claude_code_detected, install_skill, is_installed
-
-    try:
-        if not claude_code_detected() or is_installed():
-            return
-        msg = install_skill()
-        click.echo(f"  {msg}")
-        click.echo("  To manage later: bubble skill status")
-    except Exception:
-        pass
-
-
-def _find_existing_container(
-    runtime: ContainerRuntime,
-    target_str: str,
-    generated_name: str | None = None,
-    org_repo: str | None = None,
-    kind: str | None = None,
-    ref: str | None = None,
-) -> str | None:
-    """Find an existing container matching the target. Returns name or None."""
-    containers = {c.name for c in runtime.list_containers()}
-
-    # Check if raw target string matches a container name
-    if target_str in containers:
-        return target_str
-
-    # Check by generated name
-    if generated_name and generated_name in containers:
-        return generated_name
-
-    # Check registry for same org_repo + PR/branch
-    if org_repo and kind and ref:
-        registry = load_registry()
-        for bname, binfo in registry.get("bubbles", {}).items():
-            if binfo.get("org_repo") != org_repo:
-                continue
-            if bname not in containers:
-                continue
-            if kind == "pr" and str(binfo.get("pr", "")) == ref:
-                return bname
-            if kind == "branch" and binfo.get("branch") == ref:
-                return bname
-
-    return None
-
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -766,99 +163,6 @@ def help_cmd(ctx, command):
 # ---------------------------------------------------------------------------
 
 
-def _spawn_background_bubble(args: list[str], log_path: str):
-    """Spawn a background bubble command, detached from the current process.
-
-    Tries `bubble` on PATH first, falls back to `sys.executable -m bubble`.
-    """
-    bubble_cmd = shutil.which("bubble")
-    if bubble_cmd:
-        cmd = [bubble_cmd] + args
-    else:
-        cmd = [sys.executable, "-m", "bubble"] + args
-    log_file = open(log_path, "w")
-    try:
-        subprocess.Popen(
-            cmd,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    finally:
-        log_file.close()
-
-
-def _maybe_rebuild_base_image():
-    """If VS Code has updated since the base-vscode image was built, rebuild in background."""
-    commit = get_vscode_commit()
-    if not commit:
-        return
-    if VSCODE_COMMIT_FILE.exists() and VSCODE_COMMIT_FILE.read_text().strip() == commit:
-        return
-    _spawn_background_bubble(
-        ["images", "build", "base-vscode"],
-        "/tmp/bubble-vscode-rebuild.log",
-    )
-
-
-def _maybe_rebuild_tools(runtime: ContainerRuntime):
-    """If the resolved tool set has changed since base was built, rebuild base now.
-
-    Rebuilds synchronously so that the container launched afterwards uses a
-    fresh image with the correct tools baked in. The rebuild also purges
-    derived images (lean, base-vscode, etc.) so they get rebuilt on next use.
-    """
-    from .images.builder import TOOLS_HASH_FILE, build_image
-    from .tools import resolve_tools, tools_hash
-
-    config = load_config()
-    enabled = resolve_tools(config)
-    current_hash = tools_hash(enabled)
-
-    if TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash:
-        return
-
-    click.echo("Tools configuration changed, rebuilding base image...")
-    build_image(runtime, "base")
-
-
-def _maybe_rebuild_customize():
-    """If the user customization script has changed, trigger a background rebuild of all images.
-
-    Compares the current hash of ~/.bubble/customize.sh against the stored
-    hash from the last build. If different (or script was added/removed),
-    triggers a background base image rebuild. Derived images are purged
-    during the rebuild so they pick up the changes on next use.
-    """
-    from .images.builder import CUSTOMIZE_HASH_FILE, customize_hash
-
-    current = customize_hash()
-
-    if CUSTOMIZE_HASH_FILE.exists():
-        stored = CUSTOMIZE_HASH_FILE.read_text().strip()
-    else:
-        stored = None
-
-    # No script and no previous hash — nothing to do
-    if current is None and stored is None:
-        return
-    # Hash matches — nothing to do
-    if current == stored:
-        return
-
-    if current is None:
-        click.echo("Customization script removed, rebuilding base image in background...")
-    elif stored is None:
-        click.echo("Customization script detected, rebuilding base image in background...")
-    else:
-        click.echo("Customization script changed, rebuilding base image in background...")
-
-    _spawn_background_bubble(
-        ["images", "build", "base"],
-        "/tmp/bubble-customize-rebuild.log",
-    )
-
-
 def _generate_bubble_name(t, custom_name: str | None) -> str:
     """Generate a container name from a parsed target."""
     if custom_name:
@@ -912,681 +216,6 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
     return ref_path, mount_name
 
 
-def _editor_image_suffix(editor: str) -> str:
-    """Return the image name suffix for a given editor, or empty string for shell."""
-    if editor in ("vscode", "emacs", "neovim"):
-        return f"-{editor}"
-    return ""
-
-
-def _apply_editor_to_image(image_name: str, editor: str) -> str:
-    """Transform an image name based on the editor.
-
-    Examples (editor="emacs"):
-      "base"         -> "base-emacs"
-      "lean"         -> "lean-emacs"
-      "lean-v4.27.0" -> "lean-emacs-v4.27.0"
-    """
-    suffix = _editor_image_suffix(editor)
-    if not suffix:
-        return image_name
-
-    # For toolchain-specific images like "lean-v4.27.0", insert editor before version
-    if image_name.startswith("lean-v"):
-        version = image_name[len("lean-") :]
-        return f"lean{suffix}-{version}"
-
-    return f"{image_name}{suffix}"
-
-
-def _detect_and_build_image(runtime, ref_path, t, editor="vscode"):
-    """Detect language hook and ensure image exists. Returns (hook, image_name)."""
-    if t.kind == "pr":
-        hook_ref = f"refs/pull/{t.ref}/head"
-    elif t.kind in ("branch", "commit"):
-        hook_ref = t.ref
-    else:
-        # "repo" and "issue" use the default branch
-        hook_ref = "HEAD"
-
-    hook = select_hook(ref_path, hook_ref)
-    if hook:
-        click.echo(f"  Detected: {hook.name()}")
-        base_image = hook.image_name()
-    else:
-        base_image = "base"
-
-    image_name = _apply_editor_to_image(base_image, editor)
-
-    pending_toolchain_build = None
-    # Check for toolchain-specific images (e.g. "lean-v4.27.0" or "lean-emacs-v4.27.0")
-    is_toolchain_image = base_image.startswith("lean-v")
-    if not runtime.image_exists(image_name):
-        if is_toolchain_image:
-            # Toolchain-specific image doesn't exist yet — fall back to base lean
-            # and build the toolchain image in the background for next time.
-            version = base_image[len("lean-") :]
-            fallback = _apply_editor_to_image("lean", editor)
-            click.echo(
-                f"  Toolchain {version} image not cached, using {fallback} image"
-                f" (building {image_name} in background for next time)"
-            )
-            pending_toolchain_build = (version, editor)
-            image_name = fallback
-        if not runtime.image_exists(image_name):
-            click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
-            from .images.builder import build_image
-
-            build_image(runtime, image_name)
-            click.echo(f"  {image_name} image ready.")
-    elif is_toolchain_image:
-        version = base_image[len("lean-") :]
-        click.echo(f"  Using cached toolchain image ({version})")
-
-    if pending_toolchain_build:
-        version, ed = pending_toolchain_build
-        _background_build_lean_toolchain(version, editor=ed)
-
-    return hook, image_name
-
-
-def _background_build_lean_toolchain(version: str, editor: str = "vscode"):
-    """Fire off a background build of a toolchain-specific Lean image."""
-    image_alias = _apply_editor_to_image(f"lean-{version}", editor)
-    # Lock file prevents duplicate concurrent builds for the same version
-    lock_path = Path(f"/tmp/bubble-{image_alias}.lock")
-    try:
-        lock_path.touch(exist_ok=False)
-    except FileExistsError:
-        # Stale lock from a killed build? Delete if older than 1 hour.
-        try:
-            age = time.time() - lock_path.stat().st_mtime
-            if age < 3600:
-                return  # Build likely still in progress
-            lock_path.unlink(missing_ok=True)
-            lock_path.touch(exist_ok=False)
-        except (OSError, FileExistsError):
-            return
-    click.echo(f"  Building {image_alias} image in background for next time...")
-    _spawn_background_bubble(
-        ["images", "build", image_alias],
-        f"/tmp/bubble-{image_alias}-build.log",
-    )
-
-
-def _mount_overlaps(target: Path, user_targets: set[Path]) -> bool:
-    """Check if target overlaps with any user mount (exact match or ancestry)."""
-    for ut in user_targets:
-        # Exact match, or one is an ancestor of the other
-        if target == ut:
-            return True
-        try:
-            target.relative_to(ut)
-            return True  # target is inside a user mount
-        except ValueError:
-            pass
-        try:
-            ut.relative_to(target)
-            return True  # user mount is inside this auto mount
-        except ValueError:
-            pass
-    return False
-
-
-def _provision_container(
-    runtime,
-    name,
-    image_name,
-    ref_path,
-    mount_name,
-    config,
-    hook=None,
-    dep_mounts=None,
-    network=False,
-    user_mounts=None,
-    claude_mounts=None,
-    editor_mounts=None,
-):
-    """Launch container, wait for readiness, apply network allowlist, mount git repos."""
-    click.echo("  Launching container...", nl=False)
-    runtime.launch(name, image_name)
-    click.echo(" done.")
-
-    click.echo("  Waiting for network...", nl=False)
-    from .images.builder import _wait_for_container
-
-    try:
-        _wait_for_container(runtime, name)
-        click.echo(" done.")
-    except RuntimeError:
-        click.echo(" timeout (continuing anyway).")
-
-    # Apply network allowlist early, before clone or any hook code runs
-    if network:
-        extra_domains = hook.network_domains() if hook else None
-        _apply_network(runtime, name, config, extra_domains)
-
-    mount_source = str(ref_path)
-    if Path(mount_source).exists():
-        runtime.add_disk(
-            name, "shared-git", mount_source, f"/shared/git/{mount_name}", readonly=True
-        )
-
-    # Mount dependency bare repos for Lake pre-population via alternates
-    if dep_mounts:
-        for repo_name, dep_path in dep_mounts.items():
-            if str(dep_path) == mount_source:
-                continue  # Don't double-mount the main repo
-            device_name = f"dep-{repo_name}".replace(".", "-").replace("_", "-")[:63]
-            runtime.add_disk(
-                name,
-                device_name,
-                str(dep_path),
-                f"/shared/git/{repo_name}.git",
-                readonly=True,
-            )
-
-    # Add shared mounts from hook (e.g. mathlib cache)
-    # When shared_cache is off, mount read-only so containers can't poison the cache
-    shared_cache_enabled = is_enabled(config, "shared_cache")
-    if hook:
-        env_lines = []
-        for host_dir_name, container_path, env_var in hook.shared_mounts():
-            host_path = DATA_DIR / host_dir_name
-            host_path.mkdir(parents=True, exist_ok=True)
-            # Make group-writable so container user can write with UID mapping
-            host_path.chmod(0o770)
-            runtime.add_disk(
-                name,
-                f"shared-{host_dir_name}",
-                str(host_path),
-                container_path,
-                readonly=not shared_cache_enabled,
-            )
-            if env_var:
-                env_lines.append(f"export {env_var}={shlex.quote(container_path)}")
-        if env_lines:
-            # Set env vars globally via /etc/profile.d so all shells see them
-            script = "\\n".join(env_lines)
-            runtime.exec(
-                name,
-                [
-                    "bash",
-                    "-c",
-                    f"printf '{script}\\n' > /etc/profile.d/bubble-shared.sh",
-                ],
-            )
-
-    # Mount Claude Code config (read-only individual files/dirs from ~/.claude)
-    if claude_mounts:
-        runtime.exec(
-            name,
-            ["bash", "-c", "mkdir -p /home/user/.claude && chown user:user /home/user/.claude"],
-        )
-        for i, m in enumerate(claude_mounts):
-            runtime.add_disk(
-                name,
-                f"claude-config-{i}",
-                m.source,
-                m.target,
-                readonly=m.readonly,
-            )
-        # Writable projects directory — per-bubble subdirectory, persists on host.
-        # Each bubble gets its own isolated subdir so bubbles can't see each
-        # other's sessions, but all accumulate under ~/.bubble/claude-projects/
-        # on the host (useful for backing up with a git repo).
-        # Skip if a user mount overlaps with this target.
-        projects_target = Path("/home/user/.claude/projects")
-        user_targets = {Path(m.target) for m in (user_mounts or [])}
-        if not _mount_overlaps(projects_target, user_targets):
-            projects_dir = DATA_DIR / "claude-projects" / name
-            projects_dir.mkdir(parents=True, exist_ok=True)
-            projects_dir.chmod(0o770)
-            runtime.add_disk(
-                name,
-                "claude-projects",
-                str(projects_dir),
-                "/home/user/.claude/projects",
-            )
-
-    # Mount editor config directories (read-only config, read-write data/state)
-    if editor_mounts:
-        for i, m in enumerate(editor_mounts):
-            # Ensure parent directories exist in the container
-            parent = str(Path(m.target).parent)
-            runtime.exec(
-                name,
-                [
-                    "bash",
-                    "-c",
-                    f"mkdir -p {shlex.quote(parent)} && chown -R user:user {shlex.quote(parent)}",
-                ],
-            )
-            runtime.add_disk(
-                name,
-                f"editor-config-{i}",
-                m.source,
-                m.target,
-                readonly=m.readonly,
-            )
-            # Apply exclusions by overmounting with writable tmpfs (same pattern
-            # as user mounts). This lets the editor write to plugin/cache subdirs
-            # within a read-only config mount.
-            for excluded in m.exclude:
-                exc_path = f"{m.target.rstrip('/')}/{excluded}"
-                runtime.exec(
-                    name,
-                    [
-                        "bash",
-                        "-c",
-                        f"mkdir -p {shlex.quote(exc_path)}"
-                        f" && mount -t tmpfs tmpfs {shlex.quote(exc_path)}"
-                        f" && chown user:user {shlex.quote(exc_path)}",
-                    ],
-                )
-
-    # Add user-specified mounts (from --mount flags and [[mounts]] config)
-    if user_mounts:
-        for i, m in enumerate(user_mounts):
-            device_name = f"user-mount-{i}"
-            runtime.add_disk(
-                name,
-                device_name,
-                m.source,
-                m.target,
-                readonly=m.readonly,
-            )
-            # Apply exclusions by overmounting with empty tmpfs
-            for excluded in m.exclude:
-                exc_path = f"{m.target.rstrip('/')}/{excluded}"
-                # Mount a tmpfs to hide the excluded subdirectory.
-                # mkdir -p runs as root inside the container, so it works
-                # even on RO mounts (the dir already exists on the host,
-                # or we create it in the container's overlay).
-                runtime.exec(
-                    name,
-                    [
-                        "bash",
-                        "-c",
-                        f"mkdir -p {shlex.quote(exc_path)}"
-                        f" && mount -t tmpfs tmpfs {shlex.quote(exc_path)}",
-                    ],
-                )
-
-    if is_enabled(config, "relay"):
-        from .relay import RELAY_PORT_FILE, RELAY_SOCK
-
-        # macOS/Colima: Unix sockets can't traverse virtio-fs, use TCP.
-        # incus proxy needs an IP (not hostname), so resolve host.lima.internal
-        # from the VM — this is the host's IP as seen from incusd.
-        if platform.system() == "Darwin" and RELAY_PORT_FILE.exists():
-            port = RELAY_PORT_FILE.read_text().strip()
-            host_ip = _colima_host_ip()
-            connect_addr = f"tcp:{host_ip}:{port}"
-        elif RELAY_SOCK.exists():
-            connect_addr = f"unix:{RELAY_SOCK}"
-        else:
-            connect_addr = None
-
-        if connect_addr:
-            runtime.add_device(
-                name,
-                "bubble-relay",
-                "proxy",
-                connect=connect_addr,
-                listen="unix:/bubble/relay.sock",
-                bind="container",
-                uid="1001",
-                gid="1001",
-            )
-            from .relay import generate_relay_token
-
-            token = generate_relay_token(name)
-            runtime.exec(
-                name,
-                [
-                    "bash",
-                    "-c",
-                    f"echo {shlex.quote(token)} > /bubble/relay-token"
-                    " && chown user:user /bubble/relay-token"
-                    " && chmod 600 /bubble/relay-token",
-                ],
-            )
-
-
-def _get_pr_metadata(owner: str, repo: str, pr_number: str) -> tuple[str, str, str] | None:
-    """Query GitHub API for PR head branch info.
-
-    Returns (head_ref, head_repo, clone_url) or None.
-    """
-    try:
-        result = subprocess.run(
-            [
-                "gh",
-                "api",
-                f"repos/{owner}/{repo}/pulls/{pr_number}",
-                "--jq",
-                ".head.ref,.head.repo.full_name,.head.repo.clone_url",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            lines = result.stdout.strip().splitlines()
-            if len(lines) == 3:
-                return lines[0], lines[1], lines[2]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return None
-
-
-def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
-    """Clone the repo and checkout the appropriate ref. Returns the checkout branch name."""
-    url = github_url(t.org_repo)
-    q_short = shlex.quote(short)
-    click.echo(f"Cloning {t.org_repo} (using shared objects)...")
-    runtime.exec(
-        name,
-        [
-            "su",
-            "-",
-            "user",
-            "-c",
-            f"git clone --reference /shared/git/{mount_name} {url} /home/user/{q_short}",
-        ],
-    )
-
-    checkout_branch = ""
-    if t.kind == "issue":
-        branch_name = f"issue-{t.ref}"
-        click.echo(f"Creating branch '{branch_name}' for issue #{t.ref}...")
-        q_branch = shlex.quote(branch_name)
-        runtime.exec(
-            name,
-            [
-                "su",
-                "-",
-                "user",
-                "-c",
-                f"cd /home/user/{q_short} && git checkout -b {q_branch}",
-            ],
-        )
-        checkout_branch = branch_name
-    elif t.kind == "pr":
-        click.echo(f"Checking out PR #{t.ref}...")
-        pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
-        pr_checkout_ok = False
-        if pr_meta:
-            head_ref, head_repo, clone_url = pr_meta
-            is_fork = head_repo.lower() != t.org_repo.lower()
-            q_head = shlex.quote(head_ref)
-
-            try:
-                if is_fork:
-                    # Fork PR: add fork remote, fetch branch, checkout with tracking
-                    fork_owner = head_repo.split("/")[0]
-                    q_owner = shlex.quote(fork_owner)
-                    q_url = shlex.quote(clone_url)
-                    runtime.exec(
-                        name,
-                        [
-                            "su",
-                            "-",
-                            "user",
-                            "-c",
-                            f"cd /home/user/{q_short}"
-                            f" && (git remote add {q_owner} {q_url} 2>/dev/null"
-                            f" || git remote set-url {q_owner} {q_url})"
-                            f" && git fetch {q_owner}"
-                            f" +refs/heads/{q_head}:refs/remotes/{q_owner}/{q_head}"
-                            f" && git checkout -b {q_head} --track {q_owner}/{q_head}",
-                        ],
-                    )
-                else:
-                    # Same-repo PR: fetch branch, checkout with tracking
-                    runtime.exec(
-                        name,
-                        [
-                            "su",
-                            "-",
-                            "user",
-                            "-c",
-                            f"cd /home/user/{q_short}"
-                            f" && git fetch origin"
-                            f" +refs/heads/{q_head}:refs/remotes/origin/{q_head}"
-                            f" && git checkout -b {q_head} --track origin/{q_head}",
-                        ],
-                    )
-                checkout_branch = head_ref
-                pr_checkout_ok = True
-            except RuntimeError:
-                # Branch may have been deleted; fall through to pull ref fallback
-                pass
-
-        if not pr_checkout_ok:
-            # Fallback: gh unavailable or API error
-            checkout_branch = f"pr-{t.ref}"
-            q_branch = shlex.quote(checkout_branch)
-            runtime.exec(
-                name,
-                [
-                    "su",
-                    "-",
-                    "user",
-                    "-c",
-                    f"cd /home/user/{q_short} && git fetch origin"
-                    f" pull/{t.ref}/head:{q_branch} && git checkout {q_branch}",
-                ],
-            )
-    elif t.kind == "branch" and t.new_branch:
-        base = t.base_ref if t.base_ref else "HEAD"
-        q_base = shlex.quote(base)
-        q_branch = shlex.quote(t.ref)
-        if t.base_ref:
-            click.echo(f"Creating branch '{t.ref}' off '{t.base_ref}'...")
-            # Fetch the base ref first if it's not HEAD
-            runtime.exec(
-                name,
-                [
-                    "su",
-                    "-",
-                    "user",
-                    "-c",
-                    f"cd /home/user/{q_short} && git fetch origin {q_base}"
-                    f" && git checkout -b {q_branch} FETCH_HEAD",
-                ],
-            )
-        else:
-            click.echo(f"Creating branch '{t.ref}' off default branch...")
-            runtime.exec(
-                name,
-                [
-                    "su",
-                    "-",
-                    "user",
-                    "-c",
-                    f"cd /home/user/{q_short} && git checkout -b {q_branch}",
-                ],
-            )
-        checkout_branch = t.ref
-    elif t.kind == "branch":
-        click.echo(f"Checking out branch '{t.ref}'...")
-        checkout_branch = t.ref
-        q_branch = shlex.quote(t.ref)
-        try:
-            runtime.exec(
-                name,
-                ["su", "-", "user", "-c", f"cd /home/user/{q_short} && git switch {q_branch}"],
-            )
-        except RuntimeError:
-            if t.local_path:
-                runtime.exec(
-                    name,
-                    [
-                        "su",
-                        "-",
-                        "user",
-                        "-c",
-                        f"cd /home/user/{q_short} && git fetch /shared/git/{mount_name}"
-                        f" {q_branch}:{q_branch} && git switch {q_branch}",
-                    ],
-                )
-            else:
-                raise
-    elif t.kind == "commit":
-        click.echo(f"Checking out commit {t.ref[:12]}...")
-        q_commit = shlex.quote(t.ref)
-        runtime.exec(
-            name,
-            ["su", "-", "user", "-c", f"cd /home/user/{q_short} && git checkout {q_commit}"],
-        )
-
-    return checkout_branch
-
-
-def _finalize_bubble(
-    runtime,
-    name,
-    t,
-    hook,
-    image_name,
-    checkout_branch,
-    short,
-    network,
-    config,
-    editor,
-    no_interactive,
-    machine_readable=False,
-    git_name="",
-    git_email="",
-    command=None,
-    claude_prompt="",
-    gh_token=False,
-):
-    """Post-clone setup: hooks, SSH, registration, and attach."""
-    q_short = shlex.quote(short)
-    project_dir = f"/home/user/{short}"
-    if hook:
-        hook.post_clone(runtime, name, project_dir)
-
-    # Inject GitHub token if requested
-    if gh_token:
-        from .github_token import setup_gh_token
-
-        setup_gh_token(runtime, name, machine_readable=machine_readable)
-
-    # Inject Claude Code task if prompt is provided
-    if claude_prompt and not machine_readable:
-        from .claude import inject_claude_task
-
-        inject_claude_task(runtime, name, project_dir, claude_prompt)
-
-    if not machine_readable:
-        click.echo("Setting up SSH access...")
-    _setup_ssh(runtime, name, host_key_trust=is_enabled(config, "host_key_trust"))
-    _setup_git_config(runtime, name, git_name, git_email)
-
-    commit = ""
-    try:
-        commit = runtime.exec(
-            name,
-            ["su", "-", "user", "-c", f"cd /home/user/{q_short} && git rev-parse HEAD"],
-        ).strip()
-    except Exception:
-        pass
-
-    register_bubble(
-        name,
-        t.org_repo,
-        branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
-        commit=commit,
-        pr=int(t.ref) if t.kind == "pr" else 0,
-        base_image=image_name,
-    )
-
-    workspace_file = hook.workspace_file(project_dir) if hook else None
-
-    if machine_readable:
-        _machine_readable_output(
-            "created",
-            name,
-            project_dir=project_dir,
-            workspace_file=workspace_file,
-            org_repo=t.org_repo,
-            image=image_name,
-            branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
-        )
-        return
-
-    _maybe_install_automation()
-    _maybe_install_skill()
-
-    click.echo(f"Bubble '{name}' created successfully.")
-    click.echo(f"  SSH: ssh bubble-{name}")
-
-    if not no_interactive:
-        _echo_editor_opening(editor)
-        open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
-
-
-def _echo_editor_opening(editor: str):
-    """Print a status message for the editor being opened."""
-    labels = {
-        "vscode": "Opening VSCode...",
-        "emacs": "Opening Emacs...",
-        "neovim": "Opening Neovim...",
-        "shell": "Connecting via SSH...",
-    }
-    click.echo(labels.get(editor, f"Opening {editor}..."))
-
-
-def _machine_readable_output(status: str, name: str, **kwargs):
-    """Output JSON for --machine-readable mode."""
-    data = {"status": status, "name": name}
-    data.update({k: v for k, v in kwargs.items() if v is not None})
-    click.echo(json.dumps(data))
-
-
-def _inject_local_ssh_keys(remote_host, container_name: str):
-    """Inject local SSH public keys into a remote container's authorized_keys.
-
-    The remote `bubble open` only injects the remote host's keys. For the
-    chained ProxyCommand (local → remote → container) to work, the local
-    machine's keys must also be present.
-    """
-    from .remote import _ssh_run
-
-    ssh_dir = Path.home() / ".ssh"
-    pub_keys = []
-    for key_file in ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]:
-        key_path = ssh_dir / key_file
-        if key_path.exists():
-            pub_keys.append(key_path.read_text().strip())
-    if not pub_keys:
-        return
-
-    keys_str = "\\n".join(pub_keys)
-    # Append local keys to the container's authorized_keys via incus exec
-    _ssh_run(
-        remote_host,
-        [
-            "incus",
-            "exec",
-            container_name,
-            "--",
-            "su",
-            "-",
-            "user",
-            "-c",
-            f"mkdir -p ~/.ssh && chmod 700 ~/.ssh "
-            f'&& printf "{keys_str}\\n" >> ~/.ssh/authorized_keys '
-            f"&& chmod 600 ~/.ssh/authorized_keys",
-        ],
-        timeout=15,
-    )
-
-
 def _open_remote(
     remote_host,
     target,
@@ -1628,7 +257,7 @@ def _open_remote(
     org_repo = result.get("org_repo", "")
 
     # Inject local SSH keys into the container so the chained ProxyCommand works
-    _inject_local_ssh_keys(remote_host, name)
+    inject_local_ssh_keys(remote_host, name)
 
     # Inject GitHub token from local host into the remote container
     if gh_token:
@@ -1653,8 +282,55 @@ def _open_remote(
     click.echo(f"  SSH: ssh bubble-{name}")
 
     if not no_interactive:
-        _echo_editor_opening(editor)
+        echo_editor_opening(editor)
         open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
+
+
+def _reattach(runtime, name, editor, no_interactive, command=None):
+    """Re-attach to an existing container."""
+    ensure_running(runtime, name)
+
+    if no_interactive:
+        click.echo(f"Bubble '{name}' is running.")
+        return
+
+    project_dir = detect_project_dir(runtime, name)
+
+    # Pull latest if the working tree is clean
+    if project_dir:
+        try:
+            q_dir = shlex.quote(project_dir)
+            status = runtime.exec(
+                name,
+                ["su", "-", "user", "-c", f"cd {q_dir} && git status --porcelain -uno"],
+            ).strip()
+            if not status:
+                # Only pull if there's an upstream tracking branch
+                has_upstream = runtime.exec(
+                    name,
+                    [
+                        "su",
+                        "-",
+                        "user",
+                        "-c",
+                        f"cd {q_dir} && git rev-parse --abbrev-ref"
+                        " @{upstream} 2>/dev/null || true",
+                    ],
+                ).strip()
+                if has_upstream:
+                    click.echo("Working tree is clean, pulling latest...")
+                    try:
+                        runtime.exec(
+                            name,
+                            ["su", "-", "user", "-c", f"cd {q_dir} && git pull --ff-only"],
+                        )
+                    except RuntimeError:
+                        pass  # Silently continue if pull fails
+        except RuntimeError:
+            pass  # Can't check status, skip pull
+
+    echo_editor_opening(editor)
+    open_editor(editor, name, project_dir, command=command)
 
 
 # The "open" command is hidden from help because users invoke it implicitly via
@@ -1821,7 +497,7 @@ def open_cmd(
 
     # Auto-detect git identity from host if not explicitly provided
     if git_name is None or git_email is None:
-        auto_name, auto_email = _get_host_git_identity()
+        auto_name, auto_email = get_host_git_identity()
         if git_name is None:
             git_name = auto_name
         if git_email is None:
@@ -1869,7 +545,7 @@ def open_cmd(
                 err=True,
             )
             sys.exit(1)
-        _open_native(target, editor, no_interactive, custom_name, command=command_args)
+        open_native(target, editor, no_interactive, custom_name, command=command_args)
         return
 
     # Priority: --local > --ssh > --cloud > [cloud] default > [remote] default_host
@@ -1944,7 +620,7 @@ def open_cmd(
         cc_mounts = claude_config_mounts(include_credentials=include_creds)
         # Suppress auto mounts that overlap with user mounts (exact or ancestry)
         user_targets = {Path(m.target) for m in mount_specs}
-        cc_mounts = [m for m in cc_mounts if not _mount_overlaps(Path(m.target), user_targets)]
+        cc_mounts = [m for m in cc_mounts if not mount_overlaps(Path(m.target), user_targets)]
         # Offer to symlink ~/.bubble/claude-projects/ to ~/.claude/projects/
         if not machine_readable:
             maybe_symlink_claude_projects()
@@ -1953,7 +629,7 @@ def open_cmd(
     ec_mounts = editor_config_mounts(editor)
     if ec_mounts:
         user_targets = {Path(m.target) for m in mount_specs}
-        ec_mounts = [m for m in ec_mounts if not _mount_overlaps(Path(m.target), user_targets)]
+        ec_mounts = [m for m in ec_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
     # Nag about gh token if not enabled
     if not gh_token and not machine_readable:
@@ -1969,16 +645,16 @@ def open_cmd(
     runtime = get_runtime(config)
 
     if not machine_readable:
-        _maybe_rebuild_base_image()
-        _maybe_rebuild_tools(runtime)
-        _maybe_rebuild_customize()
+        maybe_rebuild_base_image()
+        maybe_rebuild_tools(runtime)
+        maybe_rebuild_customize()
 
     # Check if target matches an existing container
-    existing = _find_existing_container(runtime, target)
+    existing = find_existing_container(runtime, target)
     if existing:
         if machine_readable:
-            project_dir = _detect_project_dir(runtime, existing)
-            _machine_readable_output("reattached", existing, project_dir=project_dir)
+            project_dir = detect_project_dir(runtime, existing)
+            machine_readable_output("reattached", existing, project_dir=project_dir)
             return
         _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
@@ -1989,7 +665,7 @@ def open_cmd(
         t = parse_target(target, registry)
     except TargetParseError as e:
         if machine_readable:
-            _machine_readable_output("error", "", message=str(e))
+            machine_readable_output("error", "", message=str(e))
             sys.exit(1)
         click.echo(str(e), err=True)
         sys.exit(1)
@@ -2012,7 +688,7 @@ def open_cmd(
 
     # Generate name and check for existing container with same target
     name = _generate_bubble_name(t, custom_name)
-    existing = _find_existing_container(
+    existing = find_existing_container(
         runtime,
         target,
         generated_name=name,
@@ -2022,8 +698,8 @@ def open_cmd(
     )
     if existing:
         if machine_readable:
-            project_dir = _detect_project_dir(runtime, existing)
-            _machine_readable_output(
+            project_dir = detect_project_dir(runtime, existing)
+            machine_readable_output(
                 "reattached", existing, project_dir=project_dir, org_repo=t.org_repo
             )
             return
@@ -2033,7 +709,7 @@ def open_cmd(
     # Resolve git source, detect language, and build image
     ensure_dirs()
     ref_path, mount_name = _resolve_ref_source(t, no_clone)
-    hook, image_name = _detect_and_build_image(runtime, ref_path, t, editor=editor)
+    hook, image_name = detect_and_build_image(runtime, ref_path, t, editor=editor)
 
     # Pre-fetch dependency bare repos for Lake pre-population
     dep_mounts = {}  # repo_name -> host_path
@@ -2066,7 +742,7 @@ def open_cmd(
     # Provision, clone, and finalize
     short = repo_short_name(t.org_repo)
     try:
-        _provision_container(
+        provision_container(
             runtime,
             name,
             image_name,
@@ -2080,7 +756,7 @@ def open_cmd(
             claude_mounts=cc_mounts,
             editor_mounts=ec_mounts,
         )
-        checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
+        checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 
         # Resolve Claude prompt: env var > auto-generate for issues
         claude_prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
@@ -2090,7 +766,7 @@ def open_cmd(
             click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
             claude_prompt = generate_issue_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
 
-        _finalize_bubble(
+        finalize_bubble(
             runtime,
             name,
             t,
@@ -2120,947 +796,15 @@ def open_cmd(
         raise
 
 
-def _find_existing_native(name: str) -> dict | None:
-    """Check if a native workspace already exists in the registry."""
-    info = get_bubble_info(name)
-    if info and info.get("native"):
-        return info
-    return None
-
-
-def _open_native(
-    target,
-    editor,
-    no_interactive,
-    custom_name,
-    command=None,
-):
-    """Open a native (non-containerized) workspace."""
-    registry = RepoRegistry()
-    try:
-        t = parse_target(target, registry)
-    except TargetParseError as e:
-        click.echo(str(e), err=True)
-        sys.exit(1)
-    registry.register(t.owner, t.repo)
-
-    name = _generate_bubble_name(t, custom_name)
-
-    # Check for existing native workspace
-    existing = _find_existing_native(name)
-    if existing:
-        native_path = existing.get("native_path", "")
-        if native_path and Path(native_path).exists():
-            click.echo()
-            click.echo(
-                "WARNING: NATIVE MODE -- no containerization!\n"
-                "This workspace runs directly on your machine with full filesystem\n"
-                "and network access. Use bubble without --native for isolation."
-            )
-            click.echo()
-            click.echo(f"Reattaching to native workspace '{name}' at {native_path}")
-            if not no_interactive:
-                open_editor_native(editor, native_path, command=command)
-            return
-
-    ensure_dirs()
-
-    # Deduplicate name against all registered bubbles (native + container)
-    reg = load_registry()
-    existing_names = set(reg.get("bubbles", {}).keys())
-    name = deduplicate_name(name, existing_names)
-
-    workspace_path = NATIVE_DIR / name
-    if workspace_path.exists():
-        click.echo(f"Native workspace directory already exists: {workspace_path}", err=True)
-        sys.exit(1)
-
-    # Print warning
-    click.echo()
-    click.echo(
-        "WARNING: NATIVE MODE -- no containerization!\n"
-        "This workspace runs directly on your machine with full filesystem\n"
-        "and network access. Use bubble without --native for isolation."
-    )
-    click.echo()
-
-    # Resolve reference source and clone
-    url = github_url(t.org_repo)
-    try:
-        if t.local_path:
-            ref_path = t.local_path
-            click.echo("Cloning from local path (using shared objects)...")
-        else:
-            ref_path = str(init_bare_repo(t.org_repo))
-            if t.kind == "pr":
-                click.echo(f"Fetching PR #{t.ref}...")
-                try:
-                    fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
-                except Exception:
-                    pass
-            click.echo(f"Cloning {t.org_repo} (using shared objects)...")
-
-        subprocess.run(
-            ["git", "clone", "--reference", ref_path, url, str(workspace_path)],
-            check=True,
-        )
-
-        # Checkout appropriate ref
-        checkout_branch = ""
-        if t.kind == "pr":
-            click.echo(f"Checking out PR #{t.ref}...")
-            pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
-            pr_checkout_ok = False
-            if pr_meta:
-                head_ref, head_repo, clone_url = pr_meta
-                is_fork = head_repo.lower() != t.org_repo.lower()
-                try:
-                    if is_fork:
-                        fork_owner = head_repo.split("/")[0]
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                str(workspace_path),
-                                "remote",
-                                "add",
-                                fork_owner,
-                                clone_url,
-                            ],
-                            capture_output=True,
-                        )
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                str(workspace_path),
-                                "fetch",
-                                fork_owner,
-                                f"+refs/heads/{head_ref}:refs/remotes/{fork_owner}/{head_ref}",
-                            ],
-                            check=True,
-                        )
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                str(workspace_path),
-                                "checkout",
-                                "-b",
-                                head_ref,
-                                "--track",
-                                f"{fork_owner}/{head_ref}",
-                            ],
-                            check=True,
-                        )
-                    else:
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                str(workspace_path),
-                                "fetch",
-                                "origin",
-                                f"+refs/heads/{head_ref}:refs/remotes/origin/{head_ref}",
-                            ],
-                            check=True,
-                        )
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                str(workspace_path),
-                                "checkout",
-                                "-b",
-                                head_ref,
-                                "--track",
-                                f"origin/{head_ref}",
-                            ],
-                            check=True,
-                        )
-                    checkout_branch = head_ref
-                    pr_checkout_ok = True
-                except subprocess.CalledProcessError:
-                    pass
-
-            if not pr_checkout_ok:
-                checkout_branch = f"pr-{t.ref}"
-                subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        str(workspace_path),
-                        "fetch",
-                        "origin",
-                        f"pull/{t.ref}/head:{checkout_branch}",
-                    ],
-                    check=True,
-                )
-                subprocess.run(
-                    ["git", "-C", str(workspace_path), "checkout", checkout_branch],
-                    check=True,
-                )
-        elif t.kind == "branch":
-            click.echo(f"Checking out branch '{t.ref}'...")
-            checkout_branch = t.ref
-            if t.local_path:
-                # Always fetch from local repo to pick up potentially unpushed commits.
-                # Use + refspec to force-update if origin already has an older version.
-                subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        str(workspace_path),
-                        "fetch",
-                        t.local_path,
-                        f"+refs/heads/{t.ref}:refs/heads/{t.ref}",
-                    ],
-                    capture_output=True,
-                )
-            try:
-                subprocess.run(
-                    ["git", "-C", str(workspace_path), "switch", t.ref],
-                    check=True,
-                    capture_output=True,
-                )
-            except subprocess.CalledProcessError:
-                if t.local_path:
-                    # Branch wasn't on origin either; fetch and retry
-                    subprocess.run(
-                        [
-                            "git",
-                            "-C",
-                            str(workspace_path),
-                            "fetch",
-                            t.local_path,
-                            f"{t.ref}:{t.ref}",
-                        ],
-                        check=True,
-                    )
-                    subprocess.run(
-                        ["git", "-C", str(workspace_path), "switch", t.ref],
-                        check=True,
-                    )
-                else:
-                    raise
-        elif t.kind == "commit":
-            click.echo(f"Checking out commit {t.ref[:12]}...")
-            subprocess.run(
-                ["git", "-C", str(workspace_path), "checkout", t.ref],
-                check=True,
-            )
-
-        # Get commit hash
-        commit = ""
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(workspace_path), "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-            )
-            commit = result.stdout.strip()
-        except Exception:
-            pass
-
-        register_bubble(
-            name,
-            t.org_repo,
-            branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
-            commit=commit,
-            pr=int(t.ref) if t.kind == "pr" else 0,
-            native=True,
-            native_path=str(workspace_path),
-        )
-    except subprocess.CalledProcessError as e:
-        if workspace_path.exists():
-            shutil.rmtree(workspace_path)
-        click.echo(f"Failed to create native workspace: {e}", err=True)
-        sys.exit(1)
-
-    click.echo(f"Native workspace '{name}' created at {workspace_path}")
-
-    if not no_interactive:
-        if editor == "shell":
-            click.echo("Opening shell...")
-        else:
-            click.echo("Opening VSCode...")
-        open_editor_native(editor, str(workspace_path), command=command)
-
-
-def _reattach(
-    runtime: ContainerRuntime, name: str, editor: str, no_interactive: bool, command=None
-):
-    """Re-attach to an existing container."""
-    _ensure_running(runtime, name)
-
-    if no_interactive:
-        click.echo(f"Bubble '{name}' is running.")
-        return
-
-    project_dir = _detect_project_dir(runtime, name)
-
-    # Pull latest if the working tree is clean
-    if project_dir:
-        try:
-            q_dir = shlex.quote(project_dir)
-            status = runtime.exec(
-                name,
-                ["su", "-", "user", "-c", f"cd {q_dir} && git status --porcelain -uno"],
-            ).strip()
-            if not status:
-                # Only pull if there's an upstream tracking branch
-                has_upstream = runtime.exec(
-                    name,
-                    [
-                        "su",
-                        "-",
-                        "user",
-                        "-c",
-                        f"cd {q_dir} && git rev-parse --abbrev-ref"
-                        " @{upstream} 2>/dev/null || true",
-                    ],
-                ).strip()
-                if has_upstream:
-                    click.echo("Working tree is clean, pulling latest...")
-                    try:
-                        runtime.exec(
-                            name,
-                            ["su", "-", "user", "-c", f"cd {q_dir} && git pull --ff-only"],
-                        )
-                    except RuntimeError:
-                        pass  # Silently continue if pull fails
-        except RuntimeError:
-            pass  # Can't check status, skip pull
-
-    _echo_editor_opening(editor)
-    open_editor(editor, name, project_dir, command=command)
-
-
-def _format_bytes(n: int) -> str:
-    """Format byte count as human-readable string."""
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
-        n /= 1024
-    return f"{n:.1f} PB"
-
-
-def _format_age(dt: "datetime | None") -> str:  # noqa: F821
-    """Format a datetime as a human-readable age string."""
-    if dt is None:
-        return "-"
-    from datetime import datetime, timezone
-
-    delta = datetime.now(timezone.utc) - dt
-    seconds = int(delta.total_seconds())
-    if seconds < 60:
-        return "just now"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes}m ago"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h ago"
-    days = hours // 24
-    if days < 30:
-        return f"{days}d ago"
-    months = days // 30
-    return f"{months}mo ago"
-
-
 # ---------------------------------------------------------------------------
-# list
+# Register commands from submodules
 # ---------------------------------------------------------------------------
 
-
-def _parse_iso(s: str | None):
-    """Parse an ISO datetime string, returning None on failure."""
-    if not s:
-        return None
-    from datetime import datetime, timezone
-
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except (ValueError, TypeError):
-        return None
-
-
-def _is_cloud_host(hostname: str) -> bool:
-    """Check if a hostname matches the cloud server IP."""
-    from .cloud import _load_state
-
-    state = _load_state()
-    return bool(state and state.get("ipv4") == hostname)
-
-
-def _remote_entries_from_registry() -> list[dict]:
-    """Build list entries for remote bubbles from the registry.
-
-    Returns a list of dicts with keys: name, state, location, created_at,
-    last_used_at, remote_host_spec.  State defaults to ``"unknown"``.
-    """
-    registry = load_registry()
-    entries = []
-    for name, info in registry.get("bubbles", {}).items():
-        host_spec = info.get("remote_host", "")
-        if not host_spec:
-            continue
-        from .remote import RemoteHost
-
-        try:
-            host = RemoteHost.parse(host_spec)
-        except ValueError:
-            continue
-        location = "cloud" if _is_cloud_host(host.hostname) else host_spec
-        entries.append(
-            {
-                "name": name,
-                "state": "unknown",
-                "location": location,
-                "created_at": _parse_iso(info.get("created_at")),
-                "last_used_at": None,
-                "remote_host_spec": host_spec,
-            }
-        )
-    return entries
-
-
-def _native_entries_from_registry(show_clean: bool = False) -> list[dict]:
-    """Build list entries for native workspaces from the registry."""
-    registry = load_registry()
-    entries = []
-    for name, info in registry.get("bubbles", {}).items():
-        if not info.get("native"):
-            continue
-        native_path = info.get("native_path", "")
-        state = "exists" if native_path and Path(native_path).is_dir() else "missing"
-        entry = {
-            "name": name,
-            "state": state,
-            "location": "native",
-            "created_at": _parse_iso(info.get("created_at")),
-            "last_used_at": None,
-            "native_path": native_path,
-        }
-        if show_clean and state == "exists":
-            entry["clean_status"] = check_native_clean(native_path, name)
-        entries.append(entry)
-    return entries
-
-
-def _query_remote_list(
-    host_spec: str, is_cloud: bool, verbose: bool = False, timeout: int = 15
-) -> list[dict] | None:
-    """Query a remote host for its bubble list via SSH.
-
-    For cloud hosts, checks the Hetzner API first and skips SSH when the
-    server is off.  Returns parsed JSON list or *None* on failure.
-    """
-    if is_cloud:
-        try:
-            from .cloud import get_server_status
-
-            status = get_server_status()
-            if not status or status.get("status") != "running":
-                return None
-        except Exception:
-            return None
-
-    from .remote import RemoteHost, apply_cloud_ssh_options, remote_bubble
-
-    try:
-        host = RemoteHost.parse(host_spec)
-        if is_cloud:
-            apply_cloud_ssh_options(host)
-        args = ["list", "--json"]
-        if verbose:
-            args.append("-v")
-        result = remote_bubble(host, args, timeout=timeout)
-        if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout.strip())
-    except Exception:
-        pass
-    return None
-
-
-@main.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-@click.option("-v", "--verbose", is_flag=True, help="Include disk usage and IPv4 (slower)")
-@click.option("-c", "--clean", "show_clean", is_flag=True, help="Check cleanness status (slower)")
-@click.option("--cloud", "query_cloud", is_flag=True, help="Query cloud server for live status")
-@click.option("--ssh", "ssh_host", default=None, help="Query SSH host for live status")
-@click.option("--local", "local_only", is_flag=True, help="Show only local bubbles")
-def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only):
-    """List all bubbles."""
-    config = load_config()
-    runtime = get_runtime(config, ensure_ready=False)
-
-    # --- Local containers ---
-    from .images.builder import is_builder_container
-
-    containers = [
-        c for c in runtime.list_containers(fast=not verbose) if not is_builder_container(c.name)
-    ]
-
-    clean_statuses = {}
-    if show_clean:
-        for c in containers:
-            if c.state == "running":
-                clean_statuses[c.name] = check_clean(runtime, c.name)
-            else:
-                clean_statuses[c.name] = CleanStatus(clean=False, error="not running")
-
-    local_names = {c.name for c in containers}
-    entries = []
-    for c in containers:
-        entry = {
-            "name": c.name,
-            "state": c.state,
-            "location": "local",
-            "created_at": c.created_at,
-            "last_used_at": c.last_used_at,
-        }
-        if verbose:
-            entry["ipv4"] = c.ipv4
-            entry["disk_usage"] = c.disk_usage
-        if show_clean:
-            entry["clean_status"] = clean_statuses.get(c.name)
-        entries.append(entry)
-
-    # --- Remote bubbles from registry ---
-    has_remote = False
-    if not local_only:
-        remote_entries = _remote_entries_from_registry()
-        # Skip any that are also local (shouldn't happen, but be safe)
-        remote_entries = [e for e in remote_entries if e["name"] not in local_names]
-        has_remote = bool(remote_entries)
-
-        # Live queries: group remote entries by (host_spec, is_cloud)
-        queried_hosts: dict[str, list[dict] | None] = {}
-        if query_cloud or ssh_host:
-            # Determine which host specs to query
-            specs_to_query: set[str] = set()
-            for e in remote_entries:
-                is_cloud = e["location"] == "cloud"
-                if is_cloud and query_cloud:
-                    specs_to_query.add(e["remote_host_spec"])
-                elif not is_cloud and ssh_host:
-                    from .remote import RemoteHost
-
-                    try:
-                        query_host = RemoteHost.parse(ssh_host)
-                        entry_host = RemoteHost.parse(e["remote_host_spec"])
-                        if query_host.hostname == entry_host.hostname:
-                            specs_to_query.add(e["remote_host_spec"])
-                    except ValueError:
-                        pass
-
-            if ssh_host and not specs_to_query:
-                click.echo(
-                    f"Warning: no remote bubbles found for host '{ssh_host}'.",
-                    err=True,
-                )
-
-            for spec in specs_to_query:
-                is_cloud = any(
-                    e["remote_host_spec"] == spec and e["location"] == "cloud"
-                    for e in remote_entries
-                )
-                queried_hosts[spec] = _query_remote_list(
-                    spec,
-                    is_cloud,
-                    verbose=verbose,
-                )
-
-        # Update remote entries with live data where available
-        for e in remote_entries:
-            spec = e["remote_host_spec"]
-            live_data = queried_hosts.get(spec)
-            if live_data is not None:
-                # Find matching container in live data
-                for rc in live_data:
-                    if rc["name"] == e["name"]:
-                        e["state"] = rc.get("state", "unknown")
-                        e["created_at"] = _parse_iso(rc.get("created_at")) or e["created_at"]
-                        e["last_used_at"] = _parse_iso(rc.get("last_used_at"))
-                        if verbose:
-                            e["ipv4"] = rc.get("ipv4")
-                            e["disk_usage"] = rc.get("disk_usage")
-                        break
-                else:
-                    # Registered locally but not found on remote
-                    e["state"] = "not found"
-            elif spec in queried_hosts:
-                # Query was attempted but failed
-                is_cloud = e["location"] == "cloud"
-                if is_cloud:
-                    try:
-                        from .cloud import get_server_status
-
-                        status = get_server_status()
-                        if status and status.get("status") == "off":
-                            e["state"] = "server off"
-                        else:
-                            e["state"] = "unreachable"
-                    except Exception:
-                        e["state"] = "unreachable"
-                else:
-                    e["state"] = "unreachable"
-
-        entries.extend(remote_entries)
-
-    # --- Native workspaces from registry (always local) ---
-    native_entries = _native_entries_from_registry(show_clean=show_clean)
-    native_entries = [e for e in native_entries if e["name"] not in local_names]
-    entries.extend(native_entries)
-    if native_entries:
-        has_remote = True  # Force showing location column
-
-    # --- Output ---
-    if as_json:
-        data = []
-        for e in entries:
-            d = {
-                "name": e["name"],
-                "state": e["state"],
-                "location": e["location"],
-                "created_at": (
-                    e["created_at"].isoformat()
-                    if hasattr(e.get("created_at"), "isoformat")
-                    else e.get("created_at")
-                ),
-                "last_used_at": (
-                    e["last_used_at"].isoformat()
-                    if hasattr(e.get("last_used_at"), "isoformat")
-                    else e.get("last_used_at")
-                ),
-            }
-            if verbose:
-                d["ipv4"] = e.get("ipv4")
-                d["disk_usage"] = e.get("disk_usage")
-            if show_clean:
-                cs = e.get("clean_status")
-                if cs and cs.error:
-                    d["clean"] = None
-                elif cs:
-                    d["clean"] = {"status": cs.clean, "reasons": cs.reasons}
-            data.append(d)
-        click.echo(json.dumps(data, indent=2))
-        return
-
-    if not entries:
-        click.echo("No bubbles. Create one with: bubble owner/repo")
-        return
-
-    # Build header and rows based on flags
-    show_location = has_remote or local_only
-    header = f"{'NAME':<30} {'STATE':<12}"
-    if show_location:
-        header += f" {'LOCATION':<18}"
-    header += f" {'CREATED':<12} {'LAST USED':<12}"
-    if verbose:
-        header += f" {'DISK':<10} {'IPv4':<16}"
-    if show_clean:
-        header += " STATUS"
-    click.echo(header)
-    click.echo("-" * len(header))
-    for e in entries:
-        created = _format_age(e.get("created_at"))
-        used = _format_age(e.get("last_used_at"))
-        line = f"{e['name']:<30} {e['state']:<12}"
-        if show_location:
-            line += f" {e['location']:<18}"
-        line += f" {created:<12} {used:<12}"
-        if verbose:
-            disk = _format_bytes(e["disk_usage"]) if e.get("disk_usage") else "-"
-            ipv4 = e.get("ipv4") or "-"
-            line += f" {disk:<10} {ipv4:<16}"
-        if show_clean:
-            cs = e.get("clean_status")
-            line += f" {cs.summary}" if cs else ""
-        click.echo(line)
-
-    # Help text hints
-    hints = []
-    if not verbose:
-        hints.append("-v for disk usage")
-    if not show_clean:
-        hints.append("-c for cleanness")
-    if has_remote and not query_cloud:
-        # Check if any remote entries are cloud
-        if any(e["location"] == "cloud" for e in entries):
-            hints.append("--cloud for live cloud status")
-    if has_remote and not ssh_host:
-        ssh_hosts = {
-            e["remote_host_spec"]
-            for e in entries
-            if e.get("remote_host_spec") and e["location"] != "cloud"
-        }
-        if ssh_hosts:
-            hints.append("--ssh HOST for live remote status")
-    if hints:
-        click.echo(f"\nUse {', '.join(hints)}.")
-
-
-# ---------------------------------------------------------------------------
-# pause / pop
-# ---------------------------------------------------------------------------
-
-
-@main.command()
-@click.argument("name")
-def pause(name):
-    """Pause (freeze) a bubble."""
-    info = get_bubble_info(name)
-    if info and info.get("native"):
-        click.echo("Native workspaces don't support pause/resume (no container state).", err=True)
-        sys.exit(1)
-    # Auto-route to remote host if the bubble is registered there
-    if info and info.get("remote_host"):
-        from .remote import RemoteHost, apply_cloud_ssh_options, remote_command
-
-        host = RemoteHost.parse(info["remote_host"])
-        apply_cloud_ssh_options(host)
-        result = remote_command(host, ["pause", name])
-        if result.returncode != 0:
-            click.echo(f"Failed to pause on {host.ssh_destination}: {result.stderr}", err=True)
-            sys.exit(1)
-        click.echo(f"Bubble '{name}' paused on {host.ssh_destination}.")
-        return
-
-    config = load_config()
-    runtime = get_runtime(config, ensure_ready=False)
-    runtime.freeze(name)
-    click.echo(f"Bubble '{name}' paused.")
-
-
-@main.command()
-@click.argument("name")
-@click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
-def pop(name, force):
-    """Pop a bubble (destroy it permanently)."""
-    # Auto-route to remote host if the bubble is registered there
-    info = get_bubble_info(name)
-    if info and info.get("remote_host"):
-        from .remote import RemoteHost, apply_cloud_ssh_options, remote_command
-
-        host = RemoteHost.parse(info["remote_host"])
-        apply_cloud_ssh_options(host)
-        if not force:
-            click.confirm(
-                f"Permanently pop bubble '{name}' on {host.ssh_destination}?",
-                abort=True,
-            )
-        result = remote_command(host, ["pop", "-f", name])
-        if result.returncode != 0:
-            click.echo(f"Failed to pop on {host.ssh_destination}: {result.stderr}", err=True)
-            sys.exit(1)
-        remove_ssh_config(name)
-        unregister_bubble(name)
-        click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
-        return
-
-    # Handle native workspaces
-    if info and info.get("native"):
-        native_path = info.get("native_path", "")
-        if not force and native_path and Path(native_path).is_dir():
-            cs = check_native_clean(native_path, name)
-            if cs.clean:
-                click.echo(f"Native workspace '{name}' is clean. ", nl=False)
-            elif cs.error:
-                click.confirm(
-                    f"Cannot verify cleanness ({cs.error}). "
-                    f"Permanently pop native workspace '{name}'?",
-                    abort=True,
-                )
-            else:
-                reasons = format_reasons(cs.reasons)
-                click.echo("Warning: workspace has unsaved work:")
-                for r in reasons:
-                    click.echo(f"  - {r}")
-                click.confirm(f"Permanently pop native workspace '{name}'?", abort=True)
-
-        if native_path and Path(native_path).is_dir():
-            resolved = Path(native_path).resolve()
-            native_dir_resolved = NATIVE_DIR.resolve()
-            if not str(resolved).startswith(str(native_dir_resolved) + os.sep):
-                click.echo(
-                    f"Refusing to delete: path '{native_path}' is not under {NATIVE_DIR}",
-                    err=True,
-                )
-                sys.exit(1)
-            shutil.rmtree(resolved)
-        unregister_bubble(name)
-        click.echo(f"Native workspace '{name}' popped.")
-        return
-
-    config = load_config()
-    runtime = get_runtime(config, ensure_ready=False)
-
-    if not force:
-        cs = check_clean(runtime, name)
-        if cs.clean:
-            click.echo(f"Bubble '{name}' is clean. ", nl=False)
-        elif cs.error:
-            click.confirm(
-                f"Cannot verify cleanness ({cs.error}). Permanently pop bubble '{name}'?",
-                abort=True,
-            )
-        else:
-            reasons = format_reasons(cs.reasons)
-            click.echo("Warning: bubble has unsaved work:")
-            for r in reasons:
-                click.echo(f"  - {r}")
-            click.confirm(f"Permanently pop bubble '{name}'?", abort=True)
-
-    import time
-
-    for attempt in range(3):
-        try:
-            runtime.delete(name, force=True)
-            break
-        except subprocess.CalledProcessError as e:
-            msg = ((e.stderr or "") + " " + (e.stdout or "")).strip()
-            if "not found" in msg.lower() or "does not exist" in msg.lower():
-                break  # Already gone, just clean up registry/ssh
-            if "busy" in msg.lower() and attempt < 2:
-                click.echo(f"Container busy, retrying ({attempt + 1}/3)...")
-                time.sleep(3 * (attempt + 1))
-                continue
-            click.echo(f"Failed to delete container: {msg}", err=True)
-            click.echo("Try 'bubble doctor' to diagnose and fix the issue.", err=True)
-            sys.exit(1)
-
-    remove_ssh_config(name)
-    unregister_bubble(name)
-    click.echo(f"Bubble '{name}' popped.")
-
-
-@main.command()
-@click.option("-n", "--dry-run", is_flag=True, help="Show what would be popped")
-@click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
-@click.option(
-    "-a",
-    "--all",
-    "check_all",
-    is_flag=True,
-    help="Start stopped/frozen bubbles to check them",
-)
-@click.option("--age", type=int, default=0, help="Only clean up bubbles unused for N+ days")
-def cleanup(dry_run, force, check_all, age):
-    """Pop all clean bubbles (safe, no unsaved work)."""
-    config = load_config()
-    runtime = get_runtime(config, ensure_ready=False)
-
-    from .images.builder import is_builder_container
-
-    containers = runtime.list_containers(fast=True)
-
-    # Clean up stale builder containers (leftover from interrupted image builds).
-    # Skip running builders — they may be active image builds.
-    builders = [c for c in containers if is_builder_container(c.name) and c.state != "running"]
-    for c in builders:
-        if dry_run:
-            click.echo(f"  Would remove stale builder: {c.name}")
-        else:
-            try:
-                runtime.delete(c.name, force=True)
-                click.echo(f"  Removed stale builder: {c.name}")
-            except Exception as e:
-                click.echo(f"  Could not remove builder {c.name}: {e}")
-
-    # Filter out builder containers from the bubble check
-    containers = [c for c in containers if not is_builder_container(c.name)]
-    to_check = [c for c in containers if c.state == "running"]
-    to_start = []
-    if check_all:
-        to_start = [c for c in containers if c.state in ("stopped", "frozen")]
-
-    if not to_check and not to_start:
-        click.echo("No bubbles to check.")
-        return
-
-    if age > 0:
-        from datetime import datetime, timedelta, timezone
-
-        cutoff = datetime.now(timezone.utc) - timedelta(days=age)
-        to_check = [c for c in to_check if c.last_used_at and c.last_used_at < cutoff]
-        to_start = [c for c in to_start if c.last_used_at and c.last_used_at < cutoff]
-        if not to_check and not to_start:
-            click.echo(f"No bubbles unused for {age}+ days.")
-            return
-
-    # Start stopped/frozen containers temporarily for checking
-    started_containers = []
-    for c in to_start:
-        try:
-            click.echo(f"  Starting {c.name} for inspection...")
-            if c.state == "frozen":
-                runtime.unfreeze(c.name)
-            else:
-                runtime.start(c.name)
-            started_containers.append(c)
-            to_check.append(c)
-        except Exception as e:
-            click.echo(f"  {c.name:<30} could not start: {e}")
-
-    total = len(to_check)
-    click.echo(f"Checking {total} bubble{'s' if total != 1 else ''}...")
-    clean_list = []
-    dirty_count = 0
-    for c in to_check:
-        cs = check_clean(runtime, c.name)
-        if cs.clean:
-            click.echo(f"  {c.name:<30} clean")
-            clean_list.append(c.name)
-        else:
-            reasons = cs.summary
-            click.echo(f"  {c.name:<30} {reasons}")
-            dirty_count += 1
-
-    # Re-stop containers that were started just for checking and are dirty
-    started_names = {c.name for c in started_containers}
-    clean_names = set(clean_list)
-    for c in started_containers:
-        if c.name not in clean_names:
-            try:
-                runtime.stop(c.name)
-            except Exception:
-                pass
-
-    if not clean_list:
-        click.echo("No clean bubbles to pop.")
-        return
-
-    if dry_run:
-        n = len(clean_list)
-        click.echo(f"\nWould pop {n} clean bubble{'s' if n != 1 else ''}.")
-        # Re-stop clean containers that were started for checking
-        for name in clean_list:
-            if name in started_names:
-                try:
-                    runtime.stop(name)
-                except Exception:
-                    pass
-        return
-
-    if not force:
-        click.confirm(
-            f"\nPop {len(clean_list)} clean bubble{'s' if len(clean_list) != 1 else ''}?",
-            abort=True,
-        )
-
-    for name in clean_list:
-        runtime.delete(name, force=True)
-        remove_ssh_config(name)
-        unregister_bubble(name)
-        click.echo(f"  Popped {name}")
-
-    if dirty_count:
-        click.echo(f"Kept {dirty_count} dirty bubble{'s' if dirty_count != 1 else ''}.")
+from .commands.lifecycle import register_lifecycle_commands  # noqa: E402
+from .commands.list_cmd import register_list_command  # noqa: E402
+
+register_list_command(main)
+register_lifecycle_commands(main)
 
 
 # ---------------------------------------------------------------------------
@@ -3199,11 +943,13 @@ def network_group():
 @click.argument("name")
 def network_apply(name):
     """Apply network allowlist to a bubble."""
+    from .container_helpers import apply_network
+
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
-    _ensure_running(runtime, name)
+    ensure_running(runtime, name)
 
-    _apply_network(runtime, name, config)
+    apply_network(runtime, name, config)
 
 
 @network_group.command("remove")
@@ -3212,7 +958,7 @@ def network_remove(name):
     """Remove network restrictions from a bubble."""
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
-    _ensure_running(runtime, name)
+    ensure_running(runtime, name)
 
     from .network import remove_allowlist
 
@@ -3357,6 +1103,8 @@ def relay_disable():
 @relay_group.command("status")
 def relay_status():
     """Show relay status."""
+    import platform
+
     config = load_config()
     enabled = is_enabled(config, "relay")
     click.echo(f"  Relay: {'enabled' if enabled else 'disabled'}")
@@ -4056,7 +1804,6 @@ def doctor():
             stdin=subprocess.DEVNULL,
         )
         _restore_terminal(saved_tty)
-        import json
 
         all_ops = json.loads(result.stdout) if result.stdout.strip() else []
         # websocket ops are active exec/console sessions (e.g. VS Code SSH), not stuck
