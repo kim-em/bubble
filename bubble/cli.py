@@ -1761,6 +1761,8 @@ def open_cmd(
                 err=True,
             )
             sys.exit(1)
+        if base_ref and not new_branch:
+            click.echo("Warning: --base has no effect without -b/--new-branch", err=True)
         _open_remote(
             remote_host,
             target,

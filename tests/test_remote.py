@@ -243,7 +243,7 @@ class TestRemoteOpenFlagForwarding:
         assert "--base" not in cmd_str
 
     def test_base_ref_alone_forwarded(self):
-        """--base without -b is still forwarded (remote handles the warning)."""
+        """--base without -b is still forwarded to the remote command."""
         cmd_str = self._run_remote_open(base_ref="main")
         assert "--base" in cmd_str
         assert "main" in cmd_str
