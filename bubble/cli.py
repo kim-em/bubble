@@ -287,11 +287,14 @@ def _open_remote(
     # Inject local SSH keys into the container so the chained ProxyCommand works
     inject_local_ssh_keys(remote_host, name)
 
-    # Inject GitHub token from local host into the remote container
+    # Set up GitHub auth via tunneled auth proxy
     if gh_token:
         from .github_token import setup_gh_token
 
-        setup_gh_token(None, name, remote_host=remote_host)
+        owner, repo = "", ""
+        if org_repo and "/" in org_repo:
+            owner, repo = org_repo.split("/", 1)
+        setup_gh_token(None, name, owner=owner, repo=repo, remote_host=remote_host)
 
     # Write local SSH config with chained ProxyCommand through the remote host
     host_key = is_enabled(config, "host_key_trust")

@@ -22,6 +22,8 @@ bubble/
 ├── vscode.py           # SSH config generation + editor launching (VSCode, SSH shell)
 ├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
 ├── relay.py            # Bubble-in-bubble relay daemon (Unix socket, validation, rate limiting)
+├── auth_proxy.py       # HTTP reverse proxy for repo-scoped GitHub auth (token stays on host)
+├── tunnel.py           # SSH reverse tunnel management for remote auth proxy access
 ├── remote.py           # Remote SSH host support: run bubbles on remote machines
 ├── cloud.py            # Hetzner Cloud auto-provisioning (provision, destroy, start, stop)
 ├── claude.py           # Claude Code integration: prompt generation, VS Code task injection
@@ -117,6 +119,17 @@ Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (o
 ### User Customization Script
 Users can place a `customize.sh` script at `~/.bubble/customize.sh` to run custom setup in all container images. The script runs as root as the final step when building any image (base, lean, lean-v4.X.Y). This lets users add tools, dotfiles, shell config, etc. without forking image scripts. The script's content hash is tracked in `~/.bubble/customize-hash`; on `bubble open`, if the hash differs from the stored value, a background rebuild of the base image is triggered (same pattern as VS Code commit hash drift). Code is in `builder.py` (`customize_hash()`, `_run_customize_script()`).
 
+### GitHub Auth Proxy
+The auth proxy (`auth_proxy.py`) provides repo-scoped GitHub authentication without injecting the host's token into containers. It's an HTTP reverse proxy that runs on the host.
+
+**Flow:** Container git → `url.insteadOf` rewrites to `http://127.0.0.1:7654/git/...` → proxy validates `X-Bubble-Token` header → checks path matches allowed `owner/repo` → adds `Authorization: token <real-token>` → forwards to `https://github.com` → returns response.
+
+**Local bubbles:** Exposed into containers via Incus proxy device (`incus config device add ... proxy connect=tcp:host:7654 listen=tcp:127.0.0.1:7654`).
+
+**Remote/cloud bubbles:** An SSH reverse tunnel (`ssh -R 7654:127.0.0.1:7654 remote`) forwards the local proxy port to the remote host. An Incus proxy device on the remote then exposes it into the container. Tunnels are per-remote-host (shared across containers) with PID files in `~/.bubble/tunnels/`. Code is in `tunnel.py`.
+
+**Token management:** Per-container tokens in `~/.bubble/auth-tokens.json` map to `{container, owner, repo}`. Tokens are cleaned up on `bubble pop`. The daemon is managed via launchd/systemd.
+
 ### Security Model
 The `user` account has no sudo and a locked password. Network allowlisting is applied on container creation. SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Each container mounts only its specific bare repo, not the entire git store.
 
@@ -162,6 +175,10 @@ Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest
 - `~/.bubble/tools-hash` — hash of installed tools + script contents (for drift detection)
 - `~/.bubble/customize.sh` — user customization script (run as final step in all image builds)
 - `~/.bubble/customize-hash` — hash of customize.sh (for drift detection)
+- `~/.bubble/auth-tokens.json` — auth proxy token→{container, owner, repo} mapping (mode 0600)
+- `~/.bubble/auth-proxy.port` — auth proxy daemon TCP port
+- `~/.bubble/auth-proxy.log` — auth proxy request log
+- `~/.bubble/tunnels/` — SSH tunnel PID files (keyed by remote host spec)
 - `~/.bubble/cloud.json` — Hetzner Cloud server state (ID, IP, SSH key ID)
 - `~/.bubble/cloud_key` — SSH private key for cloud server (ed25519, mode 0600)
 - `~/.bubble/known_hosts` — SSH known_hosts for cloud server (isolated from ~/.ssh/)

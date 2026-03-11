@@ -16,13 +16,22 @@ from ..setup import get_runtime
 from ..vscode import remove_ssh_config
 
 
-def _cleanup_tokens(name: str):
-    """Remove relay and auth proxy tokens for a container."""
+def _cleanup_tokens(name: str, remote_host_spec: str = ""):
+    """Remove relay and auth proxy tokens for a container.
+
+    If remote_host_spec is provided, also stops the SSH tunnel to
+    that host if no other bubbles are using it.
+    """
     from ..auth_proxy import remove_auth_tokens
     from ..relay import remove_relay_token
 
     remove_relay_token(name)
     remove_auth_tokens(name)
+
+    if remote_host_spec:
+        from ..tunnel import stop_tunnel_if_unused
+
+        stop_tunnel_if_unused(remote_host_spec)
 
 
 def register_lifecycle_commands(main):
@@ -78,7 +87,7 @@ def register_lifecycle_commands(main):
                 click.echo(f"Failed to pop on {host.ssh_destination}: {result.stderr}", err=True)
                 sys.exit(1)
             remove_ssh_config(name)
-            _cleanup_tokens(name)
+            _cleanup_tokens(name, remote_host_spec=info["remote_host"])
             unregister_bubble(name)
             click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
             return
