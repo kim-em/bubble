@@ -86,9 +86,9 @@ def register_settings_commands(main):
     def claude_credentials_cmd(setting):
         """Set whether Claude credentials are mounted into bubbles.
 
-        When on, ~/.claude credentials (.credentials.json, .current-account)
-        are mounted read-only into containers by default. Override per-bubble
-        with --no-claude-credentials.
+        When on, ~/.claude credentials (.credentials.json) are mounted
+        read-only into containers by default. Override per-bubble with
+        --no-claude-credentials.
 
         Shows current setting if no argument given.
         """
