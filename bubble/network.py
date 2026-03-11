@@ -177,9 +177,7 @@ def _build_remove_domains_script(domains: list[str]) -> str:
             f" | awk -F. '{{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}}'"
             f" | sort -u); do"
         )
-        lines.append(
-            "  iptables -D OUTPUT -d $cidr -j ACCEPT 2>/dev/null || true"
-        )
+        lines.append("  iptables -D OUTPUT -d $cidr -j ACCEPT 2>/dev/null || true")
         lines.append("done")
     return "\n".join(lines)
 
