@@ -244,18 +244,55 @@ def register_settings_commands(main):
     @gh_group.command("status")
     def gh_status():
         """Show GitHub integration status."""
+        from ..automation import is_auth_proxy_installed
         from ..github_token import has_gh_auth
 
         config = load_config()
         token_enabled = config.get("github", {}).get("token", False)
         host_auth = has_gh_auth()
+        proxy_installed = is_auth_proxy_installed()
 
         click.echo(f"Token injection:  {'enabled' if token_enabled else 'disabled'}")
         click.echo(f"Host gh auth:     {'authenticated' if host_auth else 'not authenticated'}")
+        click.echo(f"Auth proxy:       {'installed' if proxy_installed else 'not installed'}")
         if not host_auth:
             click.echo("\nRun 'gh auth login' to authenticate on the host first.")
         elif not token_enabled:
             click.echo("\nRun 'bubble gh token on' to enable token injection by default.")
+
+    @gh_group.group("proxy")
+    def gh_proxy_group():
+        """Manage the GitHub auth proxy daemon."""
+
+    @gh_proxy_group.command("daemon")
+    @click.option("--port", type=int, default=0, help="Port to listen on (0 = auto)")
+    def gh_proxy_daemon(port):
+        """Run the auth proxy daemon (used by launchd/systemd)."""
+        from ..auth_proxy import run_daemon
+
+        run_daemon(port=port)
+
+    @gh_proxy_group.command("start")
+    def gh_proxy_start():
+        """Install and start the auth proxy daemon."""
+        from ..automation import install_auth_proxy_daemon
+
+        result = install_auth_proxy_daemon()
+        if result:
+            click.echo(f"Auth proxy daemon installed: {result}")
+        else:
+            click.echo("Failed to install auth proxy daemon (unsupported platform?).", err=True)
+
+    @gh_proxy_group.command("stop")
+    def gh_proxy_stop():
+        """Stop and remove the auth proxy daemon."""
+        from ..automation import remove_auth_proxy_daemon
+
+        result = remove_auth_proxy_daemon()
+        if result:
+            click.echo(f"Auth proxy daemon removed: {result}")
+        else:
+            click.echo("Auth proxy daemon not found.")
 
     # --- config ---
 

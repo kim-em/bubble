@@ -1,6 +1,17 @@
 # Changelog
 
 ## 0.6.1 — 2026-03-12
+- Repo-scoped GitHub auth via HTTP reverse proxy (#71)
+- `--gh-token` now keeps the host GitHub token on the host — never enters the container
+- Auth proxy validates requests against a strict 4-pattern git smart HTTP allowlist
+- Per-container tokens scoped to a single repository (owner/repo)
+- Path canonicalization rejects encoded separators, dot-segments, duplicate slashes
+- No redirect following, pinned outbound to github.com:443 with TLS verification
+- Daemon managed via launchd (macOS) / systemd (Linux), auto-started on first `--gh-token` use
+- `bubble gh proxy start/stop/daemon` commands for manual management
+- `bubble gh status` now shows auth proxy state
+- Fix: relay and auth proxy tokens cleaned up on `bubble pop` (fixes stale token leak)
+- Remote/cloud bubbles fall back to direct token injection (auth proxy is local-only)
 - Fix race between parent and derived image builds (#80)
   - Derived-image builds now hold a shared lock on the parent image
   - Prevents parent rebuilds from running concurrently with derived builds

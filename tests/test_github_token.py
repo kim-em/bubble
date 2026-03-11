@@ -110,24 +110,33 @@ def test_inject_gh_token_failure_returns_false(mock_runtime):
     assert result is False
 
 
-def test_setup_gh_token_success(mock_runtime):
-    """Verify setup_gh_token gets host token and injects it."""
+def test_setup_gh_token_local_with_owner_repo(mock_runtime):
+    """Local container with owner/repo uses auth proxy (fail-closed)."""
     from bubble.github_token import setup_gh_token
 
-    with patch("bubble.github_token.get_host_gh_token", return_value="gho_abc123"):
-        result = setup_gh_token(mock_runtime, "test-container")
+    with patch("bubble.github_token.setup_auth_proxy", return_value=True) as mock_proxy:
+        result = setup_gh_token(mock_runtime, "test-container", owner="kim-em", repo="bubble")
         assert result is True
+        mock_proxy.assert_called_once_with(
+            mock_runtime, "test-container", "kim-em", "bubble", False
+        )
 
-    push_calls = [c for c in mock_runtime.calls if c[0] == "push_file"]
-    assert len(push_calls) == 1
+
+def test_setup_gh_token_local_no_owner_repo(mock_runtime):
+    """Local container without owner/repo returns False (fail-closed)."""
+    from bubble.github_token import setup_gh_token
+
+    result = setup_gh_token(mock_runtime, "test-container")
+    assert result is False
+    assert len(mock_runtime.calls) == 0
 
 
-def test_setup_gh_token_no_host_auth(mock_runtime):
-    """Verify setup_gh_token returns False when host has no auth."""
+def test_setup_gh_token_no_host_auth_remote(mock_runtime):
+    """Remote container returns False when host has no gh auth."""
     from bubble.github_token import setup_gh_token
 
     with patch("bubble.github_token.get_host_gh_token", return_value=None):
-        result = setup_gh_token(mock_runtime, "test-container")
+        result = setup_gh_token(mock_runtime, "test-container", remote_host="fake-host")
         assert result is False
 
     assert len(mock_runtime.calls) == 0
