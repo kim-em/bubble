@@ -237,9 +237,7 @@ def has_claude_credentials() -> bool:
     """Check if the host has Claude credential files."""
     if not CLAUDE_CONFIG_DIR.is_dir():
         return False
-    return any(
-        (CLAUDE_CONFIG_DIR / item).exists() for item in _CLAUDE_CREDENTIAL_ITEMS
-    )
+    return any((CLAUDE_CONFIG_DIR / item).exists() for item in _CLAUDE_CREDENTIAL_ITEMS)
 
 
 def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSpec]:

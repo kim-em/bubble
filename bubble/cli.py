@@ -1599,11 +1599,7 @@ def open_cmd(
         cc_mounts = claude_config_mounts(include_credentials=claude_credentials)
         # Suppress auto mounts that overlap with user mounts (exact or ancestry)
         user_targets = {Path(m.target) for m in mount_specs}
-        cc_mounts = [
-            m
-            for m in cc_mounts
-            if not _mount_overlaps(Path(m.target), user_targets)
-        ]
+        cc_mounts = [m for m in cc_mounts if not _mount_overlaps(Path(m.target), user_targets)]
         # Nag about credentials if not enabled
         if not claude_credentials and has_claude_credentials():
             click.echo(
