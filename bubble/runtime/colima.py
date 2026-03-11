@@ -1,6 +1,8 @@
 """macOS Colima management for running Incus."""
 
+import shutil
 import subprocess
+from pathlib import Path
 
 
 def is_colima_running() -> bool:
@@ -55,6 +57,11 @@ def start_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
                 check=False,
                 stdin=subprocess.DEVNULL,
             )
+            # colima delete can fail if lima.yaml is missing, leaving
+            # the instance directory behind. Remove it manually.
+            lima_dir = Path.home() / ".colima" / "_lima" / "colima"
+            if lima_dir.exists():
+                shutil.rmtree(lima_dir)
             subprocess.run(args, check=True, stdin=subprocess.DEVNULL)
         else:
             # Unknown error — print output and raise
