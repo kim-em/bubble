@@ -64,6 +64,9 @@ DEFAULT_CONFIG = {
     "claude": {
         "credentials": False,
     },
+    "codex": {
+        "credentials": False,
+    },
     "security": {},
     "tools": {},
 }
@@ -401,6 +404,69 @@ def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSp
             raise ValueError(f"Duplicate mount target: {m.target}")
         seen.add(m.target)
     return mounts
+
+
+CODEX_CONFIG_DIR = Path.home() / ".codex"
+
+# Specific items from ~/.codex to mount read-only into containers.
+_CODEX_CONFIG_ITEMS = [
+    "config.toml",
+]
+
+# Credential files — opt-in only (--codex-credentials).
+_CODEX_CREDENTIAL_ITEMS = [
+    "auth.json",
+]
+
+
+def _safe_codex_path(item: str) -> Path | None:
+    """Return resolved path for a codex config item, or None if unsafe.
+
+    Rejects symlinks that escape ~/.codex to prevent exposing arbitrary
+    host files into containers.
+    """
+    source = CODEX_CONFIG_DIR / item
+    if not source.exists():
+        return None
+    resolved = source.resolve()
+    codex_resolved = CODEX_CONFIG_DIR.resolve()
+    # Ensure the resolved path is inside ~/.codex
+    try:
+        resolved.relative_to(codex_resolved)
+    except ValueError:
+        return None
+    return resolved
+
+
+def codex_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
+    """Return read-only mounts for Codex config files that exist on the host.
+
+    Mounts specific files from ~/.codex into /home/user/.codex/
+    inside containers, giving Codex sessions access to config and auth.
+
+    Args:
+        include_credentials: If True, also mount auth.json.
+            Off by default for security.
+    """
+    mounts = []
+    if not CODEX_CONFIG_DIR.is_dir():
+        return mounts
+    items = list(_CODEX_CONFIG_ITEMS)
+    if include_credentials:
+        items.extend(_CODEX_CREDENTIAL_ITEMS)
+    for item in items:
+        resolved = _safe_codex_path(item)
+        if resolved is not None:
+            target = f"/home/user/.codex/{item}"
+            mounts.append(MountSpec(source=str(resolved), target=target, readonly=True))
+    return mounts
+
+
+def has_codex_credentials() -> bool:
+    """Check if the host has Codex credential files."""
+    if not CODEX_CONFIG_DIR.is_dir():
+        return False
+    return any((CODEX_CONFIG_DIR / item).exists() for item in _CODEX_CREDENTIAL_ITEMS)
 
 
 CLAUDE_PROJECTS_DIR = DATA_DIR / "claude-projects"

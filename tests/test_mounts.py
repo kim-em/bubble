@@ -7,8 +7,10 @@ import pytest
 from bubble.config import (
     MountSpec,
     claude_config_mounts,
+    codex_config_mounts,
     editor_config_mounts,
     has_claude_credentials,
+    has_codex_credentials,
     parse_mounts,
 )
 
@@ -707,6 +709,251 @@ class TestClaudeConfigProvisioning:
         disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
         projects_calls = [c for c in disk_calls if c[2] == "claude-projects"]
         assert len(projects_calls) == 0
+
+
+class TestCodexConfigMounts:
+    """Test automatic ~/.codex config mounting."""
+
+    def test_returns_existing_config(self, tmp_path, monkeypatch):
+        """Mounts returned for config items that exist (no credentials by default)."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text("[settings]")
+        (codex_dir / "auth.json").write_text("{}")
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        mounts = codex_config_mounts()
+
+        assert len(mounts) == 1
+        targets = {m.target for m in mounts}
+        assert "/home/user/.codex/config.toml" in targets
+        # Credentials NOT included by default
+        assert "/home/user/.codex/auth.json" not in targets
+        assert all(m.readonly for m in mounts)
+
+    def test_returns_all_with_credentials(self, tmp_path, monkeypatch):
+        """All items returned when include_credentials=True."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text("[settings]")
+        (codex_dir / "auth.json").write_text("{}")
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        mounts = codex_config_mounts(include_credentials=True)
+
+        assert len(mounts) == 2
+        targets = {m.target for m in mounts}
+        assert "/home/user/.codex/config.toml" in targets
+        assert "/home/user/.codex/auth.json" in targets
+
+    def test_skips_missing_files(self, tmp_path, monkeypatch):
+        """Only existing files are mounted."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text("[settings]")
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        mounts = codex_config_mounts(include_credentials=True)
+
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.codex/config.toml"
+
+    def test_no_codex_dir(self, tmp_path, monkeypatch):
+        """Returns empty when ~/.codex doesn't exist."""
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", tmp_path / "nonexistent")
+
+        mounts = codex_config_mounts()
+
+        assert mounts == []
+
+    def test_credentials_excluded_by_default(self, tmp_path, monkeypatch):
+        """Credential files are NOT mounted by default."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "auth.json").write_text("{}")
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        mounts = codex_config_mounts()
+
+        assert mounts == []
+
+    def test_credentials_included_when_requested(self, tmp_path, monkeypatch):
+        """Credential files are mounted when include_credentials=True."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "auth.json").write_text("{}")
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        mounts = codex_config_mounts(include_credentials=True)
+
+        targets = {m.target for m in mounts}
+        assert "/home/user/.codex/auth.json" in targets
+        assert all(m.readonly for m in mounts)
+
+    def test_has_codex_credentials(self, tmp_path, monkeypatch):
+        """has_codex_credentials() detects credential files."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        assert not has_codex_credentials()
+
+        (codex_dir / "auth.json").write_text("{}")
+        assert has_codex_credentials()
+
+    def test_rejects_symlinks_escaping_codex_dir(self, tmp_path, monkeypatch):
+        """Symlinks that escape ~/.codex are rejected."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        # Create a file outside ~/.codex
+        secret = tmp_path / "secret.txt"
+        secret.write_text("sensitive data")
+        # Symlink from inside ~/.codex to outside
+        (codex_dir / "config.toml").symlink_to(secret)
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        mounts = codex_config_mounts()
+
+        assert mounts == []
+
+    def test_allows_symlinks_within_codex_dir(self, tmp_path, monkeypatch):
+        """Symlinks within ~/.codex are allowed."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        real = codex_dir / "real-config.toml"
+        real.write_text("[settings]")
+        (codex_dir / "config.toml").symlink_to(real)
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        mounts = codex_config_mounts()
+
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.codex/config.toml"
+
+    def test_sources_are_absolute(self, tmp_path, monkeypatch):
+        """Mount sources use absolute paths."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text("[settings]")
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+
+        mounts = codex_config_mounts()
+
+        assert Path(mounts[0].source).is_absolute()
+
+
+class TestCodexConfigProvisioning:
+    """Test that codex config mounts are applied during container provisioning."""
+
+    def test_codex_mounts_applied(self, mock_runtime, tmp_path, tmp_data_dir):
+        """Verify add_disk calls with codex-config device names."""
+        from bubble.provisioning import provision_container as _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        codex_mounts = [
+            MountSpec(
+                source="/home/testuser/.codex/config.toml",
+                target="/home/user/.codex/config.toml",
+                readonly=True,
+            ),
+            MountSpec(
+                source="/home/testuser/.codex/auth.json",
+                target="/home/user/.codex/auth.json",
+                readonly=True,
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            codex_mounts=codex_mounts,
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        codex_disk_calls = [c for c in disk_calls if "codex-config" in c[2]]
+        assert len(codex_disk_calls) == 2
+        assert codex_disk_calls[0] == (
+            "add_disk",
+            "test-container",
+            "codex-config-0",
+            "/home/testuser/.codex/config.toml",
+            "/home/user/.codex/config.toml",
+            True,
+        )
+        assert codex_disk_calls[1] == (
+            "add_disk",
+            "test-container",
+            "codex-config-1",
+            "/home/testuser/.codex/auth.json",
+            "/home/user/.codex/auth.json",
+            True,
+        )
+
+    def test_creates_codex_dir_in_container(self, mock_runtime, tmp_path, tmp_data_dir):
+        """Verify .codex directory is created before mounting."""
+        from bubble.provisioning import provision_container as _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        codex_mounts = [
+            MountSpec(
+                source="/home/testuser/.codex/auth.json",
+                target="/home/user/.codex/auth.json",
+                readonly=True,
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            codex_mounts=codex_mounts,
+        )
+
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        mkdir_calls = [c for c in exec_calls if ".codex" in " ".join(c[2])]
+        assert len(mkdir_calls) == 1
+        assert "mkdir -p /home/user/.codex" in " ".join(mkdir_calls[0][2])
+        assert "chown user:user" in " ".join(mkdir_calls[0][2])
+
+    def test_no_codex_mounts(self, mock_runtime, tmp_path, tmp_data_dir):
+        """No codex mount calls when codex_mounts is empty."""
+        from bubble.provisioning import provision_container as _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            codex_mounts=[],
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        codex_disk_calls = [c for c in disk_calls if "codex" in c[2]]
+        assert len(codex_disk_calls) == 0
 
 
 class TestMountOverlaps:

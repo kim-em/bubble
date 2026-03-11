@@ -118,6 +118,49 @@ def register_settings_commands(main):
         creds = config.get("claude", {}).get("credentials", False)
         click.echo(f"  credentials: {'on' if creds else 'off'}")
 
+    # --- codex ---
+
+    @main.group("codex")
+    def codex_group():
+        """Manage Codex/OpenAI settings."""
+
+    @codex_group.command("credentials")
+    @click.argument("setting", required=False, type=click.Choice(["on", "off"]))
+    def codex_credentials_cmd(setting):
+        """Set whether Codex credentials are mounted into bubbles.
+
+        When on, ~/.codex credentials (auth.json) are mounted
+        read-only into containers by default. Override per-bubble with
+        --no-codex-credentials.
+
+        Shows current setting if no argument given.
+        """
+        config = load_config()
+        if setting is None:
+            current = config.get("codex", {}).get("credentials", False)
+            state = "on" if current else "off"
+            click.echo(f"Codex credentials: {state}")
+            if current:
+                click.echo("Credentials are mounted into bubbles by default.")
+                click.echo("Override with: bubble open --no-codex-credentials <target>")
+            else:
+                click.echo("Use --codex-credentials flag or: bubble codex credentials on")
+            return
+        config.setdefault("codex", {})["credentials"] = setting == "on"
+        save_config(config)
+        if setting == "on":
+            click.echo("Codex credentials enabled. Mounted into all new bubbles by default.")
+            click.echo("Override with: bubble open --no-codex-credentials <target>")
+        else:
+            click.echo("Codex credentials disabled.")
+
+    @codex_group.command("status")
+    def codex_status_cmd():
+        """Show current Codex settings."""
+        config = load_config()
+        creds = config.get("codex", {}).get("credentials", False)
+        click.echo(f"  credentials: {'on' if creds else 'off'}")
+
     # --- tools ---
 
     @main.group("tools")

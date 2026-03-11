@@ -12,6 +12,7 @@ from . import __version__
 from .clone import clone_and_checkout
 from .config import (
     claude_config_mounts,
+    codex_config_mounts,
     editor_config_mounts,
     ensure_dirs,
     load_config,
@@ -456,6 +457,11 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     help="Mount ~/.claude credentials into container (default: from config or disabled)",
 )
 @click.option(
+    "--codex-credentials/--no-codex-credentials",
+    default=None,
+    help="Mount ~/.codex credentials into container (default: from config or disabled)",
+)
+@click.option(
     "--claude-prompt-stdin",
     is_flag=True,
     hidden=True,
@@ -485,6 +491,7 @@ def open_cmd(
     mounts,
     claude_config,
     claude_credentials,
+    codex_credentials,
     claude_prompt_stdin,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
@@ -509,6 +516,15 @@ def open_cmd(
         click.echo(
             "Error: --claude-credentials rejected because security.claude_credentials=off. "
             "Re-enable: bubble config set security.claude_credentials on",
+            err=True,
+        )
+        sys.exit(1)
+
+    # Enforce security: reject --codex-credentials when locked off
+    if codex_credentials and is_locked_off(config, "codex_credentials"):
+        click.echo(
+            "Error: --codex-credentials rejected because security.codex_credentials=off. "
+            "Re-enable: bubble config set security.codex_credentials on",
             err=True,
         )
         sys.exit(1)
@@ -634,9 +650,16 @@ def open_cmd(
     if claude_credentials is None:
         claude_credentials = config.get("claude", {}).get("credentials", False)
 
+    # Resolve codex_credentials: CLI flag > config > default (False)
+    if codex_credentials is None:
+        codex_credentials = config.get("codex", {}).get("credentials", False)
+
     # Claude Code config mounts (opt-out via --no-claude-config)
-    # When security.claude_credentials=on, always include credentials
-    include_creds = claude_credentials or is_enabled(config, "claude_credentials")
+    # When security.claude_credentials=on, always include credentials.
+    # When security.claude_credentials=off, never include (overrides config).
+    include_creds = (claude_credentials or is_enabled(config, "claude_credentials")) and not (
+        is_locked_off(config, "claude_credentials")
+    )
     cc_mounts = []
     if claude_config:
         cc_mounts = claude_config_mounts(include_credentials=include_creds)
@@ -646,6 +669,16 @@ def open_cmd(
         # Hint about symlinking ~/.bubble/claude-projects/ to ~/.claude/projects/
         if not machine_readable:
             maybe_symlink_claude_projects(config)
+
+    # Codex config mounts
+    # When security.codex_credentials=off, never include (overrides config).
+    include_codex_creds = (codex_credentials or is_enabled(config, "codex_credentials")) and not (
+        is_locked_off(config, "codex_credentials")
+    )
+    cx_mounts = codex_config_mounts(include_credentials=include_codex_creds)
+    if cx_mounts:
+        user_targets = {Path(m.target) for m in mount_specs}
+        cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
     # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
     ec_mounts = editor_config_mounts(editor)
@@ -766,6 +799,7 @@ def open_cmd(
             network=network,
             user_mounts=mount_specs,
             claude_mounts=cc_mounts,
+            codex_mounts=cx_mounts,
             editor_mounts=ec_mounts,
         )
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
