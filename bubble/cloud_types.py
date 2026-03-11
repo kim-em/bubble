@@ -74,7 +74,7 @@ _PROBEABLE_CODES = {"resource_unavailable", "limit_exceeded", "placement_error"}
 _MAX_PROBES = 10
 
 
-def handle_create_error(exc: Exception, client, server_type: str, location: str, ssh_key=None):
+def _handle_create_error(exc: Exception, client, server_type: str, location: str, ssh_key=None):
     """Turn an opaque Hetzner API error into actionable guidance."""
     from hcloud._exceptions import APIException
 

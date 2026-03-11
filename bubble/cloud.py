@@ -222,9 +222,9 @@ def provision_server(config: dict, server_type: str | None = None, location: str
             user_data=cloud_init,
         )
     except Exception as e:
-        from .cloud_types import handle_create_error
+        from .cloud_types import _handle_create_error
 
-        handle_create_error(e, client, st, loc, ssh_key=ssh_key)
+        _handle_create_error(e, client, st, loc, ssh_key=ssh_key)
         raise  # unreachable, _handle_create_error always raises
     server = response.server
 
