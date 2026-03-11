@@ -86,6 +86,17 @@ def load_config() -> dict:
     return config
 
 
+def load_raw_config() -> dict:
+    """Load the raw user config without merging defaults.
+
+    Returns only what the user has explicitly set in config.toml.
+    """
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE, "rb") as f:
+            return tomllib.load(f)
+    return {}
+
+
 def save_config(config: dict):
     """Save config to disk."""
     ensure_dirs()
@@ -95,7 +106,7 @@ def save_config(config: dict):
 
 def _deep_merge(base: dict, override: dict) -> dict:
     """Deep merge two dicts, with override taking precedence."""
-    result = base.copy()
+    result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)

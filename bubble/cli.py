@@ -22,6 +22,7 @@ from .config import (
     ensure_dirs,
     has_claude_credentials,
     load_config,
+    load_raw_config,
     parse_mounts,
     repo_short_name,
     save_config,
@@ -1775,7 +1776,8 @@ def open_cmd(
     # Resolve claude_credentials: CLI flag > config > default (False)
     # Track whether the user made a deliberate choice (CLI flag or config setting)
     credentials_from_cli = claude_credentials is not None
-    credentials_in_config = "claude" in config and "credentials" in config["claude"]
+    raw = load_raw_config()
+    credentials_in_config = "claude" in raw and "credentials" in raw["claude"]
     credentials_explicitly_set = credentials_from_cli or credentials_in_config
     if claude_credentials is None:
         claude_credentials = config.get("claude", {}).get("credentials", False)
