@@ -205,6 +205,72 @@ class TestDoSymlinkClaudeProjects:
         # Unique content was moved
         assert (claude_projects / "unique" / "data.txt").read_text() == "unique-data"
 
+    def test_fails_when_bubble_projects_is_file(self, setup_dirs):
+        """Returns False when ~/.bubble/claude-projects is a file, not a dir."""
+        claude_projects, bubble_projects = setup_dirs
+        bubble_projects.write_text("not a directory")
+
+        with patch("bubble.config._is_inside_git_repo", return_value=True):
+            result = do_symlink_claude_projects()
+
+        assert result is False
+        assert not bubble_projects.is_symlink()
+
+    def test_fails_when_symlink_points_elsewhere(self, setup_dirs):
+        """Returns False when existing symlink points to wrong target."""
+        claude_projects, bubble_projects = setup_dirs
+        other_dir = bubble_projects.parent / "other"
+        other_dir.mkdir()
+        bubble_projects.symlink_to(other_dir)
+
+        with patch("bubble.config._is_inside_git_repo", return_value=True):
+            result = do_symlink_claude_projects()
+
+        assert result is False
+
+    def test_succeeds_when_symlink_points_to_claude_projects(self, setup_dirs):
+        """Returns True when existing symlink already points to correct target."""
+        claude_projects, bubble_projects = setup_dirs
+        bubble_projects.symlink_to(claude_projects)
+
+        with patch("bubble.config._is_inside_git_repo", return_value=True):
+            result = do_symlink_claude_projects()
+
+        assert result is True
+
+
+class TestSymlinkClaudeProjectsCLI:
+    def test_exit_code_on_failure(self, setup_dirs):
+        """CLI command exits with code 1 on failure."""
+        from click.testing import CliRunner
+
+        from bubble.cli import main
+
+        claude_projects, bubble_projects = setup_dirs
+        bubble_projects.mkdir()
+
+        runner = CliRunner()
+        with patch("bubble.config._is_inside_git_repo", return_value=False):
+            result = runner.invoke(main, ["config", "symlink-claude-projects"])
+
+        assert result.exit_code != 0
+
+    def test_exit_code_on_success(self, setup_dirs):
+        """CLI command exits with code 0 on success."""
+        from click.testing import CliRunner
+
+        from bubble.cli import main
+
+        claude_projects, bubble_projects = setup_dirs
+        # Don't create bubble_projects — simplest success path
+
+        runner = CliRunner()
+        with patch("bubble.config._is_inside_git_repo", return_value=True):
+            result = runner.invoke(main, ["config", "symlink-claude-projects"])
+
+        assert result.exit_code == 0
+        assert bubble_projects.is_symlink()
+
 
 class TestIsInsideGitRepo:
     def test_inside_git_repo(self, tmp_path):

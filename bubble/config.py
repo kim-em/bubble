@@ -486,14 +486,22 @@ def do_symlink_claude_projects() -> bool:
         return False
 
     if bubble_projects.is_symlink():
-        click.echo(f"{bubble_projects} is already a symlink.")
-        return True
+        target = bubble_projects.resolve()
+        if target == claude_projects.resolve():
+            click.echo(f"{bubble_projects} is already a symlink to {claude_projects}.")
+            return True
+        click.echo(f"{bubble_projects} is a symlink to {target}, not {claude_projects}.", err=True)
+        return False
 
     if not bubble_projects.exists():
         bubble_projects.parent.mkdir(parents=True, exist_ok=True)
         bubble_projects.symlink_to(claude_projects)
         click.echo(f"Created symlink: {bubble_projects} -> {claude_projects}")
         return True
+
+    if not bubble_projects.is_dir():
+        click.echo(f"{bubble_projects} exists but is not a directory.", err=True)
+        return False
 
     # Merge existing contents into ~/.claude/projects/
     for child in bubble_projects.iterdir():

@@ -410,4 +410,5 @@ def register_settings_commands(main):
         """
         from ..config import do_symlink_claude_projects
 
-        do_symlink_claude_projects()
+        if not do_symlink_claude_projects():
+            raise SystemExit(1)
