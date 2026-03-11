@@ -1,6 +1,6 @@
 """Tests for the target parsing module."""
 
-import os
+import shutil
 import subprocess
 
 import pytest
@@ -12,6 +12,10 @@ from bubble.target import (
     _parse_local_path,
     parse_target,
 )
+
+GIT = shutil.which("git")
+if GIT is None:
+    pytest.skip("git not available", allow_module_level=True)
 
 
 @pytest.fixture
@@ -173,7 +177,6 @@ _GIT_ENV = {
     "GIT_AUTHOR_EMAIL": "t@t",
     "GIT_COMMITTER_NAME": "test",
     "GIT_COMMITTER_EMAIL": "t@t",
-    "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
 }
 
 
@@ -192,10 +195,10 @@ def _make_git_repo(
     env = {**_GIT_ENV, "HOME": str(tmp_path)}
 
     subprocess.run(
-        ["git", "init", "-b", branch, str(repo)], capture_output=True, check=True, env=env
+        [GIT, "init", "-b", branch, str(repo)], capture_output=True, check=True, env=env
     )
     subprocess.run(
-        ["git", "-C", str(repo), "remote", "add", "origin", remote_url],
+        [GIT, "-C", str(repo), "remote", "add", "origin", remote_url],
         capture_output=True,
         check=True,
         env=env,
@@ -204,10 +207,10 @@ def _make_git_repo(
     if commit:
         (repo / "README.md").write_text("# Test\n")
         subprocess.run(
-            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True, env=env
+            [GIT, "-C", str(repo), "add", "."], capture_output=True, check=True, env=env
         )
         subprocess.run(
-            ["git", "-C", str(repo), "commit", "-m", "init"],
+            [GIT, "-C", str(repo), "commit", "-m", "init"],
             capture_output=True,
             check=True,
             env=env,
@@ -215,14 +218,14 @@ def _make_git_repo(
 
     if detached and commit:
         sha = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            [GIT, "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             check=True,
             env=env,
         ).stdout.strip()
         subprocess.run(
-            ["git", "-C", str(repo), "checkout", sha], capture_output=True, check=True, env=env
+            [GIT, "-C", str(repo), "checkout", sha], capture_output=True, check=True, env=env
         )
 
     if dirty:
@@ -329,13 +332,13 @@ class TestParseLocalPath:
         repo = tmp_path / "norepo"
         repo.mkdir()
         env = {**_GIT_ENV, "HOME": str(tmp_path)}
-        subprocess.run(["git", "init", str(repo)], capture_output=True, check=True, env=env)
+        subprocess.run([GIT, "init", str(repo)], capture_output=True, check=True, env=env)
         (repo / "f.txt").write_text("x\n")
         subprocess.run(
-            ["git", "-C", str(repo), "add", "."], capture_output=True, check=True, env=env
+            [GIT, "-C", str(repo), "add", "."], capture_output=True, check=True, env=env
         )
         subprocess.run(
-            ["git", "-C", str(repo), "commit", "-m", "init"],
+            [GIT, "-C", str(repo), "commit", "-m", "init"],
             capture_output=True,
             check=True,
             env=env,

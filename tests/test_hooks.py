@@ -1,6 +1,6 @@
 """Tests for the hook system."""
 
-import os
+import shutil
 import subprocess
 
 import pytest
@@ -8,126 +8,77 @@ import pytest
 from bubble.hooks import discover_hooks, select_hook
 from bubble.hooks.lean import LeanHook, _parse_lean_version
 
-
-@pytest.fixture
-def lean_repo(tmp_path):
-    """Create a bare git repo with a lean-toolchain file."""
-    repo = tmp_path / "test.git"
-    subprocess.run(["git", "init", "--bare", str(repo)], capture_output=True, check=True)
-
-    # Create a temporary working copy to add a file
-    work = tmp_path / "work"
-    subprocess.run(["git", "clone", str(repo), str(work)], capture_output=True, check=True)
-    (work / "lean-toolchain").write_text("leanprover/lean4:v4.27.0\n")
-    subprocess.run(["git", "-C", str(work), "add", "."], capture_output=True, check=True)
-    subprocess.run(
-        ["git", "-C", str(work), "commit", "-m", "init"],
-        capture_output=True,
-        check=True,
-        env={
-            "GIT_AUTHOR_NAME": "test",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "test",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "HOME": str(tmp_path),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
-        },
-    )
-    subprocess.run(
-        ["git", "-C", str(work), "push", "origin", "master"],
-        capture_output=True,
-        check=True,
-    )
-    return repo
-
-
-@pytest.fixture
-def non_lean_repo(tmp_path):
-    """Create a bare git repo without a lean-toolchain file."""
-    repo = tmp_path / "other.git"
-    subprocess.run(["git", "init", "--bare", str(repo)], capture_output=True, check=True)
-
-    work = tmp_path / "work2"
-    subprocess.run(["git", "clone", str(repo), str(work)], capture_output=True, check=True)
-    (work / "README.md").write_text("# Hello\n")
-    subprocess.run(["git", "-C", str(work), "add", "."], capture_output=True, check=True)
-    subprocess.run(
-        ["git", "-C", str(work), "commit", "-m", "init"],
-        capture_output=True,
-        check=True,
-        env={
-            "GIT_AUTHOR_NAME": "test",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "test",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "HOME": str(tmp_path),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
-        },
-    )
-    subprocess.run(
-        ["git", "-C", str(work), "push", "origin", "master"],
-        capture_output=True,
-        check=True,
-    )
-    return repo
-
-
-@pytest.fixture
-def nightly_lean_repo(tmp_path):
-    """Create a bare git repo with a nightly lean-toolchain file."""
-    repo = tmp_path / "nightly.git"
-    subprocess.run(["git", "init", "--bare", str(repo)], capture_output=True, check=True)
-
-    work = tmp_path / "work3"
-    subprocess.run(["git", "clone", str(repo), str(work)], capture_output=True, check=True)
-    (work / "lean-toolchain").write_text("leanprover/lean4:nightly-2025-01-15\n")
-    subprocess.run(["git", "-C", str(work), "add", "."], capture_output=True, check=True)
-    subprocess.run(
-        ["git", "-C", str(work), "commit", "-m", "init"],
-        capture_output=True,
-        check=True,
-        env={
-            "GIT_AUTHOR_NAME": "test",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "test",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "HOME": str(tmp_path),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
-        },
-    )
-    subprocess.run(
-        ["git", "-C", str(work), "push", "origin", "master"],
-        capture_output=True,
-        check=True,
-    )
-    return repo
-
+GIT = shutil.which("git")
+if GIT is None:
+    pytest.skip("git not available", allow_module_level=True)
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "test",
     "GIT_AUTHOR_EMAIL": "t@t",
     "GIT_COMMITTER_NAME": "test",
     "GIT_COMMITTER_EMAIL": "t@t",
-    "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
 }
 
 
-def _make_lean_bare_repo(tmp_path, repo_name, work_name, toolchain="leanprover/lean4:v4.16.0\n"):
-    """Helper to create a bare git repo with a lean-toolchain file."""
-    repo = tmp_path / repo_name
-    subprocess.run(["git", "init", "--bare", str(repo)], capture_output=True, check=True)
+def _make_hook_repo(tmp_path, work_name, files):
+    """Helper to create a bare git repo with given files for hook testing."""
+    repo = tmp_path / f"{work_name}.git"
+    subprocess.run([GIT, "init", "--bare", str(repo)], capture_output=True, check=True)
     work = tmp_path / work_name
-    subprocess.run(["git", "clone", str(repo), str(work)], capture_output=True, check=True)
-    (work / "lean-toolchain").write_text(toolchain)
-    subprocess.run(["git", "-C", str(work), "add", "."], capture_output=True, check=True)
+    subprocess.run([GIT, "clone", str(repo), str(work)], capture_output=True, check=True)
+    for name, content in files.items():
+        (work / name).write_text(content)
+    subprocess.run([GIT, "-C", str(work), "add", "."], capture_output=True, check=True)
     subprocess.run(
-        ["git", "-C", str(work), "commit", "-m", "init"],
+        [GIT, "-C", str(work), "commit", "-m", "init"],
         capture_output=True,
         check=True,
         env={**GIT_ENV, "HOME": str(tmp_path)},
     )
     subprocess.run(
-        ["git", "-C", str(work), "push", "origin", "master"],
+        [GIT, "-C", str(work), "push", "origin", "master"],
+        capture_output=True,
+        check=True,
+    )
+    return repo
+
+
+@pytest.fixture
+def lean_repo(tmp_path):
+    """Create a bare git repo with a lean-toolchain file."""
+    return _make_hook_repo(tmp_path, "work", {"lean-toolchain": "leanprover/lean4:v4.27.0\n"})
+
+
+@pytest.fixture
+def non_lean_repo(tmp_path):
+    """Create a bare git repo without a lean-toolchain file."""
+    return _make_hook_repo(tmp_path, "work2", {"README.md": "# Hello\n"})
+
+
+@pytest.fixture
+def nightly_lean_repo(tmp_path):
+    """Create a bare git repo with a nightly lean-toolchain file."""
+    return _make_hook_repo(
+        tmp_path, "work3", {"lean-toolchain": "leanprover/lean4:nightly-2025-01-15\n"}
+    )
+
+
+def _make_lean_bare_repo(tmp_path, repo_name, work_name, toolchain="leanprover/lean4:v4.16.0\n"):
+    """Helper to create a bare git repo with a lean-toolchain file."""
+    repo = tmp_path / repo_name
+    subprocess.run([GIT, "init", "--bare", str(repo)], capture_output=True, check=True)
+    work = tmp_path / work_name
+    subprocess.run([GIT, "clone", str(repo), str(work)], capture_output=True, check=True)
+    (work / "lean-toolchain").write_text(toolchain)
+    subprocess.run([GIT, "-C", str(work), "add", "."], capture_output=True, check=True)
+    subprocess.run(
+        [GIT, "-C", str(work), "commit", "-m", "init"],
+        capture_output=True,
+        check=True,
+        env={**GIT_ENV, "HOME": str(tmp_path)},
+    )
+    subprocess.run(
+        [GIT, "-C", str(work), "push", "origin", "master"],
         capture_output=True,
         check=True,
     )
