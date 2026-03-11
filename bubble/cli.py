@@ -1448,12 +1448,19 @@ def _finalize_bubble(
     git_email="",
     command=None,
     claude_prompt="",
+    gh_token=False,
 ):
     """Post-clone setup: hooks, SSH, registration, and attach."""
     q_short = shlex.quote(short)
     project_dir = f"/home/user/{short}"
     if hook:
         hook.post_clone(runtime, name, project_dir)
+
+    # Inject GitHub token if requested
+    if gh_token:
+        from .github_token import setup_gh_token
+
+        setup_gh_token(runtime, name, machine_readable=machine_readable)
 
     # Inject Claude Code task if prompt is provided
     if claude_prompt and not machine_readable:
@@ -1580,6 +1587,7 @@ def _open_remote(
     claude_config=True,
     new_branch=None,
     base_ref=None,
+    gh_token=False,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -1607,6 +1615,12 @@ def _open_remote(
 
     # Inject local SSH keys into the container so the chained ProxyCommand works
     _inject_local_ssh_keys(remote_host, name)
+
+    # Inject GitHub token from local host into the remote container
+    if gh_token:
+        from .github_token import setup_gh_token
+
+        setup_gh_token(None, name, remote_host=remote_host)
 
     # Write local SSH config with chained ProxyCommand through the remote host
     add_ssh_config(name, remote_host=remote_host)
@@ -1720,6 +1734,11 @@ def _open_remote(
     default=None,
     help="Mount ~/.claude credentials into container (default: from config or disabled)",
 )
+@click.option(
+    "--gh-token/--no-gh-token",
+    default=None,
+    help="Inject GitHub auth token into container (default: from config or disabled)",
+)
 def open_cmd(
     target,
     editor_choice,
@@ -1744,6 +1763,7 @@ def open_cmd(
     mounts,
     claude_config,
     claude_credentials,
+    gh_token,
 ):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
@@ -1831,6 +1851,10 @@ def open_cmd(
 
                 remote_host = RemoteHost.parse(default)
 
+    # Resolve --gh-token: CLI flag > config > disabled
+    if gh_token is None:
+        gh_token = config.get("github", {}).get("token", False)
+
     if remote_host:
         if mount_specs:
             click.echo(
@@ -1854,6 +1878,7 @@ def open_cmd(
             claude_config=claude_config,
             new_branch=new_branch,
             base_ref=base_ref,
+            gh_token=gh_token,
         )
         return
 
@@ -1889,6 +1914,16 @@ def open_cmd(
     if ec_mounts:
         user_targets = {Path(m.target) for m in mount_specs}
         ec_mounts = [m for m in ec_mounts if not _mount_overlaps(Path(m.target), user_targets)]
+
+    # Nag about gh token if not enabled
+    if not gh_token and not machine_readable:
+        from .github_token import has_gh_auth
+
+        if has_gh_auth():
+            click.echo(
+                "Tip: use --gh-token to inject GitHub auth into this bubble.",
+                err=True,
+            )
 
     # Local flow
     runtime = get_runtime(config)
@@ -2032,6 +2067,7 @@ def open_cmd(
             git_email=git_email,
             command=command_args,
             claude_prompt=claude_prompt,
+            gh_token=gh_token,
         )
     except Exception:
         # Clean up partially-provisioned container on failure
@@ -3750,6 +3786,43 @@ def tools_update():
     click.echo()
     save_pins(new_pins)
     click.echo("Pins updated. Run 'bubble images build base' to apply changes.")
+
+
+@main.group("gh")
+def gh_group():
+    """Manage GitHub integration settings."""
+
+
+@gh_group.command("token")
+@click.argument("value", type=click.Choice(["on", "off"]))
+def gh_token_cmd(value):
+    """Enable or disable GitHub token injection into bubbles."""
+    config = load_config()
+    if "github" not in config:
+        config["github"] = {}
+    config["github"]["token"] = value == "on"
+    save_config(config)
+    if value == "on":
+        click.echo("GitHub token injection enabled for new bubbles.")
+    else:
+        click.echo("GitHub token injection disabled.")
+
+
+@gh_group.command("status")
+def gh_status():
+    """Show GitHub integration status."""
+    from .github_token import has_gh_auth
+
+    config = load_config()
+    token_enabled = config.get("github", {}).get("token", False)
+    host_auth = has_gh_auth()
+
+    click.echo(f"Token injection:  {'enabled' if token_enabled else 'disabled'}")
+    click.echo(f"Host gh auth:     {'authenticated' if host_auth else 'not authenticated'}")
+    if not host_auth:
+        click.echo("\nRun 'gh auth login' to authenticate on the host first.")
+    elif not token_enabled:
+        click.echo("\nRun 'bubble gh token on' to enable token injection by default.")
 
 
 @main.command()
