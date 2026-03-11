@@ -183,6 +183,7 @@ _CLAUDE_CONFIG_ITEMS = [
     "settings.json",
     "skills",
     "keybindings.json",
+    "commands",
 ]
 
 # Credential files — opt-in only (--claude-credentials).

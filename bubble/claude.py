@@ -156,12 +156,14 @@ def inject_claude_task(runtime: ContainerRuntime, container: str, project_dir: s
     )
     runtime.exec(container, ["su", "-", "user", "-c", exclude_script])
 
-    # Pre-trust the project directory in .claude.json
+    # Pre-trust the project directory and skip onboarding in .claude.json
     trust_script = (
         f'python3 -c "'
         f"import json,os; "
         f"p=os.path.expanduser('~/.claude.json'); "
         f"d=json.load(open(p)) if os.path.exists(p) else {{}}; "
+        f"d['hasCompletedOnboarding']=True; "
+        f"n=d.get('numStartups',0); d['numStartups']=(n if isinstance(n,int) else 0)+1; "
         f"d.setdefault('projects',{{}}); "
         f"proj=d['projects'].setdefault({shlex.quote(project_dir)!r},{{}}); "  # noqa: E501
         f"proj['hasTrustDialogAccepted']=True; "

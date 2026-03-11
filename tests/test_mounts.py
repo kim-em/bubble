@@ -368,6 +368,7 @@ class TestClaudeConfigMounts:
         (claude_dir / "settings.json").write_text("{}")
         (claude_dir / "skills").mkdir()
         (claude_dir / "keybindings.json").write_text("{}")
+        (claude_dir / "commands").mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
         (claude_dir / ".current-account").write_text("acct")
 
@@ -375,12 +376,13 @@ class TestClaudeConfigMounts:
 
         mounts = claude_config_mounts()
 
-        assert len(mounts) == 4
+        assert len(mounts) == 5
         targets = {m.target for m in mounts}
         assert "/home/user/.claude/CLAUDE.md" in targets
         assert "/home/user/.claude/settings.json" in targets
         assert "/home/user/.claude/skills" in targets
         assert "/home/user/.claude/keybindings.json" in targets
+        assert "/home/user/.claude/commands" in targets
         # Credentials NOT included by default
         assert "/home/user/.claude/.credentials.json" not in targets
         assert "/home/user/.claude/.current-account" not in targets
@@ -394,6 +396,7 @@ class TestClaudeConfigMounts:
         (claude_dir / "settings.json").write_text("{}")
         (claude_dir / "skills").mkdir()
         (claude_dir / "keybindings.json").write_text("{}")
+        (claude_dir / "commands").mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
         (claude_dir / ".current-account").write_text("acct")
 
@@ -401,7 +404,7 @@ class TestClaudeConfigMounts:
 
         mounts = claude_config_mounts(include_credentials=True)
 
-        assert len(mounts) == 6
+        assert len(mounts) == 7
         targets = {m.target for m in mounts}
         assert "/home/user/.claude/.credentials.json" in targets
         assert "/home/user/.claude/.current-account" in targets

@@ -125,3 +125,14 @@ class TestInjectClaudeTask:
             assert cmd[0] == "su"
             assert cmd[1] == "-"
             assert cmd[2] == "user"
+
+    def test_trust_script_sets_onboarding_fields(self):
+        runtime = MagicMock()
+        inject_claude_task(runtime, "c1", "/home/user/project", "prompt")
+
+        # The last exec call is the trust script
+        trust_call = runtime.exec.call_args_list[-1]
+        script = trust_call[0][1][-1]  # the -c argument
+        assert "hasCompletedOnboarding" in script
+        assert "numStartups" in script
+        assert "isinstance" in script  # defensive coercion
