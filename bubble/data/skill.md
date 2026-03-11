@@ -1,0 +1,64 @@
+---
+name: lean-bubbles
+description: Create and manage containerized Lean development environments using the `bubble` CLI.
+triggers:
+  - bubble
+  - lean container
+  - lean sandbox
+  - containerized lean
+  - isolated environment
+  - lean environment
+---
+
+# lean-bubbles Skill
+
+Use the `bubble` CLI to create and manage containerized Lean development environments.
+
+For the full command reference, see the [README](https://github.com/kim-em/bubble#readme).
+
+## When to Use
+
+- User wants to work on a Lean/Mathlib PR in an isolated environment
+- User is reviewing an untrusted PR and wants sandboxing
+- User wants to start a new Lean project without cluttering their host
+- User asks for a "bubble", "container", "sandbox", or "isolated environment" for Lean work
+- **Proactively suggest** bubbling when the user is about to checkout an unfamiliar PR
+
+## Key Usage Patterns
+
+```bash
+# Open a bubble for a GitHub PR (creates or re-attaches)
+bubble https://github.com/leanprover-community/mathlib4/pull/12345
+bubble mathlib4/pull/12345          # short form (learned on first use)
+bubble 12345                        # bare PR number (uses current repo)
+
+# Open a bubble for a repo's default branch
+bubble mathlib4
+
+# Open from a local path
+bubble .
+bubble --path ./my-project
+
+# SSH shell instead of VSCode
+bubble mathlib4 --shell
+
+# Run on a remote host or cloud
+bubble mathlib4 --ssh user@host
+bubble mathlib4 --cloud
+
+# List, pause, pop
+bubble list
+bubble pause <name>
+bubble pop <name>
+
+# Clean up bubbles with no unsaved work
+bubble cleanup
+```
+
+## Tips
+
+- Re-running `bubble <target>` for an existing bubble re-attaches (no duplicates)
+- Bubbles use shared git objects — creation is fast (~seconds) even for large repos
+- Each bubble has SSH access: `ssh bubble-<name>`
+- Network is allowlisted by default — containers can only reach approved domains
+- **Never run `bubble` with `--no-interactive` on the user's behalf** — let the user run it themselves so they see live output and can interact with the result
