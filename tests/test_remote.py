@@ -158,12 +158,15 @@ class TestRemoteHostProperties:
 class TestSpecRoundtrip:
     """Parsing a spec_string should produce the same RemoteHost."""
 
-    @pytest.mark.parametrize("spec", [
-        "server",
-        "kim@server",
-        "server:2222",
-        "kim@server:2222",
-    ])
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            "server",
+            "kim@server",
+            "server:2222",
+            "kim@server:2222",
+        ],
+    )
     def test_roundtrip(self, spec):
         h = RemoteHost.parse(spec)
         assert RemoteHost.parse(h.spec_string()) == h

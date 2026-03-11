@@ -118,19 +118,32 @@ def init_bare_repo(org_repo: str) -> Path:
         )
         # Configure to fetch all refs (including PRs and tags)
         subprocess.run(
-            ["git", "-C", str(path), "config", "remote.origin.fetch",
-             "+refs/heads/*:refs/heads/*"],
+            ["git", "-C", str(path), "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
             check=True,
         )
         subprocess.run(
-            ["git", "-C", str(path), "config", "--add",
-             "remote.origin.fetch", "+refs/tags/*:refs/tags/*"],
+            [
+                "git",
+                "-C",
+                str(path),
+                "config",
+                "--add",
+                "remote.origin.fetch",
+                "+refs/tags/*:refs/tags/*",
+            ],
             check=True,
         )
         # Also fetch PR refs so we can checkout PRs
         subprocess.run(
-            ["git", "-C", str(path), "config", "--add",
-             "remote.origin.fetch", "+refs/pull/*/head:refs/pull/*/head"],
+            [
+                "git",
+                "-C",
+                str(path),
+                "config",
+                "--add",
+                "remote.origin.fetch",
+                "+refs/pull/*/head:refs/pull/*/head",
+            ],
             check=True,
         )
     return path
@@ -168,7 +181,6 @@ def update_all_repos():
                     )
             except subprocess.CalledProcessError as e:
                 print(f"Warning: failed to update {repo_dir.name}: {e}")
-
 
 
 def repo_is_known(org_repo: str) -> bool:

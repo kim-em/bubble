@@ -426,8 +426,11 @@ def run_daemon():
                     pass
                 continue
             executor.submit(
-                _guarded_handle, handler_semaphore, conn,
-                rate_limiter, token_registry,
+                _guarded_handle,
+                handler_semaphore,
+                conn,
+                rate_limiter,
+                token_registry,
             )
     except KeyboardInterrupt:
         logger.info("Relay daemon stopped")

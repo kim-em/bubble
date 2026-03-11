@@ -371,7 +371,10 @@ def _ensure_incus_initialized():
     try:
         result = subprocess.run(
             ["incus", "storage", "list", "--format=json"],
-            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             pools = json.loads(result.stdout) if result.stdout.strip() else []
@@ -385,7 +388,9 @@ def _ensure_incus_initialized():
     try:
         subprocess.run(
             ["incus", "admin", "init", "--auto"],
-            check=True, timeout=30, stdin=subprocess.DEVNULL,
+            check=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
         )
         click.echo("  Incus initialized.")
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -505,7 +510,9 @@ def _get_host_git_identity() -> tuple[str, str]:
         try:
             val = subprocess.run(
                 ["git", "config", key],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             ).stdout.strip()
         except subprocess.CalledProcessError:
             val = ""
@@ -562,8 +569,6 @@ def _detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
         )
     except Exception:
         return "/home/user"
-
-
 
 
 def _maybe_install_automation():
@@ -657,9 +662,7 @@ class BubbleGroup(click.Group):
 
         This supports both `bubble TARGET` and `bubble --ssh HOST TARGET`.
         """
-        has_command = any(
-            not a.startswith("-") and a in self.commands for a in args
-        )
+        has_command = any(not a.startswith("-") and a in self.commands for a in args)
         has_non_option = any(not a.startswith("-") for a in args)
         if args and has_non_option and not has_command:
             args = ["open"] + args
@@ -700,7 +703,7 @@ def help_cmd(ctx, command):
                 click.echo(f"Unknown command: {' '.join(command)}")
                 raise SystemExit(1)
         else:
-            click.echo(f"'{name}' is not a subcommand of '{command[command.index(name)-1]}'")
+            click.echo(f"'{name}' is not a subcommand of '{command[command.index(name) - 1]}'")
             raise SystemExit(1)
     # Build a proper context so the Usage line shows the right command name
     sub_ctx = click.Context(cmd, info_name=command[-1], parent=ctx.parent)
@@ -821,8 +824,11 @@ def _detect_and_build_image(runtime, ref_path, t):
             # and build the toolchain image in the background for next time.
             # Defer the background build until after the lean image is ready,
             # otherwise the background process races with the main build.
-            version = image_name[len("lean-"):]
-            click.echo(f"  Toolchain {version} image not cached, using base lean image (building {image_name} in background for next time)")
+            version = image_name[len("lean-") :]
+            click.echo(
+                f"  Toolchain {version} image not cached, using base lean image"
+                f" (building {image_name} in background for next time)"
+            )
             pending_toolchain_build = version
             image_name = "lean"
         if not runtime.image_exists(image_name):
@@ -832,7 +838,7 @@ def _detect_and_build_image(runtime, ref_path, t):
             build_image(runtime, image_name)
             click.echo(f"  {image_name} image ready.")
     elif image_name.startswith("lean-v"):
-        version = image_name[len("lean-"):]
+        version = image_name[len("lean-") :]
         click.echo(f"  Using cached toolchain image ({version})")
 
     if pending_toolchain_build:
@@ -865,10 +871,17 @@ def _background_build_lean_toolchain(version: str):
 
 
 def _provision_container(
-    runtime, name, image_name, ref_path, mount_name, config, hook=None, dep_mounts=None,
+    runtime,
+    name,
+    image_name,
+    ref_path,
+    mount_name,
+    config,
+    hook=None,
+    dep_mounts=None,
     network=False,
 ):
-    """Launch container, wait for readiness, apply network allowlist, mount git repos, set up relay."""
+    """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     click.echo("  Launching container...", nl=False)
     runtime.launch(name, image_name)
     click.echo(" done.")
@@ -900,8 +913,11 @@ def _provision_container(
                 continue  # Don't double-mount the main repo
             device_name = f"dep-{repo_name}".replace(".", "-").replace("_", "-")[:63]
             runtime.add_disk(
-                name, device_name, str(dep_path),
-                f"/shared/git/{repo_name}.git", readonly=True,
+                name,
+                device_name,
+                str(dep_path),
+                f"/shared/git/{repo_name}.git",
+                readonly=True,
             )
 
     # Add shared writable mounts from hook (e.g. mathlib cache)
@@ -913,16 +929,24 @@ def _provision_container(
             # Make group-writable so container user can write with UID mapping
             host_path.chmod(0o770)
             runtime.add_disk(
-                name, f"shared-{host_dir_name}", str(host_path), container_path,
+                name,
+                f"shared-{host_dir_name}",
+                str(host_path),
+                container_path,
             )
             if env_var:
                 env_lines.append(f"export {env_var}={shlex.quote(container_path)}")
         if env_lines:
             # Set env vars globally via /etc/profile.d so all shells see them
             script = "\\n".join(env_lines)
-            runtime.exec(name, [
-                "bash", "-c", f"printf '{script}\\n' > /etc/profile.d/bubble-shared.sh",
-            ])
+            runtime.exec(
+                name,
+                [
+                    "bash",
+                    "-c",
+                    f"printf '{script}\\n' > /etc/profile.d/bubble-shared.sh",
+                ],
+            )
 
     relay_enabled = config.get("relay", {}).get("enabled", False)
     if relay_enabled:
@@ -974,10 +998,15 @@ def _get_pr_metadata(owner: str, repo: str, pr_number: str) -> tuple[str, str, s
     try:
         result = subprocess.run(
             [
-                "gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}",
-                "--jq", ".head.ref,.head.repo.full_name,.head.repo.clone_url",
+                "gh",
+                "api",
+                f"repos/{owner}/{repo}/pulls/{pr_number}",
+                "--jq",
+                ".head.ref,.head.repo.full_name,.head.repo.clone_url",
             ],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode == 0:
             lines = result.stdout.strip().splitlines()
@@ -1023,7 +1052,10 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
                     runtime.exec(
                         name,
                         [
-                            "su", "-", "user", "-c",
+                            "su",
+                            "-",
+                            "user",
+                            "-c",
                             f"cd /home/user/{q_short}"
                             f" && (git remote add {q_owner} {q_url} 2>/dev/null"
                             f" || git remote set-url {q_owner} {q_url})"
@@ -1037,7 +1069,10 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
                     runtime.exec(
                         name,
                         [
-                            "su", "-", "user", "-c",
+                            "su",
+                            "-",
+                            "user",
+                            "-c",
                             f"cd /home/user/{q_short}"
                             f" && git fetch origin"
                             f" +refs/heads/{q_head}:refs/remotes/origin/{q_head}"
@@ -1057,7 +1092,10 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
             runtime.exec(
                 name,
                 [
-                    "su", "-", "user", "-c",
+                    "su",
+                    "-",
+                    "user",
+                    "-c",
                     f"cd /home/user/{q_short} && git fetch origin"
                     f" pull/{t.ref}/head:{q_branch} && git checkout {q_branch}",
                 ],
@@ -1098,8 +1136,20 @@ def _clone_and_checkout(runtime, name, t, mount_name, short) -> str:
 
 
 def _finalize_bubble(
-    runtime, name, t, hook, image_name, checkout_branch, short, network, config,
-    editor, no_interactive, machine_readable=False, git_name="", git_email="",
+    runtime,
+    name,
+    t,
+    hook,
+    image_name,
+    checkout_branch,
+    short,
+    network,
+    config,
+    editor,
+    no_interactive,
+    machine_readable=False,
+    git_name="",
+    git_email="",
     command=None,
 ):
     """Post-clone setup: hooks, SSH, registration, and attach."""
@@ -1135,7 +1185,8 @@ def _finalize_bubble(
 
     if machine_readable:
         _machine_readable_output(
-            "created", name,
+            "created",
+            name,
             project_dir=project_dir,
             workspace_file=workspace_file,
             org_repo=t.org_repo,
@@ -1154,8 +1205,7 @@ def _finalize_bubble(
             click.echo("Connecting via SSH...")
         else:
             click.echo("Opening VSCode...")
-        open_editor(editor, name, project_dir, workspace_file=workspace_file,
-                    command=command)
+        open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
 
 
 def _machine_readable_output(status: str, name: str, **kwargs):
@@ -1188,24 +1238,41 @@ def _inject_local_ssh_keys(remote_host, container_name: str):
     _ssh_run(
         remote_host,
         [
-            "incus", "exec", container_name, "--",
-            "su", "-", "user", "-c",
-            f'mkdir -p ~/.ssh && chmod 700 ~/.ssh '
+            "incus",
+            "exec",
+            container_name,
+            "--",
+            "su",
+            "-",
+            "user",
+            "-c",
+            f"mkdir -p ~/.ssh && chmod 700 ~/.ssh "
             f'&& printf "{keys_str}\\n" >> ~/.ssh/authorized_keys '
-            f'&& chmod 600 ~/.ssh/authorized_keys',
+            f"&& chmod 600 ~/.ssh/authorized_keys",
         ],
         timeout=15,
     )
 
 
-def _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config,
-                 git_name="", git_email="", command=None):
+def _open_remote(
+    remote_host,
+    target,
+    editor,
+    no_interactive,
+    network,
+    custom_name,
+    config,
+    git_name="",
+    git_email="",
+    command=None,
+):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
 
     try:
         result = remote_open(
-            remote_host, target,
+            remote_host,
+            target,
             network=network,
             custom_name=custom_name,
             git_name=git_name,
@@ -1243,8 +1310,7 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
             click.echo("Connecting via SSH...")
         else:
             click.echo("Opening VSCode...")
-        open_editor(editor, name, project_dir, workspace_file=workspace_file,
-                    command=command)
+        open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
 
 
 # The "open" command is hidden from help because users invoke it implicitly via
@@ -1252,31 +1318,71 @@ def _open_remote(remote_host, target, editor, no_interactive, network, custom_na
 # `bubble open --no-interactive --machine-readable` on remote hosts.
 @main.command("open", hidden=True)
 @click.argument("target")
-@click.option("--editor", "editor_choice", type=click.Choice(["vscode", "shell"]),
-              default=None, help="Editor to use (default: from config or vscode)")
+@click.option(
+    "--editor",
+    "editor_choice",
+    type=click.Choice(["vscode", "shell"]),
+    default=None,
+    help="Editor to use (default: from config or vscode)",
+)
 @click.option("--shell", is_flag=True, help="Drop into SSH session (shortcut for --editor shell)")
-@click.option("--ssh", "ssh_host", type=str, default=None, metavar="HOST",
-              help="Run on remote host (host, user@host, or user@host:port)")
-@click.option("--cloud", "cloud", is_flag=True,
-              help="Run on auto-provisioned Hetzner Cloud server")
-@click.option("--local", "force_local", is_flag=True,
-              help="Force local execution (override default remote/cloud)")
+@click.option(
+    "--ssh",
+    "ssh_host",
+    type=str,
+    default=None,
+    metavar="HOST",
+    help="Run on remote host (host, user@host, or user@host:port)",
+)
+@click.option("--cloud", "cloud", is_flag=True, help="Run on auto-provisioned Hetzner Cloud server")
+@click.option(
+    "--local",
+    "force_local",
+    is_flag=True,
+    help="Force local execution (override default remote/cloud)",
+)
 @click.option("--no-interactive", is_flag=True, help="Just create, don't attach")
-@click.option("--machine-readable", is_flag=True, hidden=True,
-              help="Output JSON (for remote orchestration)")
+@click.option(
+    "--machine-readable", is_flag=True, hidden=True, help="Output JSON (for remote orchestration)"
+)
 @click.option("--network/--no-network", default=True, help="Apply network allowlist")
 @click.option("--name", "custom_name", type=str, help="Custom container name")
-@click.option("--command", "command", type=str, default=None,
-              help="Run a command via SSH instead of interactive shell")
+@click.option(
+    "--command",
+    "command",
+    type=str,
+    default=None,
+    help="Run a command via SSH instead of interactive shell",
+)
 @click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
 @click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
 )
 @click.option("--git-name", type=str, default=None, hidden=True, help="Git user.name for container")
-@click.option("--git-email", type=str, default=None, hidden=True, help="Git user.email for container")
-def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
-             no_interactive, machine_readable, network, custom_name, command, force_path,
-             no_clone, git_name, git_email):
+@click.option(
+    "--git-email",
+    type=str,
+    default=None,
+    hidden=True,
+    help="Git user.email for container",
+)
+def open_cmd(
+    target,
+    editor_choice,
+    shell,
+    ssh_host,
+    cloud,
+    force_local,
+    no_interactive,
+    machine_readable,
+    network,
+    custom_name,
+    command,
+    force_path,
+    no_clone,
+    git_name,
+    git_email,
+):
     """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
     if force_path and not target.startswith(("/", ".", "..")):
         target = "./" + target
@@ -1312,19 +1418,32 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
     if not force_local and not machine_readable:
         if ssh_host:
             from .remote import RemoteHost
+
             remote_host = RemoteHost.parse(ssh_host)
         elif cloud or config.get("cloud", {}).get("default", False):
             from .cloud import get_cloud_remote_host
+
             remote_host = get_cloud_remote_host(config)
         else:
             default = config.get("remote", {}).get("default_host", "")
             if default:
                 from .remote import RemoteHost
+
                 remote_host = RemoteHost.parse(default)
 
     if remote_host:
-        _open_remote(remote_host, target, editor, no_interactive, network, custom_name, config,
-                     git_name=git_name, git_email=git_email, command=command_args)
+        _open_remote(
+            remote_host,
+            target,
+            editor,
+            no_interactive,
+            network,
+            custom_name,
+            config,
+            git_name=git_name,
+            git_email=git_email,
+            command=command_args,
+        )
         return
 
     # Local flow
@@ -1338,8 +1457,7 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
     if existing:
         if machine_readable:
             project_dir = _detect_project_dir(runtime, existing)
-            _machine_readable_output("reattached", existing,
-                                     project_dir=project_dir)
+            _machine_readable_output("reattached", existing, project_dir=project_dir)
             return
         _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
@@ -1369,8 +1487,9 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
     if existing:
         if machine_readable:
             project_dir = _detect_project_dir(runtime, existing)
-            _machine_readable_output("reattached", existing, project_dir=project_dir,
-                                     org_repo=t.org_repo)
+            _machine_readable_output(
+                "reattached", existing, project_dir=project_dir, org_repo=t.org_repo
+            )
             return
         _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
@@ -1393,8 +1512,7 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
                     if not ensure_rev_available(dep.org_repo, dep.rev):
                         if not machine_readable:
                             click.echo(
-                                f"  Warning: rev {dep.rev[:12]} not found"
-                                f" for {dep.name}, skipping"
+                                f"  Warning: rev {dep.rev[:12]} not found for {dep.name}, skipping"
                             )
                         continue
                     repo_name = dep.org_repo.split("/")[-1]
@@ -1413,8 +1531,15 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
     short = repo_short_name(t.org_repo)
     try:
         _provision_container(
-            runtime, name, image_name, ref_path, mount_name, config,
-            hook=hook, dep_mounts=dep_mounts, network=network,
+            runtime,
+            name,
+            image_name,
+            ref_path,
+            mount_name,
+            config,
+            hook=hook,
+            dep_mounts=dep_mounts,
+            network=network,
         )
         checkout_branch = _clone_and_checkout(runtime, name, t, mount_name, short)
         _finalize_bubble(
@@ -1445,8 +1570,9 @@ def open_cmd(target, editor_choice, shell, ssh_host, cloud, force_local,
         raise
 
 
-def _reattach(runtime: ContainerRuntime, name: str, editor: str, no_interactive: bool,
-              command=None):
+def _reattach(
+    runtime: ContainerRuntime, name: str, editor: str, no_interactive: bool, command=None
+):
     """Re-attach to an existing container."""
     _ensure_running(runtime, name)
 
@@ -1477,6 +1603,7 @@ def _format_age(dt: "datetime | None") -> str:  # noqa: F821
     if dt is None:
         return "-"
     from datetime import datetime, timezone
+
     delta = datetime.now(timezone.utc) - dt
     seconds = int(delta.total_seconds())
     if seconds < 60:
@@ -1541,19 +1668,22 @@ def _remote_entries_from_registry() -> list[dict]:
         except ValueError:
             continue
         location = "cloud" if _is_cloud_host(host.hostname) else host_spec
-        entries.append({
-            "name": name,
-            "state": "unknown",
-            "location": location,
-            "created_at": _parse_iso(info.get("created_at")),
-            "last_used_at": None,
-            "remote_host_spec": host_spec,
-        })
+        entries.append(
+            {
+                "name": name,
+                "state": "unknown",
+                "location": location,
+                "created_at": _parse_iso(info.get("created_at")),
+                "last_used_at": None,
+                "remote_host_spec": host_spec,
+            }
+        )
     return entries
 
 
-def _query_remote_list(host_spec: str, is_cloud: bool, verbose: bool = False,
-                       timeout: int = 15) -> list[dict] | None:
+def _query_remote_list(
+    host_spec: str, is_cloud: bool, verbose: bool = False, timeout: int = 15
+) -> list[dict] | None:
     """Query a remote host for its bubble list via SSH.
 
     For cloud hosts, checks the Hetzner API first and skips SSH when the
@@ -1666,7 +1796,9 @@ def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only
                     for e in remote_entries
                 )
                 queried_hosts[spec] = _query_remote_list(
-                    spec, is_cloud, verbose=verbose,
+                    spec,
+                    is_cloud,
+                    verbose=verbose,
                 )
 
         # Update remote entries with live data where available
@@ -1714,8 +1846,16 @@ def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only
                 "name": e["name"],
                 "state": e["state"],
                 "location": e["location"],
-                "created_at": e["created_at"].isoformat() if hasattr(e.get("created_at"), "isoformat") else e.get("created_at"),
-                "last_used_at": e["last_used_at"].isoformat() if hasattr(e.get("last_used_at"), "isoformat") else e.get("last_used_at"),
+                "created_at": (
+                    e["created_at"].isoformat()
+                    if hasattr(e.get("created_at"), "isoformat")
+                    else e.get("created_at")
+                ),
+                "last_used_at": (
+                    e["last_used_at"].isoformat()
+                    if hasattr(e.get("last_used_at"), "isoformat")
+                    else e.get("last_used_at")
+                ),
             }
             if verbose:
                 d["ipv4"] = e.get("ipv4")
@@ -1773,8 +1913,11 @@ def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only
         if any(e["location"] == "cloud" for e in entries):
             hints.append("--cloud for live cloud status")
     if has_remote and not ssh_host:
-        ssh_hosts = {e["remote_host_spec"] for e in entries
-                     if e.get("remote_host_spec") and e["location"] != "cloud"}
+        ssh_hosts = {
+            e["remote_host_spec"]
+            for e in entries
+            if e.get("remote_host_spec") and e["location"] != "cloud"
+        }
         if ssh_hosts:
             hints.append("--ssh HOST for live remote status")
     if hints:
@@ -1794,6 +1937,7 @@ def pause(name):
     info = get_bubble_info(name)
     if info and info.get("remote_host"):
         from .remote import RemoteHost, apply_cloud_ssh_options, remote_command
+
         host = RemoteHost.parse(info["remote_host"])
         apply_cloud_ssh_options(host)
         result = remote_command(host, ["pause", name])
@@ -1818,6 +1962,7 @@ def pop(name, force):
     info = get_bubble_info(name)
     if info and info.get("remote_host"):
         from .remote import RemoteHost, apply_cloud_ssh_options, remote_command
+
         host = RemoteHost.parse(info["remote_host"])
         apply_cloud_ssh_options(host)
         if not force:
@@ -1880,7 +2025,10 @@ def pop(name, force):
 @click.option("-n", "--dry-run", is_flag=True, help="Show what would be popped")
 @click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
 @click.option(
-    "-a", "--all", "check_all", is_flag=True,
+    "-a",
+    "--all",
+    "check_all",
+    is_flag=True,
     help="Start stopped/frozen bubbles to check them",
 )
 @click.option("--age", type=int, default=0, help="Only clean up bubbles unused for N+ days")
@@ -2022,7 +2170,7 @@ def images_build(image_name):
 
         from .images.builder import build_lean_toolchain_image
 
-        version = image_name[len("lean-"):]
+        version = image_name[len("lean-") :]
         if not re.fullmatch(r"v\d+\.\d+\.\d+(-rc\d+)?", version):
             click.echo(
                 f"Invalid toolchain version: {version}. Expected format: v4.X.Y or v4.X.Y-rcN",
@@ -2066,9 +2214,7 @@ def images_delete(image_name, delete_all):
     if not runtime.image_exists(image_name):
         # Check if it matches a fingerprint prefix
         images = runtime.list_images()
-        matches = [
-            img for img in images if img.get("fingerprint", "").startswith(image_name)
-        ]
+        matches = [img for img in images if img.get("fingerprint", "").startswith(image_name)]
         if len(matches) == 1:
             fp = matches[0]["fingerprint"]
             runtime.image_delete(fp)
@@ -2318,6 +2464,7 @@ def _save_terminal():
     """Save terminal settings so subprocess calls can't corrupt them."""
     try:
         import termios
+
         if sys.stdin.isatty():
             return termios.tcgetattr(sys.stdin)
     except (ImportError, termios.error):
@@ -2330,6 +2477,7 @@ def _restore_terminal(saved):
     if saved is not None:
         try:
             import termios
+
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, saved)
         except (ImportError, termios.error):
             pass
@@ -2387,7 +2535,8 @@ def remote_status():
     # Show remote bubbles from registry
     registry = load_registry()
     remote_bubbles = [
-        (name, info) for name, info in registry.get("bubbles", {}).items()
+        (name, info)
+        for name, info in registry.get("bubbles", {}).items()
         if info.get("remote_host")
     ]
     if remote_bubbles:
@@ -2407,12 +2556,13 @@ def cloud_group():
 
 
 @cloud_group.command("provision")
-@click.option("--type", "server_type", type=str, default=None,
-              help="Server type (e.g. cx43, ccx43, cx53)")
-@click.option("--location", type=str, default=None,
-              help="Datacenter location (default: fsn1)")
-@click.option("--list", "list_types", is_flag=True, default=False,
-              help="List available server types and exit")
+@click.option(
+    "--type", "server_type", type=str, default=None, help="Server type (e.g. cx43, ccx43, cx53)"
+)
+@click.option("--location", type=str, default=None, help="Datacenter location (default: fsn1)")
+@click.option(
+    "--list", "list_types", is_flag=True, default=False, help="List available server types and exit"
+)
 def cloud_provision(server_type, location, list_types):
     """Provision a Hetzner Cloud server for bubble.
 
@@ -2430,10 +2580,12 @@ def cloud_provision(server_type, location, list_types):
     """
     if list_types:
         from .cloud import list_server_types
+
         config = load_config()
         list_server_types(config, location=location)
         return
     from .cloud import provision_server
+
     config = load_config()
     if not server_type:
         click.echo("Use --list to see all available server types.")
@@ -2445,6 +2597,7 @@ def cloud_provision(server_type, location, list_types):
 def cloud_destroy(force):
     """Destroy the cloud server permanently."""
     from .cloud import destroy_server
+
     destroy_server(force=force)
 
 
@@ -2455,6 +2608,7 @@ def cloud_stop():
     Containers are preserved on disk and will be available after restart.
     """
     from .cloud import stop_server
+
     stop_server()
 
 
@@ -2462,6 +2616,7 @@ def cloud_stop():
 def cloud_start():
     """Power on the cloud server and wait for SSH."""
     from .cloud import start_server
+
     start_server()
 
 
@@ -2469,6 +2624,7 @@ def cloud_start():
 def cloud_status():
     """Show cloud server info and status."""
     from .cloud import get_server_status
+
     status = get_server_status()
     if not status:
         click.echo("No cloud server provisioned.")
@@ -2490,6 +2646,7 @@ def cloud_status():
 def cloud_ssh_cmd(args):
     """SSH directly to the cloud server."""
     from .cloud import cloud_ssh
+
     cloud_ssh(list(args) if args else None)
 
 
@@ -2511,7 +2668,7 @@ def cloud_default(setting):
         else:
             click.echo("Use --cloud flag or: bubble cloud default on")
         return
-    config.setdefault("cloud", {})["default"] = (setting == "on")
+    config.setdefault("cloud", {})["default"] = setting == "on"
     save_config(config)
     if setting == "on":
         click.echo("Cloud set as default. All 'bubble open' will use cloud.")
@@ -2571,7 +2728,10 @@ def doctor():
     try:
         result = subprocess.run(
             ["incus", "operation", "list", "--format=json"],
-            capture_output=True, text=True, check=True, stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
         )
         _restore_terminal(saved_tty)
         import json
@@ -2581,8 +2741,7 @@ def doctor():
         # Only "Running" operations can be stuck; "Success"/"Failure"/"Cancelled" are
         # just completed history that Incus retains temporarily.
         stuck = [
-            op for op in all_ops
-            if op.get("class") != "websocket" and op.get("status") == "Running"
+            op for op in all_ops if op.get("class") != "websocket" and op.get("status") == "Running"
         ]
         if stuck:
             click.echo(f"  Found {len(stuck)} stuck operation(s):")
@@ -2600,8 +2759,11 @@ def doctor():
                     try:
                         subprocess.run(
                             ["incus", "operation", "delete", op_id],
-                            capture_output=True, text=True, check=True,
-                            timeout=10, stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                            timeout=10,
+                            stdin=subprocess.DEVNULL,
                         )
                         cancelled += 1
                     except subprocess.CalledProcessError as e:

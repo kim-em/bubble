@@ -195,9 +195,7 @@ class LeanHook(Hook):
         )
         click.echo("Lean 4 build will start when VS Code connects.")
 
-    def _populate_lake_packages(
-        self, runtime: ContainerRuntime, container: str, project_dir: str
-    ):
+    def _populate_lake_packages(self, runtime: ContainerRuntime, container: str, project_dir: str):
         """Clone each dependency into .lake/packages/<name>/ using alternates."""
         q_dir = shlex.quote(project_dir)
 
@@ -213,7 +211,6 @@ class LeanHook(Hook):
             # All values are validated (_SAFE_NAME_RE, hex SHA, parse_github_url)
             # but quote everything for defense in depth
             q_bare = shlex.quote(f"/shared/git/{repo_name}.git")
-            q_name = shlex.quote(dep.name)
             q_url = shlex.quote(dep.url)
             q_rev = shlex.quote(dep.rev)
             q_pkg = shlex.quote(f"{project_dir}/.lake/packages/{dep.name}")
@@ -228,9 +225,7 @@ class LeanHook(Hook):
                         "-",
                         "user",
                         "-c",
-                        f"git clone --reference {q_bare}"
-                        f" file://{q_bare}"
-                        f" {q_pkg}",
+                        f"git clone --reference {q_bare} file://{q_bare} {q_pkg}",
                     ],
                 )
 
@@ -265,9 +260,7 @@ class LeanHook(Hook):
                 click.echo(f"  Warning: could not pre-populate {dep.name}: {e}")
 
         if populated:
-            click.echo(
-                f"  Pre-populated {populated}/{len(self._git_deps)} Lake dependencies."
-            )
+            click.echo(f"  Pre-populated {populated}/{len(self._git_deps)} Lake dependencies.")
 
     def network_domains(self) -> list[str]:
         return [

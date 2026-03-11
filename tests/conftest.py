@@ -126,6 +126,7 @@ def tmp_data_dir(tmp_path, monkeypatch):
     # Patch cloud module if imported
     try:
         import bubble.cloud as cloud_mod
+
         monkeypatch.setattr(cloud_mod, "CLOUD_STATE_FILE", cloud_state_file)
         monkeypatch.setattr(cloud_mod, "CLOUD_KEY_FILE", cloud_key_file)
         monkeypatch.setattr(cloud_mod, "CLOUD_KNOWN_HOSTS", cloud_known_hosts)

@@ -154,5 +154,3 @@ def open_vscode(
     except FileNotFoundError:
         print(f"VSCode CLI not found. Connect manually: Remote SSH → {host}")
         print(f"Or run: code {flag} {uri}")
-
-
