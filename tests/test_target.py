@@ -7,6 +7,7 @@ import pytest
 
 from bubble.repo_registry import RepoRegistry
 from bubble.target import (
+    Target,
     TargetParseError,
     _parse_github_remote,
     _parse_local_path,
@@ -384,7 +385,7 @@ class TestParseBareNumber:
         not_repo = tmp_path / "notrepo"
         not_repo.mkdir()
         monkeypatch.chdir(not_repo)
-        with pytest.raises(TargetParseError, match="looks like a PR number"):
+        with pytest.raises(TargetParseError, match="looks like a PR/issue number"):
             parse_target("123", empty_registry)
 
     def test_bare_number_with_ssh_remote(self, tmp_path, monkeypatch, registry):
@@ -426,3 +427,69 @@ class TestParseTargetLocalPaths:
     def test_unknown_shortname_suggests_path(self, empty_registry):
         with pytest.raises(TargetParseError, match="local path.*--path"):
             parse_target("unknown", empty_registry)
+
+
+# ---------------------------------------------------------------------------
+# Test: issue URL parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseIssueURL:
+    def test_full_issue_url(self, registry):
+        t = parse_target("https://github.com/leanprover/lean4/issues/42", registry)
+        assert t.owner == "leanprover"
+        assert t.repo == "lean4"
+        assert t.kind == "issue"
+        assert t.ref == "42"
+
+    def test_issue_url_no_scheme(self, registry):
+        t = parse_target("github.com/leanprover/lean4/issues/42", registry)
+        assert t.kind == "issue"
+        assert t.ref == "42"
+
+    def test_issue_url_no_host(self, registry):
+        t = parse_target("leanprover/lean4/issues/42", registry)
+        assert t.kind == "issue"
+        assert t.owner == "leanprover"
+        assert t.ref == "42"
+
+    def test_short_name_issue(self, registry):
+        t = parse_target("lean4/issues/99", registry)
+        assert t.owner == "leanprover"
+        assert t.repo == "lean4"
+        assert t.kind == "issue"
+        assert t.ref == "99"
+
+    def test_invalid_issue_number(self, registry):
+        with pytest.raises(TargetParseError, match="Invalid issue number"):
+            parse_target("leanprover/lean4/issues/notanumber", registry)
+
+    def test_http_issue_url(self, registry):
+        t = parse_target("http://github.com/leanprover/lean4/issues/7", registry)
+        assert t.kind == "issue"
+        assert t.ref == "7"
+
+
+# ---------------------------------------------------------------------------
+# Test: Target dataclass new fields
+# ---------------------------------------------------------------------------
+
+
+class TestTargetNewFields:
+    def test_new_branch_default_false(self, registry):
+        t = parse_target("leanprover/lean4", registry)
+        assert t.new_branch is False
+        assert t.base_ref == ""
+
+    def test_new_branch_field(self):
+        t = Target(
+            owner="test",
+            repo="repo",
+            kind="branch",
+            ref="my-feature",
+            original="test",
+            new_branch=True,
+            base_ref="main",
+        )
+        assert t.new_branch is True
+        assert t.base_ref == "main"

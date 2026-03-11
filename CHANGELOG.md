@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.9 — 2026-03-11
+- GitHub issue targets: `bubble https://github.com/owner/repo/issues/123` creates a branch `issue-123` and opens a bubble
+- Bare numbers auto-detect PR vs issue via GitHub API
+- New branch mode: `bubble -b my-feature owner/repo` creates a fresh branch in a new bubble
+- Claude Code integration: issue bubbles auto-inject a Claude prompt from the issue body/comments, runs on VS Code folder open
+- `BUBBLE_CLAUDE_PROMPT` env var for custom Claude prompts on any bubble
+- Pull latest on reattach: clean containers auto-pull before reopening
+
 ## 0.5.8 — 2026-03-10
 - User-configurable host directory mounts via `--mount` CLI flag and `[[mounts]]` config section
 - Supports read-only (default) and read-write modes
