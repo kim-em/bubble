@@ -986,6 +986,18 @@ def _provision_container(
                 m.target,
                 readonly=m.readonly,
             )
+        # Writable projects directory — shared across bubbles, persists on host.
+        # Separate from the host's ~/.claude/projects/ so existing host session
+        # history isn't visible, but new sessions created inside bubbles persist.
+        projects_dir = DATA_DIR / "claude-projects"
+        projects_dir.mkdir(parents=True, exist_ok=True)
+        projects_dir.chmod(0o770)
+        runtime.add_disk(
+            name,
+            "claude-projects",
+            str(projects_dir),
+            "/home/user/.claude/projects",
+        )
 
     # Add user-specified mounts (from --mount flags and [[mounts]] config)
     if user_mounts:

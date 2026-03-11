@@ -123,6 +123,10 @@ def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(lifecycle, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(git_store, "GIT_DIR", git_dir)
 
+    import bubble.cli as cli
+
+    monkeypatch.setattr(cli, "DATA_DIR", data_dir)
+
     # Patch cloud module if imported
     try:
         import bubble.cloud as cloud_mod

@@ -453,7 +453,7 @@ class TestClaudeConfigMounts:
 class TestClaudeConfigProvisioning:
     """Test that claude config mounts are applied during container provisioning."""
 
-    def test_claude_mounts_applied(self, mock_runtime, tmp_path):
+    def test_claude_mounts_applied(self, mock_runtime, tmp_path, tmp_data_dir):
         """Verify add_disk calls with claude-config device names."""
         from bubble.cli import _provision_container
 
@@ -503,7 +503,7 @@ class TestClaudeConfigProvisioning:
             True,
         )
 
-    def test_creates_claude_dir_in_container(self, mock_runtime, tmp_path):
+    def test_creates_claude_dir_in_container(self, mock_runtime, tmp_path, tmp_data_dir):
         """Verify .claude directory is created before mounting."""
         from bubble.cli import _provision_container
 
@@ -534,7 +534,43 @@ class TestClaudeConfigProvisioning:
         assert "mkdir -p /home/user/.claude" in " ".join(mkdir_calls[0][2])
         assert "chown user:user" in " ".join(mkdir_calls[0][2])
 
-    def test_no_claude_mounts(self, mock_runtime, tmp_path):
+    def test_projects_dir_mounted_writable(self, mock_runtime, tmp_path, tmp_data_dir):
+        """Verify projects directory is mounted read-write and created on host."""
+        from bubble.cli import _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        claude_mounts = [
+            MountSpec(
+                source="/home/testuser/.claude/CLAUDE.md",
+                target="/home/user/.claude/CLAUDE.md",
+                readonly=True,
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            claude_mounts=claude_mounts,
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        projects_calls = [c for c in disk_calls if c[2] == "claude-projects"]
+        assert len(projects_calls) == 1
+        assert projects_calls[0][4] == "/home/user/.claude/projects"
+        assert projects_calls[0][5] is False  # read-write
+
+        # Host directory created
+        projects_dir = tmp_data_dir / "claude-projects"
+        assert projects_dir.is_dir()
+        assert projects_dir.stat().st_mode & 0o770 == 0o770
+
+    def test_no_claude_mounts(self, mock_runtime, tmp_path, tmp_data_dir):
         """No claude mount calls when claude_mounts is empty."""
         from bubble.cli import _provision_container
 
@@ -552,5 +588,5 @@ class TestClaudeConfigProvisioning:
         )
 
         disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
-        claude_disk_calls = [c for c in disk_calls if "claude-config" in c[2]]
+        claude_disk_calls = [c for c in disk_calls if "claude" in c[2]]
         assert len(claude_disk_calls) == 0
