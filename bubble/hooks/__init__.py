@@ -73,8 +73,9 @@ class Hook(ABC):
 def discover_hooks() -> list[Hook]:
     """Return all registered hooks in priority order."""
     from .lean import LeanHook
+    from .python import PythonHook
 
-    return [LeanHook()]
+    return [LeanHook(), PythonHook()]
 
 
 def select_hook(bare_repo_path: Path, ref: str) -> Hook | None:

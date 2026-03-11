@@ -1,6 +1,9 @@
 # Changelog
 
 ## 0.6.3 — 2026-03-12
+- Add PythonHook: detect `pyproject.toml`, select `python` image with `uv` and `ruff` pre-baked (#93)
+  - Auto-runs `uv sync` on first login for dependency installation
+  - Runtime network allowlist includes `pypi.org` and `files.pythonhosted.org`
 - Don't prompt interactively during `bubble open` (#88)
   - `maybe_symlink_claude_projects()` now prints an informational message instead of blocking on a `[y/N]` prompt
   - New `bubble config symlink-claude-projects` command to perform the symlink manually

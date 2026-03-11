@@ -75,6 +75,7 @@ def is_build_locked(image_name: str) -> bool:
 IMAGES = {
     "base": {"script": "base.sh", "parent": "images:ubuntu/24.04"},
     "lean": {"script": "lean.sh", "parent": "base"},
+    "python": {"script": "python.sh", "parent": "base"},
 }
 
 
