@@ -2488,7 +2488,11 @@ def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only
     runtime = get_runtime(config, ensure_ready=False)
 
     # --- Local containers ---
-    containers = runtime.list_containers(fast=not verbose)
+    from .images.builder import is_builder_container
+
+    containers = [
+        c for c in runtime.list_containers(fast=not verbose) if not is_builder_container(c.name)
+    ]
 
     clean_statuses = {}
     if show_clean:
@@ -2840,7 +2844,25 @@ def cleanup(dry_run, force, check_all, age):
     config = load_config()
     runtime = get_runtime(config, ensure_ready=False)
 
+    from .images.builder import is_builder_container
+
     containers = runtime.list_containers(fast=True)
+
+    # Clean up stale builder containers (leftover from interrupted image builds).
+    # Skip running builders — they may be active image builds.
+    builders = [c for c in containers if is_builder_container(c.name) and c.state != "running"]
+    for c in builders:
+        if dry_run:
+            click.echo(f"  Would remove stale builder: {c.name}")
+        else:
+            try:
+                runtime.delete(c.name, force=True)
+                click.echo(f"  Removed stale builder: {c.name}")
+            except Exception as e:
+                click.echo(f"  Could not remove builder {c.name}: {e}")
+
+    # Filter out builder containers from the bubble check
+    containers = [c for c in containers if not is_builder_container(c.name)]
     to_check = [c for c in containers if c.state == "running"]
     to_start = []
     if check_all:

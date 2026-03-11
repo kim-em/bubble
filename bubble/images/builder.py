@@ -198,6 +198,28 @@ def get_vscode_commit() -> str | None:
     return None
 
 
+def is_builder_container(name: str) -> bool:
+    """Check if a container name matches the builder naming pattern.
+
+    Builder containers are temporary containers created during image builds,
+    named ``{image_name}-builder``. They should be cleaned up after the build
+    completes, but may be left behind if the build is interrupted.
+
+    Only matches known image builder names (from IMAGES keys) and the lean
+    toolchain pattern (lean-*-builder), not arbitrary names ending in -builder.
+    """
+    if not name.endswith("-builder"):
+        return False
+    prefix = name[: -len("-builder")]
+    # Known static image builders (e.g. "base-builder", "lean-vscode-builder")
+    if prefix in IMAGES:
+        return True
+    # Lean toolchain builders (e.g. "lean-v4-16-0-builder", "lean-emacs-v4-16-0-builder")
+    if re.match(r"^lean(-[a-z]+)?-v\d+", prefix):
+        return True
+    return False
+
+
 def _cleanup_builder(runtime: ContainerRuntime, build_name: str):
     """Ensure no leftover builder container exists from a previous failed attempt."""
     try:
