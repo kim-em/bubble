@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.15 — 2026-03-11
+- Split cli.py (~4200 lines) into focused modules (#45):
+  - `setup.py`: dependency installation, runtime setup
+  - `image_management.py`: image detection, building, background rebuilds
+  - `provisioning.py`: container provisioning and mount setup
+  - `clone.py`: repo cloning and checkout inside containers
+  - `finalization.py`: post-clone setup, SSH, registration, editor launch
+  - `container_helpers.py`: shared container helpers (find, SSH, git config, network)
+  - `native.py`: non-containerized workspace mode
+  - `commands/list_cmd.py`: list command and formatting helpers
+  - `commands/lifecycle.py`: pause, pop, cleanup commands
+  - `commands/images.py`: image list, build, delete commands
+  - `commands/infrastructure.py`: git, network, automation command groups
+  - `commands/relay_cmd.py`: relay enable, disable, status, daemon
+  - `commands/remote_cmd.py`: remote host management commands
+  - `commands/cloud_cmd.py`: Hetzner Cloud management commands
+  - `commands/settings.py`: skill, claude, tools, gh, config command groups
+  - `commands/doctor.py`: diagnostic doctor command
+- cli.py reduced to ~815 lines: Click infrastructure and open command orchestration only
+- All extracted modules under 420 lines each
+- Pure refactor: no behavior changes
+
 ## 0.5.14 — 2026-03-11
 - Inject GitHub auth token into bubbles so `gh` CLI works inside containers (#38)
 - New `--gh-token` flag on `bubble open` (opt-in, default disabled)

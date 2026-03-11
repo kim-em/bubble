@@ -2,7 +2,8 @@
 
 import subprocess
 
-from bubble.cli import _apply_editor_to_image, _editor_image_suffix
+from bubble.image_management import apply_editor_to_image as _apply_editor_to_image
+from bubble.image_management import editor_image_suffix as _editor_image_suffix
 from bubble.images.builder import IMAGES
 from bubble.vscode import open_editor
 

@@ -227,7 +227,7 @@ class TestMountProvisioning:
 
     def test_user_mounts_applied(self, mock_runtime, tmp_path):
         """Verify add_disk is called for each user mount."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         # Create a fake ref path and source dirs
         ref_path = tmp_path / "repo.git"
@@ -279,7 +279,7 @@ class TestMountProvisioning:
 
     def test_rw_mount_does_not_mutate_host_permissions(self, mock_runtime, tmp_path):
         """Verify rw mounts do NOT chmod the host source directory."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -305,7 +305,7 @@ class TestMountProvisioning:
 
     def test_exclusions_overmount_tmpfs(self, mock_runtime, tmp_path):
         """Verify exclusions create exec calls to mount tmpfs (no add_device)."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -343,7 +343,7 @@ class TestMountProvisioning:
 
     def test_no_user_mounts(self, mock_runtime, tmp_path):
         """No user mount calls when user_mounts is empty."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -540,7 +540,7 @@ class TestClaudeConfigProvisioning:
 
     def test_claude_mounts_applied(self, mock_runtime, tmp_path, tmp_data_dir):
         """Verify add_disk calls with claude-config device names."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -590,7 +590,7 @@ class TestClaudeConfigProvisioning:
 
     def test_creates_claude_dir_in_container(self, mock_runtime, tmp_path, tmp_data_dir):
         """Verify .claude directory is created before mounting."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -621,7 +621,7 @@ class TestClaudeConfigProvisioning:
 
     def test_projects_dir_mounted_writable(self, mock_runtime, tmp_path, tmp_data_dir):
         """Verify projects directory is mounted read-write and created on host."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -657,7 +657,7 @@ class TestClaudeConfigProvisioning:
 
     def test_no_claude_mounts(self, mock_runtime, tmp_path, tmp_data_dir):
         """No claude mount calls when claude_mounts is empty."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -680,7 +680,7 @@ class TestClaudeConfigProvisioning:
         self, mock_runtime, tmp_path, tmp_data_dir
     ):
         """Projects dir not mounted if user mount targets /home/user/.claude/projects."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -720,7 +720,7 @@ class TestMountOverlaps:
     """Test path ancestry overlap detection."""
 
     def test_exact_match(self):
-        from bubble.cli import _mount_overlaps
+        from bubble.provisioning import mount_overlaps as _mount_overlaps
 
         assert _mount_overlaps(
             Path("/home/user/.claude/CLAUDE.md"),
@@ -728,7 +728,7 @@ class TestMountOverlaps:
         )
 
     def test_target_inside_user_mount(self):
-        from bubble.cli import _mount_overlaps
+        from bubble.provisioning import mount_overlaps as _mount_overlaps
 
         assert _mount_overlaps(
             Path("/home/user/.claude/CLAUDE.md"),
@@ -736,7 +736,7 @@ class TestMountOverlaps:
         )
 
     def test_user_mount_inside_target(self):
-        from bubble.cli import _mount_overlaps
+        from bubble.provisioning import mount_overlaps as _mount_overlaps
 
         assert _mount_overlaps(
             Path("/home/user/.claude"),
@@ -744,7 +744,7 @@ class TestMountOverlaps:
         )
 
     def test_no_overlap(self):
-        from bubble.cli import _mount_overlaps
+        from bubble.provisioning import mount_overlaps as _mount_overlaps
 
         assert not _mount_overlaps(
             Path("/home/user/.claude/CLAUDE.md"),
@@ -752,7 +752,7 @@ class TestMountOverlaps:
         )
 
     def test_empty_user_targets(self):
-        from bubble.cli import _mount_overlaps
+        from bubble.provisioning import mount_overlaps as _mount_overlaps
 
         assert not _mount_overlaps(
             Path("/home/user/.claude/CLAUDE.md"),
@@ -1175,7 +1175,7 @@ class TestEditorConfigProvisioning:
 
     def test_editor_mounts_applied(self, mock_runtime, tmp_path):
         """Verify add_disk calls with editor-config device names."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -1225,7 +1225,7 @@ class TestEditorConfigProvisioning:
 
     def test_creates_parent_dirs_in_container(self, mock_runtime, tmp_path):
         """Verify parent directories are created before mounting."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -1257,7 +1257,7 @@ class TestEditorConfigProvisioning:
 
     def test_no_editor_mounts(self, mock_runtime, tmp_path):
         """No editor mount calls when editor_mounts is empty."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()
@@ -1278,7 +1278,7 @@ class TestEditorConfigProvisioning:
 
     def test_exclusions_create_tmpfs_overlays(self, mock_runtime, tmp_path):
         """Verify exclusions create tmpfs exec calls in container."""
-        from bubble.cli import _provision_container
+        from bubble.provisioning import provision_container as _provision_container
 
         ref_path = tmp_path / "repo.git"
         ref_path.mkdir()

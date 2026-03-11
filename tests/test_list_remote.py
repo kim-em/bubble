@@ -1,7 +1,7 @@
 """Tests for remote-aware bubble list."""
 
-from bubble.cli import _is_cloud_host, _parse_iso, _remote_entries_from_registry
 from bubble.cloud import _save_state
+from bubble.commands.list_cmd import _is_cloud_host, _parse_iso, _remote_entries_from_registry
 from bubble.lifecycle import register_bubble
 from bubble.remote import RemoteHost, apply_cloud_ssh_options
 
