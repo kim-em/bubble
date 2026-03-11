@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.13 — 2026-03-11
+- Persistent config for Claude credentials: `bubble claude credentials on/off` and `[claude] credentials` in config.toml (#37)
+- `bubble claude status` shows current Claude settings
+- Nag message suppressed when credentials are explicitly configured (on or off)
+- Fix shallow copy bug in `DEFAULT_CONFIG` that could leak state between config loads
+
 ## 0.5.12 — 2026-03-11
 - User-defined image customization script: place `~/.bubble/customize.sh` to run custom setup in all container images (#34)
 - Script runs as root as the final build step (base, lean, lean-toolchain images)

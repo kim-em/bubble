@@ -1,6 +1,6 @@
 """Tests for configuration management."""
 
-from bubble.config import _deep_merge, repo_short_name
+from bubble.config import _deep_merge, load_raw_config, repo_short_name
 
 
 def test_repo_short_name():
@@ -49,3 +49,131 @@ def test_save_load_roundtrip(tmp_data_dir):
 
     reloaded = load_config()
     assert reloaded["runtime"]["colima_cpu"] == 42
+
+
+def test_default_config_has_claude_credentials_false(tmp_data_dir):
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["claude"]["credentials"] is False
+
+
+def test_claude_credentials_roundtrip(tmp_data_dir):
+    from bubble.config import load_config, save_config
+
+    config = load_config()
+    config["claude"]["credentials"] = True
+    save_config(config)
+
+    reloaded = load_config()
+    assert reloaded["claude"]["credentials"] is True
+
+
+def test_claude_credentials_on_cli(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["claude", "credentials", "on"])
+    assert result.exit_code == 0
+    assert "enabled" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["claude"]["credentials"] is True
+
+
+def test_claude_credentials_off_cli(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    # First enable
+    runner.invoke(main, ["claude", "credentials", "on"])
+    # Then disable
+    result = runner.invoke(main, ["claude", "credentials", "off"])
+    assert result.exit_code == 0
+    assert "disabled" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["claude"]["credentials"] is False
+
+
+def test_claude_credentials_show_current(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["claude", "credentials"])
+    assert result.exit_code == 0
+    assert "off" in result.output
+
+
+def test_claude_status_cli(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["claude", "status"])
+    assert result.exit_code == 0
+    assert "credentials: off" in result.output
+
+    # Enable and check again
+    runner.invoke(main, ["claude", "credentials", "on"])
+    result = runner.invoke(main, ["claude", "status"])
+    assert result.exit_code == 0
+    assert "credentials: on" in result.output
+
+
+def test_load_raw_config_fresh_install(tmp_data_dir):
+    """Raw config returns empty dict on fresh install (no user settings)."""
+    raw = load_raw_config()
+    # Fresh install: config file doesn't exist yet, so raw is empty
+    # After load_config creates default, raw should NOT contain claude defaults
+    from bubble.config import load_config
+
+    load_config()  # creates config.toml with defaults
+    raw = load_raw_config()
+    # Even though config.toml now exists with defaults written by load_config,
+    # the key question is: does the user's raw config contain claude.credentials?
+    # After load_config writes defaults, it WILL be present in the file.
+    # But on a legacy config (no [claude] section), it won't be.
+    assert "claude" in raw  # defaults are written to file
+
+
+def test_load_raw_config_legacy_no_claude(tmp_data_dir):
+    """Legacy config file without [claude] section should show no explicit setting."""
+    # Write a legacy config without [claude] section
+    import tomli_w
+
+    import bubble.config as config
+
+    legacy = {
+        "editor": "vscode",
+        "runtime": {"backend": "incus"},
+    }
+    with open(config.CONFIG_FILE, "wb") as f:
+        tomli_w.dump(legacy, f)
+
+    raw = load_raw_config()
+    assert "claude" not in raw
+    # But merged config should still have defaults
+    merged = config.load_config()
+    assert merged["claude"]["credentials"] is False
+
+
+def test_deep_merge_does_not_mutate_default(tmp_data_dir):
+    """Verify _deep_merge doesn't mutate DEFAULT_CONFIG nested dicts."""
+    from bubble.config import DEFAULT_CONFIG
+
+    original_val = DEFAULT_CONFIG["claude"]["credentials"]
+    merged = _deep_merge(DEFAULT_CONFIG, {})
+    merged["claude"]["credentials"] = not original_val
+    assert DEFAULT_CONFIG["claude"]["credentials"] == original_val

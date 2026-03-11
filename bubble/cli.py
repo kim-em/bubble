@@ -23,6 +23,7 @@ from .config import (
     ensure_dirs,
     has_claude_credentials,
     load_config,
+    load_raw_config,
     maybe_symlink_claude_projects,
     parse_mounts,
     repo_short_name,
@@ -1716,8 +1717,8 @@ def _open_remote(
 )
 @click.option(
     "--claude-credentials/--no-claude-credentials",
-    default=False,
-    help="Mount ~/.claude credentials into container (default: disabled for security)",
+    default=None,
+    help="Mount ~/.claude credentials into container (default: from config or disabled)",
 )
 def open_cmd(
     target,
@@ -1856,6 +1857,15 @@ def open_cmd(
         )
         return
 
+    # Resolve claude_credentials: CLI flag > config > default (False)
+    # Track whether the user made a deliberate choice (CLI flag or config setting)
+    credentials_from_cli = claude_credentials is not None
+    raw = load_raw_config()
+    credentials_in_config = "claude" in raw and "credentials" in raw["claude"]
+    credentials_explicitly_set = credentials_from_cli or credentials_in_config
+    if claude_credentials is None:
+        claude_credentials = config.get("claude", {}).get("credentials", False)
+
     # Claude Code config mounts (opt-out via --no-claude-config)
     cc_mounts = []
     if claude_config:
@@ -1863,10 +1873,11 @@ def open_cmd(
         # Suppress auto mounts that overlap with user mounts (exact or ancestry)
         user_targets = {Path(m.target) for m in mount_specs}
         cc_mounts = [m for m in cc_mounts if not _mount_overlaps(Path(m.target), user_targets)]
-        # Nag about credentials if not enabled
-        if not claude_credentials and has_claude_credentials():
+        # Nag about credentials if not enabled and not explicitly configured
+        if not claude_credentials and not credentials_explicitly_set and has_claude_credentials():
             click.echo(
-                "Tip: use --claude-credentials to mount Claude auth into this bubble.",
+                "Tip: use --claude-credentials or 'bubble claude credentials on'"
+                " to mount Claude auth into this bubble.",
                 err=True,
             )
         # Offer to symlink ~/.bubble/claude-projects/ to ~/.claude/projects/
@@ -3579,6 +3590,55 @@ def skill_status():
     else:
         click.echo("Bubble skill is installed but outdated.")
         click.echo("  Update with: bubble skill install")
+
+
+# ---------------------------------------------------------------------------
+# claude
+# ---------------------------------------------------------------------------
+
+
+@main.group("claude")
+def claude_group():
+    """Manage Claude Code settings."""
+
+
+@claude_group.command("credentials")
+@click.argument("setting", required=False, type=click.Choice(["on", "off"]))
+def claude_credentials_cmd(setting):
+    """Set whether Claude credentials are mounted into bubbles.
+
+    When on, ~/.claude credentials (.credentials.json, .current-account)
+    are mounted read-only into containers by default. Override per-bubble
+    with --no-claude-credentials.
+
+    Shows current setting if no argument given.
+    """
+    config = load_config()
+    if setting is None:
+        current = config.get("claude", {}).get("credentials", False)
+        state = "on" if current else "off"
+        click.echo(f"Claude credentials: {state}")
+        if current:
+            click.echo("Credentials are mounted into bubbles by default.")
+            click.echo("Override with: bubble open --no-claude-credentials <target>")
+        else:
+            click.echo("Use --claude-credentials flag or: bubble claude credentials on")
+        return
+    config.setdefault("claude", {})["credentials"] = setting == "on"
+    save_config(config)
+    if setting == "on":
+        click.echo("Claude credentials enabled. Mounted into all new bubbles by default.")
+        click.echo("Override with: bubble open --no-claude-credentials <target>")
+    else:
+        click.echo("Claude credentials disabled.")
+
+
+@claude_group.command("status")
+def claude_status_cmd():
+    """Show current Claude Code settings."""
+    config = load_config()
+    creds = config.get("claude", {}).get("credentials", False)
+    click.echo(f"  credentials: {'on' if creds else 'off'}")
 
 
 # ---------------------------------------------------------------------------
