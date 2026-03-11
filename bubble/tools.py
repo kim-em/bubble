@@ -54,13 +54,6 @@ TOOLS = {
         "runtime_domains": [],
         "priority": 90,
     },
-    "gh": {
-        "script": "gh.sh",
-        "host_cmd": "gh",
-        "network_domains": ["cli.github.com"],
-        "runtime_domains": ["api.github.com", "github.com"],
-        "priority": 50,
-    },
     "neovim": {
         "script": "neovim.sh",
         "host_cmd": "nvim",
@@ -233,9 +226,8 @@ def fetch_latest_pins() -> dict:
     """Fetch the latest versions and checksums from upstream sources.
 
     Returns a new pins dict with updated values.
-    Requires network access to nodejs.org, npmjs.org, and cli.github.com.
+    Requires network access to nodejs.org and npmjs.org.
     """
-    import hashlib as hl
     import re
     import urllib.request
 
@@ -273,12 +265,6 @@ def fetch_latest_pins() -> dict:
     )
     pins["CODEX_VERSION"] = data["version"]
 
-    # GitHub CLI GPG key checksum
-    gpg_key = urllib.request.urlopen(
-        "https://cli.github.com/packages/githubcli-archive-keyring.gpg"
-    ).read()
-    pins["GH_GPG_KEY_SHA256"] = hl.sha256(gpg_key).hexdigest()
-
     # Validate that all required keys were found
     required = {
         "NODE_VERSION",
@@ -286,7 +272,6 @@ def fetch_latest_pins() -> dict:
         "NODE_SHA256_ARM64",
         "CLAUDE_CODE_VERSION",
         "CODEX_VERSION",
-        "GH_GPG_KEY_SHA256",
     }
     missing = required - set(pins.keys())
     if missing:
