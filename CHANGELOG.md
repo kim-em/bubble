@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.10 — 2026-03-11
+- Pluggable tool installation system: tools like Claude Code, Codex, and GitHub CLI can be installed in container images
+- Per-tool install scripts in `bubble/images/scripts/tools/` (self-contained, run as root during image build)
+- Config-driven activation via `[tools]` section in `~/.bubble/config.toml` with `"yes"`, `"no"`, or `"auto"` (default) per tool
+- `"auto"` mode detects whether the tool is installed on the host and mirrors it in containers
+- `bubble tools list` shows available tools and settings, `bubble tools set` changes settings, `bubble tools status` shows resolved state
+- Background image rebuild when resolved tool set changes (same pattern as VS Code hash drift)
+- Tools installed in the `base` image and inherited by all derived images
+
 ## 0.5.9 — 2026-03-11
 - GitHub issue targets: `bubble https://github.com/owner/repo/issues/123` creates a branch `issue-123` and opens a bubble
 - Bare numbers auto-detect PR vs issue via GitHub API

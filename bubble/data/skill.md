@@ -52,6 +52,18 @@ bubble cleanup
 bubble doctor
 ```
 
+## Tools
+
+Tools like Claude Code, GitHub CLI, and OpenAI Codex can be installed in container images:
+
+```bash
+bubble tools list                  # show available tools and settings
+bubble tools set claude yes   # always install (also: "no", "auto")
+bubble tools status                # show what would actually be installed
+```
+
+Default is `"auto"` — installs the tool if found on your host.
+
 ## Tips
 
 - Re-running `bubble <target>` for an existing bubble re-attaches (no duplicates)

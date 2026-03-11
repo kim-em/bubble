@@ -58,6 +58,7 @@ DEFAULT_CONFIG = {
         "server_name": "bubble-cloud",
         "default": False,
     },
+    "tools": {},
 }
 
 

@@ -5,10 +5,12 @@ import subprocess
 import time
 from pathlib import Path
 
-from ..config import DATA_DIR
+from ..config import DATA_DIR, load_config
 from ..runtime.base import ContainerRuntime
+from ..tools import combined_tool_script, resolve_tools, tools_hash
 
 VSCODE_COMMIT_FILE = DATA_DIR / "vscode-commit"
+TOOLS_HASH_FILE = DATA_DIR / "tools-hash"
 
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
 
@@ -210,6 +212,46 @@ def _cleanup_builder(runtime: ContainerRuntime, build_name: str):
         )
 
 
+def _purge_derived_images(runtime: ContainerRuntime, base_name: str):
+    """Delete images that derive from base_name so they rebuild from the fresh base.
+
+    When the base image is rebuilt (e.g. with new tools), derived images like
+    lean, base-vscode, lean-vscode etc. are stale snapshots. Deleting them
+    forces a rebuild on next use.
+    """
+    derived = [name for name, spec in IMAGES.items() if spec["parent"] == base_name]
+    for name in derived:
+        if runtime.image_exists(name):
+            try:
+                runtime.image_delete(name)
+                print(f"  Deleted derived image '{name}' (will rebuild on next use).")
+            except Exception:
+                pass  # Best-effort; may fail if in use
+
+
+def _install_tools_if_base(
+    runtime: ContainerRuntime, build_name: str, image_name: str
+) -> list[str] | None:
+    """Install configured tools into a builder container if this is the base image.
+
+    Tools are only installed on the 'base' image since all other images
+    derive from it and inherit the tools automatically.
+
+    Returns the list of enabled tools if tools were installed, None otherwise.
+    """
+    if image_name != "base":
+        return None
+    config = load_config()
+    enabled = resolve_tools(config)
+    if not enabled:
+        return enabled
+    script = combined_tool_script(enabled)
+    if script:
+        print(f"  Installing tools: {', '.join(enabled)}")
+        runtime.exec(build_name, ["bash", "-c", script])
+    return enabled
+
+
 def build_image(runtime: ContainerRuntime, image_name: str):
     """Build any known image by name. Builds parent images recursively if needed."""
     if image_name not in IMAGES:
@@ -240,6 +282,9 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         script = f"export VSCODE_COMMIT='{vscode_commit}'\n" + script
     runtime.exec(build_name, ["bash", "-c", script])
 
+    # Install configured tools (only on base image — derived images inherit them)
+    enabled_tools = _install_tools_if_base(runtime, build_name, image_name)
+
     # Publish as image
     runtime.stop(build_name)
     runtime.publish(build_name, image_name)
@@ -249,6 +294,14 @@ def build_image(runtime: ContainerRuntime, image_name: str):
     if vscode_commit and spec["script"] == "vscode.sh":
         VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         VSCODE_COMMIT_FILE.write_text(vscode_commit + "\n")
+
+    # Record the tools hash baked into the image and purge stale derived images
+    if enabled_tools is not None:
+        TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TOOLS_HASH_FILE.write_text(tools_hash(enabled_tools) + "\n")
+        _purge_derived_images(runtime, image_name)
+        # Clean up rebuild lock (may have been set by _maybe_rebuild_tools)
+        Path("/tmp/bubble-tools-rebuild.lock").unlink(missing_ok=True)
 
     print(f"{image_name} image built successfully.")
 
