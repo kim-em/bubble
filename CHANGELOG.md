@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3 — 2026-03-12
+- Don't prompt interactively during `bubble open` (#88)
+  - `maybe_symlink_claude_projects()` now prints an informational message instead of blocking on a `[y/N]` prompt
+  - New `bubble config symlink-claude-projects` command to perform the symlink manually
+  - Suppress the hint with `claude_projects_symlink = "no"` in `~/.bubble/config.toml`
+
 ## 0.6.2 — 2026-03-12
 - SSH tunnel auth proxy for remote/cloud bubbles (#81)
   - Remote and cloud bubbles now use the same repo-scoped auth proxy as local bubbles

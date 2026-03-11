@@ -659,9 +659,9 @@ def open_cmd(
         # Suppress auto mounts that overlap with user mounts (exact or ancestry)
         user_targets = {Path(m.target) for m in mount_specs}
         cc_mounts = [m for m in cc_mounts if not mount_overlaps(Path(m.target), user_targets)]
-        # Offer to symlink ~/.bubble/claude-projects/ to ~/.claude/projects/
+        # Hint about symlinking ~/.bubble/claude-projects/ to ~/.claude/projects/
         if not machine_readable:
-            maybe_symlink_claude_projects()
+            maybe_symlink_claude_projects(config)
 
     # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
     ec_mounts = editor_config_mounts(editor)

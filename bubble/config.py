@@ -420,15 +420,18 @@ def _is_inside_git_repo(path: Path) -> bool:
         return False
 
 
-def maybe_symlink_claude_projects() -> None:
-    """Offer to replace ~/.bubble/claude-projects/ with a symlink to ~/.claude/projects/.
+def maybe_symlink_claude_projects(config: dict | None = None) -> None:
+    """Print an informational message if claude-projects could be symlinked.
 
     If ~/.claude/projects/ is inside a git repo and ~/.bubble/claude-projects/ is a real
-    directory (not already a symlink), prompt the user to replace it with a symlink.
-    This lets bubble session state live inside the git-tracked directory and get
-    synced across machines automatically.
+    directory (not already a symlink), print a one-time hint about the
+    ``bubble config symlink-claude-projects`` command. Never prompts interactively.
+
+    Suppressed when ``claude_projects_symlink = "no"`` is set in config.
     """
-    import sys
+    # Respect opt-out config
+    if config and config.get("claude_projects_symlink") == "no":
+        return
 
     claude_projects = CLAUDE_CONFIG_DIR / "projects"
     bubble_projects = CLAUDE_PROJECTS_DIR
@@ -447,29 +450,57 @@ def maybe_symlink_claude_projects() -> None:
         bubble_projects.symlink_to(claude_projects)
         return
 
-    # Don't prompt if stdin is not a TTY (scripted/CI usage)
-    if not sys.stdin.isatty():
-        return
-
-    # It's a real directory — prompt the user
+    # It's a real directory — print informational message (no prompt)
     import click
 
-    if not click.confirm(
-        f"{claude_projects} is git-tracked. Replace {bubble_projects}\n"
-        f"with a symlink to {claude_projects} so bubble session state is tracked too?",
-        default=False,
-    ):
-        return
+    click.echo(
+        "~/.claude/projects is git-tracked. Claude sessions within bubbles are stored\n"
+        "in ~/.bubble/claude-projects. To replace that directory with a symlink (so\n"
+        "session state is tracked in git), run:\n"
+        "\n"
+        "  bubble config symlink-claude-projects\n"
+        "\n"
+        'To suppress this message, set claude_projects_symlink = "no" in '
+        "~/.bubble/config.toml.",
+        err=True,
+    )
+
+
+def do_symlink_claude_projects() -> bool:
+    """Replace ~/.bubble/claude-projects/ with a symlink to ~/.claude/projects/.
+
+    Merges existing contents from bubble-projects into claude-projects before
+    replacing. Returns True if the symlink was created, False otherwise.
+    """
+    import click
+
+    claude_projects = CLAUDE_CONFIG_DIR / "projects"
+    bubble_projects = CLAUDE_PROJECTS_DIR
+
+    if not claude_projects.is_dir():
+        click.echo(f"{claude_projects} does not exist.", err=True)
+        return False
+
+    if not _is_inside_git_repo(claude_projects):
+        click.echo(f"{claude_projects} is not inside a git repository.", err=True)
+        return False
+
+    if bubble_projects.is_symlink():
+        click.echo(f"{bubble_projects} is already a symlink.")
+        return True
+
+    if not bubble_projects.exists():
+        bubble_projects.parent.mkdir(parents=True, exist_ok=True)
+        bubble_projects.symlink_to(claude_projects)
+        click.echo(f"Created symlink: {bubble_projects} -> {claude_projects}")
+        return True
 
     # Merge existing contents into ~/.claude/projects/
-    # Move unique items; for conflicts, copy bubble-only files into the
-    # destination so nothing is silently lost.
     for child in bubble_projects.iterdir():
         dest = claude_projects / child.name
         if not dest.exists():
             shutil.move(str(child), str(dest))
         elif child.is_dir() and dest.is_dir():
-            # Recursively merge directory contents that only exist in bubble
             _merge_dir(child, dest)
         else:
             click.echo(f"  Skipping {child.name} (already exists in {claude_projects})")
@@ -477,6 +508,8 @@ def maybe_symlink_claude_projects() -> None:
     # Replace with symlink — use rmtree since conflicts may leave remnants
     shutil.rmtree(str(bubble_projects))
     bubble_projects.symlink_to(claude_projects)
+    click.echo(f"Created symlink: {bubble_projects} -> {claude_projects}")
+    return True
 
 
 def _merge_dir(src: Path, dest: Path) -> None:

@@ -396,3 +396,18 @@ def register_settings_commands(main):
             click.echo(f"Accepted {len(changed)} risk(s). On-by-default warnings silenced.")
         else:
             click.echo("No auto-defaulting-to-on settings to accept.")
+
+    @config_group.command("symlink-claude-projects")
+    def config_symlink_claude_projects():
+        """Replace ~/.bubble/claude-projects/ with a symlink to ~/.claude/projects/.
+
+        If ~/.claude/projects/ is inside a git repo, this command merges any
+        existing session data from ~/.bubble/claude-projects/ into
+        ~/.claude/projects/ and replaces the directory with a symlink.
+
+        This lets bubble session state live inside the git-tracked directory
+        and get synced across machines automatically.
+        """
+        from ..config import do_symlink_claude_projects
+
+        do_symlink_claude_projects()
