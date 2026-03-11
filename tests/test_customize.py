@@ -145,3 +145,23 @@ def test_nonbase_image_runs_customize(mock_runtime, monkeypatch, tmp_data_dir):
     # 2 exec calls: lean script + customize script
     assert len(exec_calls) == 2
     assert "custom" in exec_calls[-1][2][-1]
+
+
+def test_nonbase_image_does_not_write_hash(mock_runtime, monkeypatch, tmp_data_dir):
+    """Building a non-base image should not update the customize hash file.
+
+    Only the base build should record the hash — otherwise building a derived
+    image could falsely mark the system as current while base is still stale.
+    """
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
+    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+
+    mock_runtime._images.add("base")
+
+    builder.CUSTOMIZE_SCRIPT.write_text("#!/bin/bash\necho custom\n")
+
+    builder.build_image(mock_runtime, "lean")
+
+    # Hash file should NOT exist — only base builds write it
+    assert not builder.CUSTOMIZE_HASH_FILE.exists()

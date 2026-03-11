@@ -349,13 +349,14 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         TOOLS_HASH_FILE.write_text(tools_hash(enabled_tools) + "\n")
         _purge_derived_images(runtime, image_name)
 
-    # Record the customize script hash (or clear it if script was removed)
-    c_hash = customize_hash()
-    if c_hash:
-        CUSTOMIZE_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CUSTOMIZE_HASH_FILE.write_text(c_hash + "\n")
-    else:
-        CUSTOMIZE_HASH_FILE.unlink(missing_ok=True)
+    # Record the customize script hash (only on base — derived images inherit it)
+    if image_name == "base":
+        c_hash = customize_hash()
+        if c_hash:
+            CUSTOMIZE_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+            CUSTOMIZE_HASH_FILE.write_text(c_hash + "\n")
+        else:
+            CUSTOMIZE_HASH_FILE.unlink(missing_ok=True)
 
     print(f"{image_name} image built successfully.")
 
