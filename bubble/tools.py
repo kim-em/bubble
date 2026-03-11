@@ -132,9 +132,12 @@ def resolve_tools(config: dict) -> list[str]:
     Each tool's config value is "yes", "no", or "auto" (default).
     "auto" installs the tool if the corresponding command is found on the host.
 
-    Editor tools (vscode, emacs, neovim) are special: exactly one is enabled
-    based on the "editor" config key. The configured editor is treated as "yes"
-    unless explicitly set to "no" in [tools]. Other editors are skipped.
+    Editor tools (vscode, emacs, neovim) are special: the configured editor
+    (from the "editor" config key, default "vscode") is treated as "yes"
+    unless explicitly set to "no" in [tools]. Other editors are skipped
+    unless force-enabled with tools.<editor> = "yes". Per-invocation editor
+    overrides (--emacs, --neovim, --shell) control which editor is launched
+    but do not change which is installed in the image.
     """
     tools_config = config.get("tools", {})
     editor = config.get("editor", "vscode")

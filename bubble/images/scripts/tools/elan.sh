@@ -4,7 +4,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Skip if elan is already installed (idempotent)
-if [ -d /home/user/.elan ]; then
+if [ -x /home/user/.elan/bin/elan ]; then
     echo "elan already installed, skipping."
     exit 0
 fi

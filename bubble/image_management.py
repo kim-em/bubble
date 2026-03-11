@@ -35,7 +35,17 @@ def _spawn_background_bubble(args: list[str], log_path: str):
 
 
 def maybe_rebuild_base_image():
-    """If VS Code has updated since the base image was built, rebuild in background."""
+    """If VS Code has updated since the base image was built, rebuild in background.
+
+    Only triggers when vscode is an enabled tool — otherwise there's nothing
+    to rebuild even if the host has `code` installed.
+    """
+    from .config import load_config
+    from .tools import resolve_tools
+
+    config = load_config()
+    if "vscode" not in resolve_tools(config):
+        return
     commit = get_vscode_commit()
     if not commit:
         return
