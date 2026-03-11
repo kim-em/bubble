@@ -843,7 +843,7 @@ def _apply_editor_to_image(image_name: str, editor: str) -> str:
 
     # For toolchain-specific images like "lean-v4.27.0", insert editor before version
     if image_name.startswith("lean-v"):
-        version = image_name[len("lean-"):]
+        version = image_name[len("lean-") :]
         return f"lean{suffix}-{version}"
 
     return f"{image_name}{suffix}"
@@ -874,7 +874,7 @@ def _detect_and_build_image(runtime, ref_path, t, editor="vscode"):
         if is_toolchain_image:
             # Toolchain-specific image doesn't exist yet — fall back to base lean
             # and build the toolchain image in the background for next time.
-            version = base_image[len("lean-"):]
+            version = base_image[len("lean-") :]
             fallback = _apply_editor_to_image("lean", editor)
             click.echo(
                 f"  Toolchain {version} image not cached, using {fallback} image"
@@ -889,7 +889,7 @@ def _detect_and_build_image(runtime, ref_path, t, editor="vscode"):
             build_image(runtime, image_name)
             click.echo(f"  {image_name} image ready.")
     elif is_toolchain_image:
-        version = base_image[len("lean-"):]
+        version = base_image[len("lean-") :]
         click.echo(f"  Using cached toolchain image ({version})")
 
     if pending_toolchain_build:
