@@ -64,6 +64,7 @@ DEFAULT_CONFIG = {
     "claude": {
         "credentials": False,
     },
+    "security": {},
     "tools": {},
 }
 
@@ -107,12 +108,22 @@ def save_config(config: dict):
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Deep merge two dicts, with override taking precedence."""
-    result = copy.deepcopy(base)
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
+    """Deep merge two dicts, with override taking precedence.
+
+    All inherited values from base are deep-copied to prevent mutation
+    of DEFAULT_CONFIG or other shared structures.
+    """
+    result = {}
+    for key, value in base.items():
+        if key in override and isinstance(value, dict) and isinstance(override[key], dict):
+            result[key] = _deep_merge(value, override[key])
+        elif key in override:
+            result[key] = override[key]
         else:
+            # Deep-copy all inherited values (dicts, lists, etc.) to prevent aliasing
+            result[key] = copy.deepcopy(value)
+    for key, value in override.items():
+        if key not in base:
             result[key] = value
     return result
 

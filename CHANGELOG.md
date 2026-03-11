@@ -28,6 +28,18 @@
 - npm packages pinned to exact versions (`@anthropic-ai/claude-code@X.Y.Z`, `@openai/codex@X.Y.Z`)
 - GitHub CLI GPG key verified by SHA256 checksum before trusting
 - `bubble tools update` command fetches latest upstream versions and bumps pins
+- Configurable security posture: every isolation-weakening feature now has `auto`/`on`/`off` settings in `[security]` config section (#40)
+- `bubble config security` shows current security posture with effective values
+- `bubble config set security.<name> <value>` configures individual settings
+- `bubble config accept-risks` silences on-by-default warnings; `bubble config lockdown` disables off-by-default features
+- Security warnings printed to stderr for all `auto` settings during `bubble open`
+- `BUBBLE_QUIET_SECURITY=1` env var suppresses warnings for CI/automation
+- Settings: `shared_cache`, `user_mounts`, `network_github`, `relay`, `claude_credentials`, `host_key_trust`, `cloud_root`, `git_manifest_trust`
+- When `shared_cache=off`, shared mounts are read-only; when `network_github=off`, GitHub domains stripped from allowlist
+- When `user_mounts=off` or `claude_credentials=off`, corresponding CLI flags are rejected
+- Relay enable/disable migrated to `[security] relay` with backwards compatibility for `[relay] enabled`
+- Replaces ad-hoc "Tip: use --claude-credentials" message with unified security warning system
+- Fix: `DEFAULT_CONFIG` shallow copy mutation bug (nested dicts are now deep-copied)
 
 ## 0.5.11 — 2026-03-11
 - Tools now declare runtime network domains (e.g. `api.anthropic.com` for Claude Code) that persist in the container firewall, fixing connectivity for tools at runtime (#49)
