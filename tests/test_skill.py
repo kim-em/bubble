@@ -1,6 +1,5 @@
 """Tests for skill install/uninstall/status."""
 
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -13,10 +12,15 @@ def tmp_claude_dir(tmp_path):
     """Set up a temporary ~/.claude directory."""
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
-    with mock.patch.object(skill, "CLAUDE_DIR", claude_dir), \
-         mock.patch.object(skill, "SKILLS_DIR", claude_dir / "skills" / skill.SKILL_NAME), \
-         mock.patch.object(skill, "INSTALLED_SKILL",
-                           claude_dir / "skills" / skill.SKILL_NAME / skill.SKILL_FILENAME):
+    with (
+        mock.patch.object(skill, "CLAUDE_DIR", claude_dir),
+        mock.patch.object(skill, "SKILLS_DIR", claude_dir / "skills" / skill.SKILL_NAME),
+        mock.patch.object(
+            skill,
+            "INSTALLED_SKILL",
+            claude_dir / "skills" / skill.SKILL_NAME / skill.SKILL_FILENAME,
+        ),
+    ):
         yield claude_dir
 
 
@@ -24,10 +28,13 @@ def tmp_claude_dir(tmp_path):
 def tmp_no_claude(tmp_path):
     """Set up a temporary dir without ~/.claude."""
     fake_dir = tmp_path / ".claude"
-    with mock.patch.object(skill, "CLAUDE_DIR", fake_dir), \
-         mock.patch.object(skill, "SKILLS_DIR", fake_dir / "skills" / skill.SKILL_NAME), \
-         mock.patch.object(skill, "INSTALLED_SKILL",
-                           fake_dir / "skills" / skill.SKILL_NAME / skill.SKILL_FILENAME):
+    with (
+        mock.patch.object(skill, "CLAUDE_DIR", fake_dir),
+        mock.patch.object(skill, "SKILLS_DIR", fake_dir / "skills" / skill.SKILL_NAME),
+        mock.patch.object(
+            skill, "INSTALLED_SKILL", fake_dir / "skills" / skill.SKILL_NAME / skill.SKILL_FILENAME
+        ),
+    ):
         yield fake_dir
 
 
