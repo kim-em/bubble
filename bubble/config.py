@@ -243,6 +243,60 @@ def has_claude_credentials() -> bool:
     return any((CLAUDE_CONFIG_DIR / item).exists() for item in _CLAUDE_CREDENTIAL_ITEMS)
 
 
+# Editor config directories to mount read-only.
+# Config is read-only; data/state directories are mounted read-write so
+# plugin managers and caches can function.
+_EDITOR_CONFIG = {
+    "emacs": {
+        # Config: XDG (~/.config/emacs/) preferred, fall back to ~/.emacs.d/
+        "config": [
+            (Path.home() / ".config" / "emacs", "/home/user/.config/emacs"),
+            (Path.home() / ".emacs.d", "/home/user/.emacs.d"),
+        ],
+        # Data dirs: writable so plugin managers (straight.el, elpaca, etc.)
+        # and byte-compilation can work.
+        "data": [
+            (Path.home() / ".local" / "share" / "emacs", "/home/user/.local/share/emacs"),
+            (Path.home() / ".cache" / "emacs", "/home/user/.cache/emacs"),
+        ],
+    },
+    "neovim": {
+        "config": [
+            (Path.home() / ".config" / "nvim", "/home/user/.config/nvim"),
+        ],
+        "data": [
+            (Path.home() / ".local" / "share" / "nvim", "/home/user/.local/share/nvim"),
+            (Path.home() / ".local" / "state" / "nvim", "/home/user/.local/state/nvim"),
+            (Path.home() / ".cache" / "nvim", "/home/user/.cache/nvim"),
+        ],
+    },
+}
+
+
+def editor_config_mounts(editor: str) -> list[MountSpec]:
+    """Return mounts for editor config directories that exist on the host.
+
+    Config directories are mounted read-only. Data/state/cache directories
+    are mounted read-write so plugin managers and caches can function.
+
+    Only returns mounts for directories that actually exist on the host.
+    """
+    spec = _EDITOR_CONFIG.get(editor)
+    if not spec:
+        return []
+    mounts: list[MountSpec] = []
+    # Mount config dirs read-only (pick first that exists)
+    for host_path, container_path in spec["config"]:
+        if host_path.is_dir():
+            mounts.append(MountSpec(source=str(host_path), target=container_path, readonly=True))
+            break  # Only mount the first matching config location
+    # Mount data dirs read-write (all that exist)
+    for host_path, container_path in spec["data"]:
+        if host_path.is_dir():
+            mounts.append(MountSpec(source=str(host_path), target=container_path, readonly=False))
+    return mounts
+
+
 def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSpec]:
     """Merge mounts from config file and CLI flags.
 

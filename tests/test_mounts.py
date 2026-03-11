@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from bubble.config import MountSpec, claude_config_mounts, has_claude_credentials, parse_mounts
+from bubble.config import (
+    MountSpec,
+    claude_config_mounts,
+    editor_config_mounts,
+    has_claude_credentials,
+    parse_mounts,
+)
 
 
 class TestMountSpecFromCli:
@@ -790,3 +796,351 @@ class TestRemoteClaudeConfig:
             cmd = call_args[0][0] if call_args[0] else call_args[1].get("args", [])
             cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
             assert "--no-claude-config" in cmd_str
+
+
+class TestEditorConfigMounts:
+    """Test automatic editor config mounting for emacs/neovim."""
+
+    def test_vscode_returns_empty(self):
+        """VSCode doesn't need host config mounts."""
+        assert editor_config_mounts("vscode") == []
+
+    def test_shell_returns_empty(self):
+        """Shell editor doesn't need config mounts."""
+        assert editor_config_mounts("shell") == []
+
+    def test_unknown_editor_returns_empty(self):
+        assert editor_config_mounts("vim") == []
+
+    def test_emacs_xdg_config(self, tmp_path, monkeypatch):
+        """Emacs XDG config (~/.config/emacs/) is mounted read-only."""
+        config_dir = tmp_path / ".config" / "emacs"
+        config_dir.mkdir(parents=True)
+        (config_dir / "init.el").write_text(";; init")
+
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "emacs": {
+                    "config": [
+                        (config_dir, "/home/user/.config/emacs"),
+                        (tmp_path / ".emacs.d", "/home/user/.emacs.d"),
+                    ],
+                    "data": [],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("emacs")
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.config/emacs"
+        assert mounts[0].readonly is True
+
+    def test_emacs_fallback_to_emacs_d(self, tmp_path, monkeypatch):
+        """Falls back to ~/.emacs.d/ when XDG location doesn't exist."""
+        emacs_d = tmp_path / ".emacs.d"
+        emacs_d.mkdir()
+        (emacs_d / "init.el").write_text(";; init")
+
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "emacs": {
+                    "config": [
+                        (tmp_path / ".config" / "emacs", "/home/user/.config/emacs"),
+                        (emacs_d, "/home/user/.emacs.d"),
+                    ],
+                    "data": [],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("emacs")
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.emacs.d"
+        assert mounts[0].readonly is True
+
+    def test_emacs_xdg_preferred_over_emacs_d(self, tmp_path, monkeypatch):
+        """When both exist, XDG location wins."""
+        config_dir = tmp_path / ".config" / "emacs"
+        config_dir.mkdir(parents=True)
+        emacs_d = tmp_path / ".emacs.d"
+        emacs_d.mkdir()
+
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "emacs": {
+                    "config": [
+                        (config_dir, "/home/user/.config/emacs"),
+                        (emacs_d, "/home/user/.emacs.d"),
+                    ],
+                    "data": [],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("emacs")
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.config/emacs"
+
+    def test_emacs_data_dirs_writable(self, tmp_path, monkeypatch):
+        """Emacs data directories are mounted read-write."""
+        config_dir = tmp_path / ".config" / "emacs"
+        config_dir.mkdir(parents=True)
+        share_dir = tmp_path / ".local" / "share" / "emacs"
+        share_dir.mkdir(parents=True)
+        cache_dir = tmp_path / ".cache" / "emacs"
+        cache_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "emacs": {
+                    "config": [
+                        (config_dir, "/home/user/.config/emacs"),
+                    ],
+                    "data": [
+                        (share_dir, "/home/user/.local/share/emacs"),
+                        (cache_dir, "/home/user/.cache/emacs"),
+                    ],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("emacs")
+        assert len(mounts) == 3
+        # Config is read-only
+        assert mounts[0].readonly is True
+        # Data dirs are read-write
+        assert mounts[1].target == "/home/user/.local/share/emacs"
+        assert mounts[1].readonly is False
+        assert mounts[2].target == "/home/user/.cache/emacs"
+        assert mounts[2].readonly is False
+
+    def test_neovim_config(self, tmp_path, monkeypatch):
+        """Neovim config is mounted read-only."""
+        nvim_dir = tmp_path / ".config" / "nvim"
+        nvim_dir.mkdir(parents=True)
+        (nvim_dir / "init.lua").write_text("-- init")
+
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "neovim": {
+                    "config": [
+                        (nvim_dir, "/home/user/.config/nvim"),
+                    ],
+                    "data": [],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("neovim")
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.config/nvim"
+        assert mounts[0].readonly is True
+
+    def test_neovim_data_dirs_writable(self, tmp_path, monkeypatch):
+        """Neovim data/state/cache directories are mounted read-write."""
+        nvim_dir = tmp_path / ".config" / "nvim"
+        nvim_dir.mkdir(parents=True)
+        share_dir = tmp_path / ".local" / "share" / "nvim"
+        share_dir.mkdir(parents=True)
+        state_dir = tmp_path / ".local" / "state" / "nvim"
+        state_dir.mkdir(parents=True)
+        cache_dir = tmp_path / ".cache" / "nvim"
+        cache_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "neovim": {
+                    "config": [
+                        (nvim_dir, "/home/user/.config/nvim"),
+                    ],
+                    "data": [
+                        (share_dir, "/home/user/.local/share/nvim"),
+                        (state_dir, "/home/user/.local/state/nvim"),
+                        (cache_dir, "/home/user/.cache/nvim"),
+                    ],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("neovim")
+        assert len(mounts) == 4
+        assert mounts[0].readonly is True  # config
+        assert all(not m.readonly for m in mounts[1:])  # data dirs writable
+
+    def test_skips_missing_data_dirs(self, tmp_path, monkeypatch):
+        """Only existing data directories are mounted."""
+        nvim_dir = tmp_path / ".config" / "nvim"
+        nvim_dir.mkdir(parents=True)
+        # Only create share, not state or cache
+        share_dir = tmp_path / ".local" / "share" / "nvim"
+        share_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "neovim": {
+                    "config": [
+                        (nvim_dir, "/home/user/.config/nvim"),
+                    ],
+                    "data": [
+                        (share_dir, "/home/user/.local/share/nvim"),
+                        (tmp_path / ".local" / "state" / "nvim", "/home/user/.local/state/nvim"),
+                        (tmp_path / ".cache" / "nvim", "/home/user/.cache/nvim"),
+                    ],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("neovim")
+        assert len(mounts) == 2  # config + share only
+
+    def test_no_config_dir_returns_empty(self, tmp_path, monkeypatch):
+        """Returns empty when no config directory exists."""
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "emacs": {
+                    "config": [
+                        (tmp_path / "nonexistent1", "/home/user/.config/emacs"),
+                        (tmp_path / "nonexistent2", "/home/user/.emacs.d"),
+                    ],
+                    "data": [
+                        (tmp_path / "nonexistent3", "/home/user/.local/share/emacs"),
+                    ],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("emacs")
+        assert mounts == []
+
+    def test_sources_are_absolute(self, tmp_path, monkeypatch):
+        """Mount sources use absolute paths."""
+        nvim_dir = tmp_path / ".config" / "nvim"
+        nvim_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "bubble.config._EDITOR_CONFIG",
+            {
+                "neovim": {
+                    "config": [(nvim_dir, "/home/user/.config/nvim")],
+                    "data": [],
+                },
+            },
+        )
+
+        mounts = editor_config_mounts("neovim")
+        assert Path(mounts[0].source).is_absolute()
+
+
+class TestEditorConfigProvisioning:
+    """Test that editor config mounts are applied during container provisioning."""
+
+    def test_editor_mounts_applied(self, mock_runtime, tmp_path):
+        """Verify add_disk calls with editor-config device names."""
+        from bubble.cli import _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        editor_mounts = [
+            MountSpec(
+                source="/home/testuser/.config/nvim",
+                target="/home/user/.config/nvim",
+                readonly=True,
+            ),
+            MountSpec(
+                source="/home/testuser/.local/share/nvim",
+                target="/home/user/.local/share/nvim",
+                readonly=False,
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            editor_mounts=editor_mounts,
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        editor_disk_calls = [c for c in disk_calls if "editor-config" in c[2]]
+        assert len(editor_disk_calls) == 2
+        assert editor_disk_calls[0] == (
+            "add_disk",
+            "test-container",
+            "editor-config-0",
+            "/home/testuser/.config/nvim",
+            "/home/user/.config/nvim",
+            True,
+        )
+        assert editor_disk_calls[1] == (
+            "add_disk",
+            "test-container",
+            "editor-config-1",
+            "/home/testuser/.local/share/nvim",
+            "/home/user/.local/share/nvim",
+            False,
+        )
+
+    def test_creates_parent_dirs_in_container(self, mock_runtime, tmp_path):
+        """Verify parent directories are created before mounting."""
+        from bubble.cli import _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        editor_mounts = [
+            MountSpec(
+                source="/home/testuser/.config/nvim",
+                target="/home/user/.config/nvim",
+                readonly=True,
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            editor_mounts=editor_mounts,
+        )
+
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        mkdir_calls = [
+            c for c in exec_calls if ".config" in " ".join(c[2]) and "mkdir" in " ".join(c[2])
+        ]
+        assert len(mkdir_calls) >= 1
+        assert "chown" in " ".join(mkdir_calls[0][2])
+
+    def test_no_editor_mounts(self, mock_runtime, tmp_path):
+        """No editor mount calls when editor_mounts is empty."""
+        from bubble.cli import _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            editor_mounts=[],
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        editor_disk_calls = [c for c in disk_calls if "editor-config" in c[2]]
+        assert len(editor_disk_calls) == 0
