@@ -29,8 +29,12 @@ bubble leanprover-community/mathlib4
 bubble .
 bubble ./path/to/repo
 
-# PR number shorthand (when in a cloned repo)
-bubble 123                   # opens PR #123 for the current repo
+# GitHub issues
+bubble https://github.com/owner/repo/issues/42
+bubble mathlib4/issues/42
+
+# PR or issue number shorthand (when in a cloned repo, requires gh CLI)
+bubble 123                   # auto-detects PR vs issue via GitHub API
 
 # List your bubbles
 bubble list
@@ -65,6 +69,8 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 **URL-first interface**: The primary command is `bubble <target>`. Targets can be full GitHub URLs, partial URLs, org/repo paths, or learned short names. If a bubble already exists for that target, it re-attaches instead of creating a new one.
 
 **Shared git objects**: A bare mirror of each repo is maintained on the host. Containers clone via `git --reference`, sharing the immutable object store. This means creating a new bubble for a mathlib PR downloads only the few new commits, not the entire 1.5GB repo.
+
+**Issue targets**: When you open an issue, bubble creates a branch named `issue-<number>` from the default branch, ready for you to start working on the fix.
 
 **Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the container includes elan, pre-installed VS Code extensions, and auto-downloads the mathlib cache when needed.
 
@@ -157,6 +163,25 @@ bubble tools status                # show what would actually be installed
 ```
 
 When the resolved tool set changes, a background image rebuild is triggered automatically.
+
+### Claude Code Integration
+
+When a bubble is opened for a GitHub issue with VS Code (the default editor), bubble can set up [Claude Code](https://claude.ai/claude-code) as an autonomous coding agent. It uses the `gh` CLI to fetch the issue title, body, and comments, generates a prompt, and injects a VS Code task that launches Claude Code when the workspace opens.
+
+```bash
+# Creates a containerized environment; when VS Code opens, Claude starts working on the issue
+bubble mathlib4/issues/42
+```
+
+Claude is instructed to read the issue, implement a fix on the `issue-<number>` branch, and open a PR. This turns `bubble 42` (for an issue) into an autonomous coding agent workflow.
+
+You can also provide a custom prompt for any bubble via the `BUBBLE_CLAUDE_PROMPT` environment variable:
+
+```bash
+BUBBLE_CLAUDE_PROMPT="Refactor the parser module" bubble leanprover/lean4
+```
+
+Requirements: Claude Code must be installed in the container (see tool settings above), the `gh` CLI must be available on the host, and the default VS Code editor must be used. With `--shell` or `--no-interactive`, the prompt is not injected. If `gh` is unavailable or the API call fails, bubble proceeds without injecting a prompt.
 
 ## Hetzner Cloud
 
