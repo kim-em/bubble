@@ -3649,6 +3649,47 @@ def tools_status():
         click.echo("\nNo tools will be installed.")
 
 
+@tools_group.command("update")
+def tools_update():
+    """Fetch latest upstream versions and update pinned versions.
+
+    Checks nodejs.org, npmjs.org, and cli.github.com for the latest
+    versions and checksums, then updates the local pins.
+    """
+    from .tools import fetch_latest_pins, load_pins, save_pins
+
+    click.echo("Fetching latest versions from upstream...")
+    try:
+        new_pins = fetch_latest_pins()
+    except Exception as e:
+        click.echo(f"Error fetching upstream versions: {e}", err=True)
+        sys.exit(1)
+
+    current = load_pins()
+    changes = []
+    for key in sorted(new_pins):
+        old = current.get(key, "(not set)")
+        new = new_pins[key]
+        if old != new:
+            changes.append((key, old, new))
+
+    if not changes:
+        click.echo("All pins are up to date.")
+        return
+
+    click.echo(f"\n{'PIN':<25} {'CURRENT':<20} {'LATEST':<20}")
+    click.echo("-" * 65)
+    for key, old, new in changes:
+        # Truncate checksums for display
+        old_display = old[:16] + "..." if len(old) > 20 else old
+        new_display = new[:16] + "..." if len(new) > 20 else new
+        click.echo(f"{key:<25} {old_display:<20} {new_display:<20}")
+
+    click.echo()
+    save_pins(new_pins)
+    click.echo("Pins updated. Run 'bubble images build base' to apply changes.")
+
+
 @main.command()
 def doctor():
     """Diagnose and fix common bubble issues."""

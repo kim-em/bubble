@@ -10,6 +10,11 @@
 - Neovim: mounts `~/.config/nvim/`, plus `~/.local/share/nvim/`, `~/.local/state/nvim/`, and `~/.cache/nvim/` read-write
 - User mounts (`--mount`) take precedence and suppress overlapping editor config mounts
 - Forward `-b`/`--new-branch` and `--base` flags to remote host in `--ssh` and `--cloud` modes (#25)
+- Pin tool installer versions and verify checksums for reproducible, hardened image builds (#43)
+- Node.js installed from official tarball with SHA256 verification (replaces `curl | bash` from NodeSource)
+- npm packages pinned to exact versions (`@anthropic-ai/claude-code@X.Y.Z`, `@openai/codex@X.Y.Z`)
+- GitHub CLI GPG key verified by SHA256 checksum before trusting
+- `bubble tools update` command fetches latest upstream versions and bumps pins
 
 ## 0.5.11 — 2026-03-11
 - Tools now declare runtime network domains (e.g. `api.anthropic.com` for Claude Code) that persist in the container firewall, fixing connectivity for tools at runtime (#49)

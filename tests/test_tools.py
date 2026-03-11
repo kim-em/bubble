@@ -5,6 +5,7 @@ from click.testing import CliRunner
 from bubble.tools import (
     available_tools,
     combined_tool_script,
+    load_pins,
     resolve_tools,
     tool_network_domains,
     tool_runtime_domains,
@@ -113,6 +114,13 @@ def test_tool_network_domains_no_duplicates():
     assert domains.count("registry.npmjs.org") == 1
 
 
+def test_tool_network_domains_nodejs_org():
+    """Node.js tools should use nodejs.org for official tarball downloads."""
+    domains = tool_network_domains(["claude"])
+    assert "nodejs.org" in domains
+    assert "deb.nodesource.com" not in domains
+
+
 def test_tool_runtime_domains():
     domains = tool_runtime_domains(["claude"])
     assert "api.anthropic.com" in domains
@@ -145,6 +153,77 @@ def test_combined_tool_script_includes_all():
     assert "claude" in script
     assert "gh" in script
     assert "#!/bin/bash" in script
+
+
+# Pin tests
+
+
+def test_load_pins():
+    pins = load_pins()
+    assert "NODE_VERSION" in pins
+    assert "NODE_SHA256_X64" in pins
+    assert "NODE_SHA256_ARM64" in pins
+    assert "CLAUDE_CODE_VERSION" in pins
+    assert "CODEX_VERSION" in pins
+    assert "GH_GPG_KEY_SHA256" in pins
+
+
+def test_pins_are_nonempty():
+    pins = load_pins()
+    for key, value in pins.items():
+        assert isinstance(value, str), f"{key} should be a string"
+        assert len(value) > 0, f"{key} should not be empty"
+
+
+def test_tool_script_injects_pins():
+    """Verify that tool scripts have pinned version variables injected."""
+    script = tool_script("claude")
+    assert "NODE_VERSION=" in script
+    assert "CLAUDE_CODE_VERSION=" in script
+
+    script = tool_script("codex")
+    assert "CODEX_VERSION=" in script
+
+    script = tool_script("gh")
+    assert "GH_GPG_KEY_SHA256=" in script
+
+
+def test_tool_script_uses_pinned_npm_versions():
+    """Verify scripts install specific npm package versions, not unpinned."""
+    script = tool_script("claude")
+    assert "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" in script
+
+    script = tool_script("codex")
+    assert "@openai/codex@${CODEX_VERSION}" in script
+
+
+def test_tool_script_verifies_node_checksum():
+    """Verify Node.js install uses sha256 verification."""
+    script = tool_script("claude")
+    assert "sha256sum -c" in script
+    assert "nodejs.org/dist" in script
+
+
+def test_tool_script_verifies_gpg_key():
+    """Verify gh.sh checks GPG key checksum."""
+    script = tool_script("gh")
+    assert "sha256sum -c" in script
+    assert "GH_GPG_KEY_SHA256" in script
+
+
+def test_tools_hash_changes_with_pins(tmp_path, monkeypatch):
+    """Verify that changing pins changes the tools hash."""
+    h1 = tools_hash(["gh"])
+
+    # Monkeypatch load_pins to return modified pins
+    def patched_load():
+        pins = dict(load_pins())
+        pins["GH_GPG_KEY_SHA256"] = "0" * 64
+        return pins
+
+    monkeypatch.setattr("bubble.tools.load_pins", patched_load)
+    h2 = tools_hash(["gh"])
+    assert h1 != h2
 
 
 # CLI tests
@@ -214,6 +293,39 @@ def test_tools_config_roundtrip(tmp_data_dir):
     reloaded = load_config()
     assert reloaded["tools"]["claude"] == "yes"
     assert reloaded["tools"]["gh"] == "no"
+
+
+def test_tools_update_cli(tmp_data_dir, monkeypatch):
+    """Verify the tools update command runs and shows output."""
+    from bubble.cli import main
+
+    # Mock fetch_latest_pins to avoid network access
+    def mock_fetch():
+        pins = dict(load_pins())
+        pins["CLAUDE_CODE_VERSION"] = "99.99.99"
+        return pins
+
+    monkeypatch.setattr("bubble.tools.fetch_latest_pins", mock_fetch)
+    # Prevent writing to the real pins.json
+    monkeypatch.setattr("bubble.tools.save_pins", lambda pins: None)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["tools", "update"])
+    assert result.exit_code == 0
+    assert "CLAUDE_CODE_VERSION" in result.output
+    assert "99.99.99" in result.output
+
+
+def test_tools_update_no_changes(tmp_data_dir, monkeypatch):
+    """Verify the tools update command handles no-changes case."""
+    from bubble.cli import main
+
+    monkeypatch.setattr("bubble.tools.fetch_latest_pins", load_pins)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["tools", "update"])
+    assert result.exit_code == 0
+    assert "up to date" in result.output
 
 
 # Builder integration tests

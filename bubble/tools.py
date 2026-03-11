@@ -6,10 +6,13 @@ synchronously before any new containers are created.
 """
 
 import hashlib
+import json
+import shlex
 import shutil
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent / "images" / "scripts" / "tools"
+PINS_FILE = SCRIPTS_DIR / "pins.json"
 
 # Registry of available tools.
 # Each entry maps a tool name to:
@@ -21,13 +24,13 @@ TOOLS = {
     "claude": {
         "script": "claude.sh",
         "host_cmd": "claude",
-        "network_domains": ["registry.npmjs.org", "deb.nodesource.com"],
+        "network_domains": ["registry.npmjs.org", "nodejs.org"],
         "runtime_domains": ["api.anthropic.com"],
     },
     "codex": {
         "script": "codex.sh",
         "host_cmd": "codex",
-        "network_domains": ["registry.npmjs.org", "deb.nodesource.com"],
+        "network_domains": ["registry.npmjs.org", "nodejs.org"],
         "runtime_domains": ["api.openai.com"],
     },
     "gh": {
@@ -37,6 +40,25 @@ TOOLS = {
         "runtime_domains": ["api.github.com", "github.com"],
     },
 }
+
+
+def load_pins() -> dict:
+    """Load pinned versions and checksums from pins.json."""
+    return json.loads(PINS_FILE.read_text())
+
+
+def save_pins(pins: dict):
+    """Write pinned versions and checksums to pins.json."""
+    PINS_FILE.write_text(json.dumps(pins, indent=2) + "\n")
+
+
+def _pins_preamble() -> str:
+    """Generate shell export statements for all pinned versions."""
+    pins = load_pins()
+    lines = []
+    for key, value in sorted(pins.items()):
+        lines.append(f"export {key}={shlex.quote(str(value))}")
+    return "\n".join(lines)
 
 
 def available_tools() -> list[str]:
@@ -70,12 +92,16 @@ def resolve_tools(config: dict) -> list[str]:
 
 
 def tools_hash(enabled_tools: list[str]) -> str:
-    """Compute a stable hash of the enabled tool set and their scripts.
+    """Compute a stable hash of the enabled tool set, their scripts, and pins.
 
-    Includes both tool names and script contents so that changes to
-    install scripts also trigger rebuilds.
+    Includes tool names, script contents, and pinned versions so that changes
+    to install scripts or version pins trigger rebuilds.
     """
     h = hashlib.sha256()
+    # Include pins so version bumps trigger rebuilds
+    pins = load_pins()
+    h.update(json.dumps(pins, sort_keys=True).encode())
+    h.update(b"\x00")
     for name in sorted(enabled_tools):
         h.update(name.encode())
         h.update(b"\x00")
@@ -87,9 +113,11 @@ def tools_hash(enabled_tools: list[str]) -> str:
 
 
 def tool_script(name: str) -> str:
-    """Read the install script for a tool."""
+    """Read the install script for a tool with pinned versions injected."""
     spec = TOOLS[name]
-    return (SCRIPTS_DIR / spec["script"]).read_text()
+    script = (SCRIPTS_DIR / spec["script"]).read_text()
+    preamble = _pins_preamble()
+    return preamble + "\n" + script
 
 
 def tool_network_domains(enabled_tools: list[str]) -> list[str]:
@@ -130,3 +158,56 @@ def combined_tool_script(enabled_tools: list[str]) -> str | None:
         parts.append(tool_script(name))
         parts.append("")
     return "\n".join(parts)
+
+
+def fetch_latest_pins() -> dict:
+    """Fetch the latest versions and checksums from upstream sources.
+
+    Returns a new pins dict with updated values.
+    Requires network access to nodejs.org, npmjs.org, and cli.github.com.
+    """
+    import hashlib as hl
+    import re
+    import urllib.request
+
+    pins = {}
+
+    # Node.js: latest v22 LTS
+    shasums = (
+        urllib.request.urlopen("https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt")
+        .read()
+        .decode()
+    )
+    version = None
+    for line in shasums.splitlines():
+        if "linux-x64.tar.xz" in line and not line.strip().startswith("#"):
+            sha, fname = line.split()
+            pins["NODE_SHA256_X64"] = sha
+            m = re.search(r"node-v([\d.]+)-", fname)
+            if m:
+                version = m.group(1)
+        if "linux-arm64.tar.xz" in line and not line.strip().startswith("#"):
+            sha, _ = line.split()
+            pins["NODE_SHA256_ARM64"] = sha
+    if version:
+        pins["NODE_VERSION"] = version
+
+    # Claude Code: latest npm version
+    data = json.loads(
+        urllib.request.urlopen("https://registry.npmjs.org/@anthropic-ai/claude-code/latest").read()
+    )
+    pins["CLAUDE_CODE_VERSION"] = data["version"]
+
+    # Codex: latest npm version
+    data = json.loads(
+        urllib.request.urlopen("https://registry.npmjs.org/@openai/codex/latest").read()
+    )
+    pins["CODEX_VERSION"] = data["version"]
+
+    # GitHub CLI GPG key checksum
+    gpg_key = urllib.request.urlopen(
+        "https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+    ).read()
+    pins["GH_GPG_KEY_SHA256"] = hl.sha256(gpg_key).hexdigest()
+
+    return pins
