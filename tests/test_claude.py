@@ -232,11 +232,6 @@ class TestGeneratePrPrompt:
 
 
 class TestTemplateSystem:
-    def test_safe_dict_returns_placeholder_for_missing(self):
-        d = _SafeDict(name="Alice")
-        assert d["name"] == "Alice"
-        assert d["missing"] == "{missing}"
-
     def test_render_template_basic(self):
         result = _render_template("Hello {name}, you have {count} items.", name="Bob", count="3")
         assert result == "Hello Bob, you have 3 items."
@@ -245,10 +240,30 @@ class TestTemplateSystem:
         result = _render_template("Hello {name}, {unknown} here.", name="Bob")
         assert result == "Hello Bob, {unknown} here."
 
-    def test_render_template_malformed(self):
-        # Unclosed brace — should return template as-is
+    def test_render_template_unclosed_brace(self):
+        # Unclosed brace — regex only matches {word}, so this is left as-is
         result = _render_template("Hello {name", name="Bob")
         assert result == "Hello {name"
+
+    def test_render_attribute_access_ignored(self):
+        # {title.__class__} should NOT be expanded — only simple {name} placeholders
+        result = _render_template("Value: {title.__class__}", title="hello")
+        assert result == "Value: {title.__class__}"
+
+    def test_render_index_access_ignored(self):
+        # {missing[0]} should be left as-is
+        result = _render_template("Item: {missing[0]}", name="Bob")
+        assert result == "Item: {missing[0]}"
+
+    def test_render_format_spec_ignored(self):
+        # {name:>10} should be left as-is (not a simple placeholder)
+        result = _render_template("Padded: {name:>10}", name="Bob")
+        assert result == "Padded: {name:>10}"
+
+    def test_render_dot_placeholder_ignored(self):
+        # {missing.attr} should be left as-is
+        result = _render_template("Ref: {missing.attr}", title="hello")
+        assert result == "Ref: {missing.attr}"
 
     def test_load_template_missing(self, tmp_path):
         with patch("bubble.claude.TEMPLATES_DIR", tmp_path):
@@ -258,6 +273,16 @@ class TestTemplateSystem:
         (tmp_path / "issue.txt").write_text("Custom: {title}")
         with patch("bubble.claude.TEMPLATES_DIR", tmp_path):
             assert _load_template("issue") == "Custom: {title}"
+
+    def test_load_template_permission_error(self, tmp_path):
+        f = tmp_path / "bad.txt"
+        f.write_text("content")
+        f.chmod(0o000)
+        try:
+            with patch("bubble.claude.TEMPLATES_DIR", tmp_path):
+                assert _load_template("bad") is None
+        finally:
+            f.chmod(0o644)
 
     def test_default_issue_template_has_required_placeholders(self):
         for placeholder in ["issue_num", "title", "body", "branch"]:

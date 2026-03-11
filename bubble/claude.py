@@ -1,6 +1,7 @@
 """Claude Code integration for bubble containers."""
 
 import json
+import re
 import shlex
 import subprocess
 
@@ -52,34 +53,40 @@ _DEFAULT_PR_TEMPLATE = (
 )
 
 
-class _SafeDict(dict):
-    """Dict subclass that returns the key as a format placeholder for missing keys."""
-
-    def __missing__(self, key):
-        return "{" + key + "}"
-
-
 def _load_template(kind: str) -> str | None:
     """Load a custom template from ~/.bubble/templates/<kind>.txt.
 
     Returns the template string, or None if no custom template exists.
+    Falls back gracefully on permission errors or encoding issues.
     """
     path = TEMPLATES_DIR / f"{kind}.txt"
     if path.is_file():
-        return path.read_text()
+        try:
+            return path.read_text()
+        except (OSError, UnicodeError):
+            click.echo(f"  Warning: could not read template {path}, using default.", err=True)
     return None
 
 
-def _render_template(template: str, **kwargs) -> str:
-    """Render a template with the given keyword variables.
+# Matches simple {name} placeholders — no attribute access, indexing, or format specs.
+_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
-    Unknown placeholders are left as-is.
+
+def _render_template(template: str, **kwargs) -> str:
+    """Render a template by substituting simple {name} placeholders.
+
+    Only plain identifiers are replaced (e.g. {title}, {pr_num}).
+    Attribute access ({x.y}), indexing ({x[0]}), and format specs ({x:>10})
+    are left untouched. Unknown placeholders are also left as-is.
     """
-    try:
-        return template.format_map(_SafeDict(**kwargs))
-    except (ValueError, KeyError):
-        # Malformed template — return as-is rather than crashing
-        return template
+
+    def _replace(m: re.Match) -> str:
+        key = m.group(1)
+        if key in kwargs:
+            return str(kwargs[key])
+        return m.group(0)  # leave unknown placeholders as-is
+
+    return _PLACEHOLDER_RE.sub(_replace, template)
 
 
 def _fetch_github_item(owner: str, repo: str, endpoint: str, jq: str) -> str | None:
