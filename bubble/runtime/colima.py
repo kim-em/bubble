@@ -44,7 +44,25 @@ def start_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
     ]
     if _colima_supports_vm_type():
         args.append(f"--vm-type={vm_type}")
-    subprocess.run(args, check=True, stdin=subprocess.DEVNULL)
+    result = subprocess.run(
+        args, check=False, capture_output=True, text=True, stdin=subprocess.DEVNULL
+    )
+    if result.returncode != 0:
+        if "already exists" in (result.stderr + result.stdout):
+            # Stale instance exists but isn't running — delete and retry
+            subprocess.run(
+                ["colima", "delete", "--force"],
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+            subprocess.run(args, check=True, stdin=subprocess.DEVNULL)
+        else:
+            # Unknown error — print output and raise
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, end="")
+            result.check_returncode()
 
 
 def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
