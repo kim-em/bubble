@@ -2,7 +2,7 @@
 
 import threading
 
-from bubble.images.builder import _build_lock, build_image
+from bubble.images.builder import _build_lock, build_image, is_build_locked
 
 
 def test_build_lock_prevents_concurrent_builds(mock_runtime, monkeypatch, tmp_data_dir):
@@ -76,6 +76,33 @@ def test_build_lock_different_images_dont_block():
     t2.join(timeout=5)
 
     assert results == {"image-a": True, "image-b": True}
+
+
+def test_is_build_locked_false_when_free():
+    """is_build_locked returns False when no build holds the lock."""
+    assert not is_build_locked("no-such-build")
+
+
+def test_is_build_locked_true_when_held():
+    """is_build_locked returns True when another thread holds the lock."""
+    ready = threading.Event()
+    done = threading.Event()
+
+    def holder():
+        with _build_lock("held-image"):
+            ready.set()
+            done.wait(timeout=5)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    ready.wait(timeout=5)
+
+    assert is_build_locked("held-image")
+    # Different image should not be locked
+    assert not is_build_locked("other-image")
+
+    done.set()
+    t.join(timeout=5)
 
 
 def test_build_lean_toolchain_lock(mock_runtime, monkeypatch, tmp_data_dir):

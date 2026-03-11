@@ -41,6 +41,28 @@ def _build_lock(image_name: str):
         fd.close()
 
 
+def is_build_locked(image_name: str) -> bool:
+    """Check if an image build is currently in progress (non-blocking).
+
+    Used by background spawn paths to avoid launching redundant processes
+    when another build of the same image is already running.
+    """
+    BUILD_LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = BUILD_LOCK_DIR / f"{image_name}.lock"
+    try:
+        fd = lock_path.open("w")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return False
+        except OSError:
+            return True
+        finally:
+            fd.close()
+    except OSError:
+        return False
+
+
 # Image hierarchy: name -> {"script": "...", "parent": "..."}
 # Parent can be another image name (built recursively) or an Incus remote image.
 IMAGES = {

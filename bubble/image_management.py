@@ -8,7 +8,7 @@ import click
 
 from .config import load_config
 from .hooks import select_hook
-from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit
+from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit, is_build_locked
 from .runtime.base import ContainerRuntime
 
 
@@ -40,6 +40,8 @@ def maybe_rebuild_base_image():
     if not commit:
         return
     if VSCODE_COMMIT_FILE.exists() and VSCODE_COMMIT_FILE.read_text().strip() == commit:
+        return
+    if is_build_locked("base-vscode"):
         return
     _spawn_background_bubble(
         ["images", "build", "base-vscode"],
@@ -90,6 +92,9 @@ def maybe_rebuild_customize():
         return
     # Hash matches — nothing to do
     if current == stored:
+        return
+
+    if is_build_locked("base"):
         return
 
     if current is None:
@@ -186,6 +191,11 @@ def detect_and_build_image(runtime, ref_path, t, editor="vscode"):
 def _background_build_lean_toolchain(version: str, editor: str = "vscode"):
     """Fire off a background build of a toolchain-specific Lean image."""
     image_alias = apply_editor_to_image(f"lean-{version}", editor)
+    # Incus container names only allow alphanumeric + hyphens
+    safe_alias = image_alias.replace(".", "-")
+    # Skip if a build is already in progress (avoid spawning redundant processes)
+    if is_build_locked(safe_alias):
+        return
     click.echo(f"  Building {image_alias} image in background for next time...")
     _spawn_background_bubble(
         ["images", "build", image_alias],
