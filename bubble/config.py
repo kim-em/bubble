@@ -185,4 +185,10 @@ def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSp
         mounts.append(MountSpec.from_config(entry))
     for spec in cli_mounts:
         mounts.append(MountSpec.from_cli(spec))
+    # Check for duplicate container targets
+    seen: set[str] = set()
+    for m in mounts:
+        if m.target in seen:
+            raise ValueError(f"Duplicate mount target: {m.target}")
+        seen.add(m.target)
     return mounts

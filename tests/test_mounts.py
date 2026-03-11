@@ -173,6 +173,22 @@ class TestParseMounts:
         ))
         assert len(result) == 2
 
+    def test_duplicate_target_raises(self):
+        with pytest.raises(ValueError, match="Duplicate mount target"):
+            parse_mounts({}, cli_mounts=(
+                "/a:/mnt/data:ro",
+                "/b:/mnt/data:rw",
+            ))
+
+    def test_duplicate_target_config_and_cli_raises(self):
+        config = {
+            "mounts": [
+                {"source": "/a", "target": "/mnt/data"},
+            ],
+        }
+        with pytest.raises(ValueError, match="Duplicate mount target"):
+            parse_mounts(config, cli_mounts=("/b:/mnt/data:rw",))
+
 
 class TestMountProvisioning:
     """Test that mounts are correctly applied during container provisioning."""

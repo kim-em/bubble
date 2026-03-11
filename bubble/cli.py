@@ -1489,6 +1489,12 @@ def open_cmd(
                 remote_host = RemoteHost.parse(default)
 
     if remote_host:
+        if mount_specs:
+            click.echo(
+                "Error: --mount is not supported with remote/cloud bubbles (host paths are local)",
+                err=True,
+            )
+            sys.exit(1)
         _open_remote(
             remote_host,
             target,
