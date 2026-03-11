@@ -4,7 +4,7 @@ import difflib
 from importlib import resources
 from pathlib import Path
 
-SKILL_NAME = "lean-bubbles"
+SKILL_NAME = "bubble"
 SKILL_FILENAME = "SKILL.md"
 CLAUDE_DIR = Path.home() / ".claude"
 SKILLS_DIR = CLAUDE_DIR / "skills" / SKILL_NAME

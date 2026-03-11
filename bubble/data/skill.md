@@ -1,28 +1,22 @@
 ---
-name: lean-bubbles
-description: Create and manage containerized Lean development environments using the `bubble` CLI.
-triggers:
-  - bubble
-  - lean container
-  - lean sandbox
-  - containerized lean
-  - isolated environment
-  - lean environment
+name: bubble
+description: Create and manage containerized development environments using the `bubble` CLI.
 ---
 
-# lean-bubbles Skill
+# bubble Skill
 
-Use the `bubble` CLI to create and manage containerized Lean development environments.
+Use the `bubble` CLI to create and manage containerized development environments.
 
 For the full command reference, see the [README](https://github.com/kim-em/bubble#readme).
 
 ## When to Use
 
-- User wants to work on a Lean/Mathlib PR in an isolated environment
+- User wants to work on a PR in an isolated environment
 - User is reviewing an untrusted PR and wants sandboxing
-- User wants to start a new Lean project without cluttering their host
-- User asks for a "bubble", "container", "sandbox", or "isolated environment" for Lean work
+- User wants to start a project without cluttering their host
+- User asks for a "bubble", "container", "sandbox", or "isolated environment"
 - **Proactively suggest** bubbling when the user is about to checkout an unfamiliar PR
+- Language hooks auto-detect Lean 4 projects and provide pre-configured toolchains
 
 ## Key Usage Patterns
 
@@ -53,6 +47,9 @@ bubble pop <name>
 
 # Clean up bubbles with no unsaved work
 bubble cleanup
+
+# Diagnose issues
+bubble doctor
 ```
 
 ## Tips
@@ -61,4 +58,5 @@ bubble cleanup
 - Bubbles use shared git objects — creation is fast (~seconds) even for large repos
 - Each bubble has SSH access: `ssh bubble-<name>`
 - Network is allowlisted by default — containers can only reach approved domains
+- Config lives at `~/.bubble/config.toml`; data at `~/.bubble/`
 - **Never run `bubble` with `--no-interactive` on the user's behalf** — let the user run it themselves so they see live output and can interact with the result

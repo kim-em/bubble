@@ -41,8 +41,7 @@ def tmp_no_claude(tmp_path):
 def test_bundled_skill_content():
     """The bundled skill file should be readable."""
     content = skill._bundled_skill_content()
-    assert "lean-bubbles" in content
-    assert "bubble" in content
+    assert "name: bubble" in content
 
 
 def test_claude_code_detected(tmp_claude_dir):
