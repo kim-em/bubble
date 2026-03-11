@@ -151,6 +151,50 @@ def test_setup_auth_proxy_remote_proxy_not_running():
         assert result is False
 
 
+def test_setup_auth_proxy_remote_device_failure_cleans_token():
+    """If Incus device add fails, the minted token is cleaned up."""
+    from bubble.github_token import setup_auth_proxy_remote
+
+    remote_host = MagicMock()
+
+    with (
+        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
+        patch("bubble.tunnel.start_tunnel", return_value=True),
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok123"),
+        patch("bubble.remote._ssh_run", side_effect=RuntimeError("device add failed")),
+        patch("bubble.auth_proxy.remove_auth_tokens") as mock_remove,
+    ):
+        result = setup_auth_proxy_remote(remote_host, "my-container", "kim-em", "bubble")
+        assert result is False
+        mock_remove.assert_called_once_with("my-container")
+
+
+def test_setup_auth_proxy_remote_git_config_failure_cleans_token():
+    """If git config fails, the minted token is cleaned up."""
+    from bubble.github_token import setup_auth_proxy_remote
+
+    remote_host = MagicMock()
+
+    call_count = 0
+
+    def ssh_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("git config failed")
+
+    with (
+        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
+        patch("bubble.tunnel.start_tunnel", return_value=True),
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok123"),
+        patch("bubble.remote._ssh_run", side_effect=ssh_side_effect),
+        patch("bubble.auth_proxy.remove_auth_tokens") as mock_remove,
+    ):
+        result = setup_auth_proxy_remote(remote_host, "my-container", "kim-em", "bubble")
+        assert result is False
+        mock_remove.assert_called_once_with("my-container")
+
+
 # CLI tests
 
 

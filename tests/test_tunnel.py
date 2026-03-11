@@ -142,7 +142,7 @@ def test_stop_tunnel_if_unused_has_other_bubbles(tmp_data_dir):
     pf = _pid_file("myhost")
     pf.write_text(str(os.getpid()))
 
-    registry = {"other-bubble": {"remote_host": "myhost"}}
+    registry = {"bubbles": {"other-bubble": {"remote_host": "myhost"}}}
     with patch("bubble.lifecycle.load_registry", return_value=registry):
         result = stop_tunnel_if_unused("myhost")
         assert result is True
@@ -156,7 +156,7 @@ def test_stop_tunnel_if_unused_no_other_bubbles(tmp_data_dir):
     pf = _pid_file("myhost")
     pf.write_text("999999999")  # Dead PID
 
-    registry = {"other-bubble": {"remote_host": "otherhost"}}
+    registry = {"bubbles": {"other-bubble": {"remote_host": "otherhost"}}}
     with patch("bubble.lifecycle.load_registry", return_value=registry):
         result = stop_tunnel_if_unused("myhost")
         assert result is True

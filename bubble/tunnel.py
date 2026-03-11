@@ -10,6 +10,7 @@ share a single tunnel. Reference counting via the bubble registry
 determines when a tunnel can be torn down.
 """
 
+import fcntl
 import os
 import signal
 import subprocess
@@ -55,6 +56,11 @@ def is_tunnel_alive(host_spec: str) -> bool:
         return False
 
 
+def _lock_file(host_spec: str) -> Path:
+    """Return the lock file path for a remote host's tunnel."""
+    return TUNNEL_DIR / f"{_sanitize_host_spec(host_spec)}.lock"
+
+
 def start_tunnel(remote_host, local_port: int, remote_port: int = TUNNEL_REMOTE_PORT) -> bool:
     """Start an SSH reverse tunnel to a remote host.
 
@@ -65,53 +71,66 @@ def start_tunnel(remote_host, local_port: int, remote_port: int = TUNNEL_REMOTE_
     If a tunnel to this host is already running, returns True without
     starting another.
 
+    Uses file locking to prevent concurrent callers from spawning
+    duplicate SSH processes for the same host.
+
     Returns True if the tunnel is running (started or already existed).
     """
     host_spec = remote_host.spec_string()
 
-    if is_tunnel_alive(host_spec):
-        return True
-
     TUNNEL_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Build SSH tunnel command
-    cmd = ["ssh"]
-    if remote_host.ssh_options:
-        cmd += remote_host.ssh_options
-    if remote_host.port != 22:
-        cmd += ["-p", str(remote_host.port)]
-    cmd += [
-        "-N",  # No remote command
-        "-o",
-        "ExitOnForwardFailure=yes",  # Fail if port forward fails
-        "-o",
-        "ServerAliveInterval=30",  # Keepalive every 30s
-        "-o",
-        "ServerAliveCountMax=3",  # Give up after 3 missed keepalives
-        "-R",
-        f"127.0.0.1:{remote_port}:127.0.0.1:{local_port}",
-        remote_host.ssh_destination,
-    ]
-
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    # Wait briefly for the tunnel to establish or fail
+    # Lock to prevent two concurrent opens from spawning duplicate tunnels
+    lf = _lock_file(host_spec)
+    fd = lf.open("w")
     try:
-        proc.wait(timeout=10)
-        # Process exited — tunnel failed to start
-        return False
-    except subprocess.TimeoutExpired:
-        pass
+        fcntl.flock(fd, fcntl.LOCK_EX)
 
-    # Process is still running — tunnel is up
-    _pid_file(host_spec).write_text(str(proc.pid))
-    return True
+        # Re-check under lock — another process may have started the tunnel
+        if is_tunnel_alive(host_spec):
+            return True
+
+        # Build SSH tunnel command
+        cmd = ["ssh"]
+        if remote_host.ssh_options:
+            cmd += remote_host.ssh_options
+        if remote_host.port != 22:
+            cmd += ["-p", str(remote_host.port)]
+        cmd += [
+            "-N",  # No remote command
+            "-o",
+            "ExitOnForwardFailure=yes",  # Fail if port forward fails
+            "-o",
+            "ServerAliveInterval=30",  # Keepalive every 30s
+            "-o",
+            "ServerAliveCountMax=3",  # Give up after 3 missed keepalives
+            "-R",
+            f"127.0.0.1:{remote_port}:127.0.0.1:{local_port}",
+            remote_host.ssh_destination,
+        ]
+
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        # Wait briefly for the tunnel to establish or fail
+        try:
+            proc.wait(timeout=10)
+            # Process exited — tunnel failed to start
+            return False
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Process is still running — tunnel is up
+        _pid_file(host_spec).write_text(str(proc.pid))
+        return True
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
 
 
 def stop_tunnel(host_spec: str) -> bool:
@@ -158,7 +177,7 @@ def stop_tunnel_if_unused(host_spec: str) -> bool:
     from .lifecycle import load_registry
 
     registry = load_registry()
-    for _name, info in registry.items():
+    for _name, info in registry.get("bubbles", {}).items():
         remote = info.get("remote_host", "")
         if remote == host_spec:
             # Another bubble still uses this remote host

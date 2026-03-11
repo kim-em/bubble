@@ -201,7 +201,7 @@ def setup_auth_proxy_remote(
 
     Returns True if setup succeeded.
     """
-    from .auth_proxy import generate_auth_token
+    from .auth_proxy import generate_auth_token, remove_auth_tokens
     from .remote import _ssh_run
     from .tunnel import start_tunnel
 
@@ -248,6 +248,7 @@ def setup_auth_proxy_remote(
         if not machine_readable:
             click.echo(f"  Warning: failed to add remote proxy device: {e}")
             click.echo("  No GitHub auth configured (fail-closed).")
+        remove_auth_tokens(container)
         return False
 
     # Configure git inside the container to use the proxy
@@ -277,6 +278,7 @@ def setup_auth_proxy_remote(
         if not machine_readable:
             click.echo(f"  Warning: failed to configure git proxy on remote: {e}")
             click.echo("  No GitHub auth configured (fail-closed).")
+        remove_auth_tokens(container)
         return False
 
     if not machine_readable:
