@@ -86,12 +86,5 @@ def register_security_commands(main):
             config["security"] = {}
         config["security"][name] = value
 
-        # Keep relay backwards compat in sync
-        if name == "relay":
-            config.setdefault("relay", {})["enabled"] = value == "on"
-        # Clear legacy github token so it doesn't override the new setting
-        if name == "github_auth" and "github" in config and "token" in config["github"]:
-            del config["github"]["token"]
-
         save_config(config)
         click.echo(f"Set security.{name} = {value}")

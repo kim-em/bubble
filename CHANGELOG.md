@@ -6,7 +6,7 @@
   - Removed `--gh-token` CLI flag and `[github] token` config — auth proxy is now always enabled
   - Removed "Tip: use --gh-token" nag message (no longer needed)
   - Removed `bubble gh token on/off` command; use `bubble security set github_auth off` to disable
-  - Backwards compatible: `[github] token = false` in config maps to `security.github_auth = off`
+  - Removed all backwards-compatibility shims for `[github] token` and `[relay] enabled` config keys
 
 ## 0.6.3 — 2026-03-12
 - Don't prompt interactively during `bubble open` (#88)

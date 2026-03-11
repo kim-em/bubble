@@ -106,32 +106,11 @@ GITHUB_DOMAINS = {
 
 
 def get_setting(config: dict, name: str) -> str:
-    """Get the raw value of a security setting (auto/on/off).
-
-    Handles backwards compatibility for the relay setting, which was
-    previously controlled by [relay] enabled = true/false.
-    """
+    """Get the raw value of a security setting (auto/on/off)."""
     if name not in SETTINGS:
         raise ValueError(f"Unknown security setting: {name}")
 
-    value = config.get("security", {}).get(name, "auto")
-
-    # Backwards compat: if relay is auto but [relay] enabled = true,
-    # treat as "on" (user explicitly enabled via old config).
-    if name == "relay" and value == "auto":
-        if config.get("relay", {}).get("enabled", False):
-            return "on"
-
-    # Backwards compat: if github_auth is auto but [github] token was
-    # explicitly set, respect that choice.
-    if name == "github_auth" and value == "auto":
-        gh_token = config.get("github", {}).get("token")
-        if gh_token is True:
-            return "on"
-        if gh_token is False:
-            return "off"
-
-    return value
+    return config.get("security", {}).get(name, "auto")
 
 
 def is_enabled(config: dict, name: str) -> bool:
@@ -228,8 +207,6 @@ def apply_preset_permissive(config: dict) -> list[str]:
     for name in SETTINGS:
         if get_setting(config, name) != "on":
             config["security"][name] = "on"
-            if name == "relay":
-                config.setdefault("relay", {})["enabled"] = True
             changed.append(name)
     return changed
 
@@ -244,12 +221,6 @@ def apply_preset_default(config: dict) -> list[str]:
             changed.append(name)
     if "security" not in config:
         config["security"] = security
-    # Clear legacy relay flag so backwards compat doesn't override auto
-    if "relay" in config and "enabled" in config["relay"]:
-        del config["relay"]["enabled"]
-    # Clear legacy github token flag so backwards compat doesn't override auto
-    if "github" in config and "token" in config["github"]:
-        del config["github"]["token"]
     return changed
 
 
@@ -260,8 +231,6 @@ def apply_preset_lockdown(config: dict) -> list[str]:
     for name in SETTINGS:
         if get_setting(config, name) != "off":
             config["security"][name] = "off"
-            if name == "relay":
-                config.setdefault("relay", {})["enabled"] = False
             changed.append(name)
     return changed
 

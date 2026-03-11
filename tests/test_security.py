@@ -36,42 +36,6 @@ def test_get_setting_reads_security_section():
     assert get_setting(config, "relay") == "off"
 
 
-def test_get_setting_relay_backwards_compat():
-    """When relay is auto but [relay] enabled = true, treat as on."""
-    config = {"relay": {"enabled": True}}
-    assert get_setting(config, "relay") == "on"
-
-
-def test_get_setting_relay_backwards_compat_disabled():
-    """When relay is auto and [relay] enabled = false, stay auto."""
-    config = {"relay": {"enabled": False}}
-    assert get_setting(config, "relay") == "auto"
-
-
-def test_get_setting_relay_explicit_overrides_backwards_compat():
-    """Explicit security.relay takes precedence over [relay] enabled."""
-    config = {"security": {"relay": "off"}, "relay": {"enabled": True}}
-    assert get_setting(config, "relay") == "off"
-
-
-def test_get_setting_github_auth_backwards_compat_on():
-    """When github_auth is auto but [github] token = true, treat as on."""
-    config = {"github": {"token": True}}
-    assert get_setting(config, "github_auth") == "on"
-
-
-def test_get_setting_github_auth_backwards_compat_off():
-    """When github_auth is auto but [github] token = false, treat as off."""
-    config = {"github": {"token": False}}
-    assert get_setting(config, "github_auth") == "off"
-
-
-def test_get_setting_github_auth_explicit_overrides_backwards_compat():
-    """Explicit security.github_auth takes precedence over [github] token."""
-    config = {"security": {"github_auth": "on"}, "github": {"token": False}}
-    assert get_setting(config, "github_auth") == "on"
-
-
 def test_get_setting_unknown_raises():
     import pytest
 
@@ -287,21 +251,6 @@ def test_security_set_unknown(tmp_data_dir):
     assert "Unknown security setting" in result.output
 
 
-def test_security_set_relay_syncs_old_config(tmp_data_dir):
-    """Setting security.relay also updates [relay] enabled for backwards compat."""
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["security", "set", "relay", "on"])
-    assert result.exit_code == 0
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["security"]["relay"] == "on"
-    assert config["relay"]["enabled"] is True
-
-
 # --- Legacy config commands still work ---
 
 
@@ -432,30 +381,6 @@ def test_apply_preset_default_idempotent():
     config = {}
     changed = apply_preset_default(config)
     assert len(changed) == 0
-
-
-def test_apply_preset_default_clears_legacy_github_token():
-    """permissive then default should clear legacy [github] token."""
-    config = {"github": {"token": False}}
-    # Legacy token=false makes github_auth effectively off
-    assert is_enabled(config, "github_auth") is False
-    apply_preset_default(config)
-    # default should clear the legacy key, so github_auth is truly auto (on)
-    assert get_setting(config, "github_auth") == "auto"
-    assert is_enabled(config, "github_auth") is True
-
-
-def test_apply_preset_default_clears_legacy_relay():
-    """permissive then default should fully restore relay to auto."""
-    config = {}
-    apply_preset_permissive(config)
-    # permissive sets both security.relay=on and relay.enabled=True
-    assert config["security"]["relay"] == "on"
-    assert config["relay"]["enabled"] is True
-    apply_preset_default(config)
-    # default should clear both, so relay is truly auto (off)
-    assert get_setting(config, "relay") == "auto"
-    assert is_enabled(config, "relay") is False
 
 
 def test_all_settings_have_valid_category():
