@@ -106,8 +106,10 @@ chmod +x /usr/local/bin/bubble
 # on first login and points the user to the log file.
 cat >> /home/user/.profile << 'PROFILEEOF'
 
-# bubble: auto-run build command if marker file exists
-if [ -f "$HOME/.bubble-fetch-cache" ]; then
+# bubble: auto-run build command if marker file exists.
+# Guard on SSH_CONNECTION to avoid triggering during provisioning
+# (su - user -c "..." sources .profile but doesn't set SSH_CONNECTION).
+if [ -n "$SSH_CONNECTION" ] && [ -f "$HOME/.bubble-fetch-cache" ]; then
     _bubble_cmd=$(cat "$HOME/.bubble-fetch-cache")
     rm -f "$HOME/.bubble-fetch-cache"
     if [ -n "$_bubble_cmd" ]; then
