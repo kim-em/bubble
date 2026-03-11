@@ -41,7 +41,7 @@ def finalize_bubble(
     if gh_token:
         from .github_token import setup_gh_token
 
-        setup_gh_token(runtime, name, machine_readable=machine_readable)
+        setup_gh_token(runtime, name, owner=t.owner, repo=t.repo, machine_readable=machine_readable)
 
     # Inject Claude Code task if prompt is provided
     if claude_prompt:

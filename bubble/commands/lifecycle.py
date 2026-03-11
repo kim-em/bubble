@@ -16,6 +16,15 @@ from ..setup import get_runtime
 from ..vscode import remove_ssh_config
 
 
+def _cleanup_tokens(name: str):
+    """Remove relay and auth proxy tokens for a container."""
+    from ..auth_proxy import remove_auth_tokens
+    from ..relay import remove_relay_token
+
+    remove_relay_token(name)
+    remove_auth_tokens(name)
+
+
 def register_lifecycle_commands(main):
     """Register pause, pop, and cleanup commands on the main CLI group."""
 
@@ -69,6 +78,7 @@ def register_lifecycle_commands(main):
                 click.echo(f"Failed to pop on {host.ssh_destination}: {result.stderr}", err=True)
                 sys.exit(1)
             remove_ssh_config(name)
+            _cleanup_tokens(name)
             unregister_bubble(name)
             click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
             return
@@ -103,6 +113,7 @@ def register_lifecycle_commands(main):
                     )
                     sys.exit(1)
                 shutil.rmtree(resolved)
+            _cleanup_tokens(name)
             unregister_bubble(name)
             click.echo(f"Native workspace '{name}' popped.")
             return
@@ -143,6 +154,7 @@ def register_lifecycle_commands(main):
                 sys.exit(1)
 
         remove_ssh_config(name)
+        _cleanup_tokens(name)
         unregister_bubble(name)
         click.echo(f"Bubble '{name}' popped.")
 

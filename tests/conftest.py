@@ -153,6 +153,15 @@ def tmp_data_dir(tmp_path, monkeypatch):
     except ImportError:
         pass
 
+    # Patch auth_proxy module
+    try:
+        import bubble.auth_proxy as auth_proxy_mod
+
+        monkeypatch.setattr(auth_proxy_mod, "AUTH_PROXY_PORT_FILE", data_dir / "auth-proxy.port")
+        monkeypatch.setattr(auth_proxy_mod, "AUTH_PROXY_TOKENS", data_dir / "auth-tokens.json")
+    except ImportError:
+        pass
+
     return data_dir
 
 

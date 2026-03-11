@@ -17,6 +17,7 @@ LAUNCHD_LABELS = {
     "image-refresh": "com.bubble.image-refresh",
 }
 RELAY_LABEL = "com.bubble.relay-daemon"
+AUTH_PROXY_LABEL = "com.bubble.auth-proxy"
 
 
 def install_automation() -> list[str]:
@@ -95,6 +96,15 @@ _RELAY_JOB = {
         "RunAtLoad": True,
     },
     "log": "/tmp/bubble-relay-daemon.log",
+}
+
+_AUTH_PROXY_JOB = {
+    "args": ["gh", "proxy", "daemon"],
+    "extra": {
+        "KeepAlive": True,
+        "RunAtLoad": True,
+    },
+    "log": "/tmp/bubble-auth-proxy.log",
 }
 
 
@@ -355,5 +365,95 @@ def _remove_relay_systemd() -> str:
         service.unlink()
         subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
         return "systemd: bubble-relay.service"
+
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Auth proxy daemon (separate lifecycle, started on demand by --gh-token)
+# ---------------------------------------------------------------------------
+
+
+def install_auth_proxy_daemon() -> str:
+    """Install and start the auth proxy daemon. Returns description of what was installed."""
+    system = platform.system()
+    if system == "Darwin":
+        return _install_auth_proxy_launchd()
+    elif system == "Linux":
+        return _install_auth_proxy_systemd()
+    return ""
+
+
+def remove_auth_proxy_daemon() -> str:
+    """Stop and remove the auth proxy daemon. Returns description of what was removed."""
+    system = platform.system()
+    if system == "Darwin":
+        return _remove_auth_proxy_launchd()
+    elif system == "Linux":
+        return _remove_auth_proxy_systemd()
+    return ""
+
+
+def is_auth_proxy_installed() -> bool:
+    """Check if the auth proxy daemon is installed."""
+    system = platform.system()
+    if system == "Darwin":
+        launch_agents = Path.home() / "Library" / "LaunchAgents"
+        return (launch_agents / f"{AUTH_PROXY_LABEL}.plist").exists()
+    elif system == "Linux":
+        return (SYSTEMD_DIR / "bubble-auth-proxy.service").exists()
+    return False
+
+
+def _install_auth_proxy_launchd() -> str:
+    _write_launchd_plist(AUTH_PROXY_LABEL, _AUTH_PROXY_JOB)
+    return f"launchd: {AUTH_PROXY_LABEL}"
+
+
+def _remove_auth_proxy_launchd() -> str:
+    return _remove_launchd_job(AUTH_PROXY_LABEL) or ""
+
+
+def _install_auth_proxy_systemd() -> str:
+    SYSTEMD_DIR.mkdir(parents=True, exist_ok=True)
+    bubble = _bubble_path()
+
+    service = SYSTEMD_DIR / "bubble-auth-proxy.service"
+    service.write_text(
+        textwrap.dedent(f"""\
+        [Unit]
+        Description=bubble git auth proxy daemon
+
+        [Service]
+        Type=simple
+        ExecStart={bubble} gh proxy daemon
+        Restart=always
+        RestartSec=5
+
+        [Install]
+        WantedBy=default.target
+    """)
+    )
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    subprocess.run(
+        ["systemctl", "--user", "enable", "--now", "bubble-auth-proxy.service"],
+        capture_output=True,
+    )
+
+    return "systemd: bubble-auth-proxy.service"
+
+
+def _remove_auth_proxy_systemd() -> str:
+    service = SYSTEMD_DIR / "bubble-auth-proxy.service"
+
+    if service.exists():
+        subprocess.run(
+            ["systemctl", "--user", "disable", "--now", "bubble-auth-proxy.service"],
+            capture_output=True,
+        )
+        service.unlink()
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        return "systemd: bubble-auth-proxy.service"
 
     return ""
