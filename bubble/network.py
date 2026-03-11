@@ -138,6 +138,73 @@ def _build_allowlist_script(domains: list[str]) -> str:
     return "\n".join(lines)
 
 
+def add_domains(runtime: ContainerRuntime, container: str, domains: list[str]):
+    """Add extra domains to an existing allowlist.
+
+    Resolves the domains and inserts ACCEPT rules before the DROP policy.
+    Safe to call even if the allowlist is not active (rules are just added).
+    """
+    for domain in domains:
+        if not _DOMAIN_RE.match(domain):
+            raise ValueError(f"Invalid domain in allowlist: {domain!r}")
+
+    script = _build_add_domains_script(domains)
+    runtime.exec(container, ["bash", "-c", script])
+
+
+def remove_domains(runtime: ContainerRuntime, container: str, domains: list[str]):
+    """Remove previously added domain rules from the allowlist.
+
+    Resolves the domains and deletes matching ACCEPT rules.
+    Safe to call if the rules don't exist (silently ignored).
+    """
+    for domain in domains:
+        if not _DOMAIN_RE.match(domain):
+            raise ValueError(f"Invalid domain in allowlist: {domain!r}")
+
+    script = _build_remove_domains_script(domains)
+    runtime.exec(container, ["bash", "-c", script])
+
+
+def _build_remove_domains_script(domains: list[str]) -> str:
+    """Build a script that removes domain rules from an existing iptables chain."""
+    lines = ["#!/bin/bash", "set -e", ""]
+    for domain in domains:
+        resolve_domain = domain[2:] if domain.startswith("*.") else domain
+        lines.append(
+            f"for cidr in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
+            f"| awk '{{print $1}}' | sort -u"
+            f" | awk -F. '{{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}}'"
+            f" | sort -u); do"
+        )
+        lines.append(
+            "  iptables -D OUTPUT -d $cidr -j ACCEPT 2>/dev/null || true"
+        )
+        lines.append("done")
+    return "\n".join(lines)
+
+
+def _build_add_domains_script(domains: list[str]) -> str:
+    """Build a script that adds domain rules to an existing iptables chain."""
+    lines = ["#!/bin/bash", "set -e", ""]
+    for domain in domains:
+        resolve_domain = domain[2:] if domain.startswith("*.") else domain
+        lines.append(
+            f"for cidr in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
+            f"| awk '{{print $1}}' | sort -u"
+            f" | awk -F. '{{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}}'"
+            f" | sort -u); do"
+        )
+        # Insert before the last rule (the DROP catch-all) using -I with position
+        # If no rules exist, just append
+        lines.append(
+            "  iptables -C OUTPUT -d $cidr -j ACCEPT 2>/dev/null"
+            " || iptables -I OUTPUT -d $cidr -j ACCEPT"
+        )
+        lines.append("done")
+    return "\n".join(lines)
+
+
 def check_allowlist_active(runtime: ContainerRuntime, container: str) -> bool:
     """Check if network allowlisting is active on a container."""
     try:
