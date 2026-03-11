@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.4 — 2026-03-12
+- Make GitHub auth proxy on-by-default via `security.github_auth` setting (#89)
+  - New `github_auth` security setting (auto defaults to on) controls repo-scoped auth proxy
+  - Removed `--gh-token` CLI flag and `[github] token` config — auth proxy is now always enabled
+  - Removed "Tip: use --gh-token" nag message (no longer needed)
+  - Removed `bubble gh token on/off` command; use `bubble security set github_auth off` to disable
+  - Backwards compatible: `[github] token = false` in config maps to `security.github_auth = off`
+
 ## 0.6.3 — 2026-03-12
 - Don't prompt interactively during `bubble open` (#88)
   - `maybe_symlink_claude_projects()` now prints an informational message instead of blocking on a `[y/N]` prompt

@@ -29,7 +29,6 @@ def finalize_bubble(
     git_email="",
     command=None,
     claude_prompt="",
-    gh_token=False,
 ):
     """Post-clone setup: hooks, SSH, registration, and attach."""
     q_short = shlex.quote(short)
@@ -37,8 +36,8 @@ def finalize_bubble(
     if hook:
         hook.post_clone(runtime, name, project_dir)
 
-    # Inject GitHub token if requested
-    if gh_token:
+    # Set up repo-scoped GitHub auth via host proxy (security.github_auth)
+    if is_enabled(config, "github_auth"):
         from .github_token import setup_gh_token
 
         setup_gh_token(runtime, name, owner=t.owner, repo=t.repo, machine_readable=machine_readable)

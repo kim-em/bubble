@@ -227,38 +227,28 @@ def register_settings_commands(main):
     def gh_group():
         """Manage GitHub integration settings."""
 
-    @gh_group.command("token")
-    @click.argument("value", type=click.Choice(["on", "off"]))
-    def gh_token_cmd(value):
-        """Enable or disable GitHub token injection into bubbles."""
-        config = load_config()
-        if "github" not in config:
-            config["github"] = {}
-        config["github"]["token"] = value == "on"
-        save_config(config)
-        if value == "on":
-            click.echo("GitHub token injection enabled for new bubbles.")
-        else:
-            click.echo("GitHub token injection disabled.")
-
     @gh_group.command("status")
     def gh_status():
         """Show GitHub integration status."""
         from ..automation import is_auth_proxy_installed
         from ..github_token import has_gh_auth
+        from ..security import is_enabled as sec_is_enabled
 
         config = load_config()
-        token_enabled = config.get("github", {}).get("token", False)
+        github_auth = get_setting(config, "github_auth")
+        enabled = sec_is_enabled(config, "github_auth")
         host_auth = has_gh_auth()
         proxy_installed = is_auth_proxy_installed()
 
-        click.echo(f"Token injection:  {'enabled' if token_enabled else 'disabled'}")
+        click.echo(f"GitHub auth:      {github_auth} (effectively {'on' if enabled else 'off'})")
         click.echo(f"Host gh auth:     {'authenticated' if host_auth else 'not authenticated'}")
         click.echo(f"Auth proxy:       {'installed' if proxy_installed else 'not installed'}")
         if not host_auth:
             click.echo("\nRun 'gh auth login' to authenticate on the host first.")
-        elif not token_enabled:
-            click.echo("\nRun 'bubble gh token on' to enable token injection by default.")
+        elif not enabled:
+            click.echo(
+                "\nRun 'bubble security set github_auth on' to enable GitHub auth in bubbles."
+            )
 
     @gh_group.group("proxy")
     def gh_proxy_group():

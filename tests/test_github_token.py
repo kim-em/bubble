@@ -198,34 +198,6 @@ def test_setup_auth_proxy_remote_git_config_failure_cleans_token():
 # CLI tests
 
 
-def test_gh_token_on_cli(tmp_data_dir):
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["gh", "token", "on"])
-    assert result.exit_code == 0
-    assert "enabled" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["github"]["token"] is True
-
-
-def test_gh_token_off_cli(tmp_data_dir):
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["gh", "token", "off"])
-    assert result.exit_code == 0
-    assert "disabled" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["github"]["token"] is False
-
-
 def test_gh_status_cli_not_authed(tmp_data_dir):
     from bubble.cli import main
 
@@ -248,12 +220,13 @@ def test_gh_status_cli_authed(tmp_data_dir):
     assert "authenticated" in result.output
 
 
-def test_gh_token_config_roundtrip(tmp_data_dir):
-    from bubble.config import load_config, save_config
+def test_gh_status_shows_security_setting(tmp_data_dir):
+    from bubble.cli import main
 
-    config = load_config()
-    config["github"] = {"token": True}
-    save_config(config)
-
-    reloaded = load_config()
-    assert reloaded["github"]["token"] is True
+    runner = CliRunner()
+    with patch("bubble.github_token.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        result = runner.invoke(main, ["gh", "status"])
+    assert result.exit_code == 0
+    assert "GitHub auth:" in result.output
+    assert "effectively on" in result.output

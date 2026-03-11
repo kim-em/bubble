@@ -54,6 +54,24 @@ def test_get_setting_relay_explicit_overrides_backwards_compat():
     assert get_setting(config, "relay") == "off"
 
 
+def test_get_setting_github_auth_backwards_compat_on():
+    """When github_auth is auto but [github] token = true, treat as on."""
+    config = {"github": {"token": True}}
+    assert get_setting(config, "github_auth") == "on"
+
+
+def test_get_setting_github_auth_backwards_compat_off():
+    """When github_auth is auto but [github] token = false, treat as off."""
+    config = {"github": {"token": False}}
+    assert get_setting(config, "github_auth") == "off"
+
+
+def test_get_setting_github_auth_explicit_overrides_backwards_compat():
+    """Explicit security.github_auth takes precedence over [github] token."""
+    config = {"security": {"github_auth": "on"}, "github": {"token": False}}
+    assert get_setting(config, "github_auth") == "on"
+
+
 def test_get_setting_unknown_raises():
     import pytest
 
@@ -69,6 +87,7 @@ def test_is_enabled_auto_on():
     assert is_enabled(config, "cloud_root") is True
     assert is_enabled(config, "git_manifest_trust") is True
     assert is_enabled(config, "user_mounts") is True
+    assert is_enabled(config, "github_auth") is True
 
 
 def test_is_enabled_auto_off():

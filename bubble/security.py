@@ -66,6 +66,12 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         warning="credentials give containers access to Claude API auth",
         category="Authentication",
     ),
+    "github_auth": SecuritySettingDef(
+        description="Repo-scoped GitHub auth via host proxy",
+        auto_default="on",
+        warning="containers get repo-scoped GitHub push access via auth proxy",
+        category="Authentication",
+    ),
     "relay": SecuritySettingDef(
         description="Bubble-in-bubble relay daemon",
         auto_default="off",
@@ -115,6 +121,15 @@ def get_setting(config: dict, name: str) -> str:
     if name == "relay" and value == "auto":
         if config.get("relay", {}).get("enabled", False):
             return "on"
+
+    # Backwards compat: if github_auth is auto but [github] token was
+    # explicitly set, respect that choice.
+    if name == "github_auth" and value == "auto":
+        gh_token = config.get("github", {}).get("token")
+        if gh_token is True:
+            return "on"
+        if gh_token is False:
+            return "off"
 
     return value
 
