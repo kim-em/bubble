@@ -780,6 +780,24 @@ def _maybe_rebuild_base_image():
     )
 
 
+def _maybe_rebuild_tools():
+    """If the resolved tool set has changed since base was built, rebuild in background."""
+    from .images.builder import TOOLS_HASH_FILE
+    from .tools import resolve_tools, tools_hash
+
+    config = load_config()
+    enabled = resolve_tools(config)
+    current_hash = tools_hash(enabled)
+
+    if TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash:
+        return
+    # No stored hash yet, or hash differs — rebuild base to pick up tools
+    _spawn_background_bubble(
+        ["images", "build", "base"],
+        "/tmp/bubble-tools-rebuild.log",
+    )
+
+
 def _generate_bubble_name(t, custom_name: str | None) -> str:
     """Generate a container name from a parsed target."""
     if custom_name:
@@ -1762,6 +1780,7 @@ def open_cmd(
     # Local flow
     if not machine_readable:
         _maybe_rebuild_base_image()
+        _maybe_rebuild_tools()
 
     runtime = get_runtime(config)
 
@@ -3442,6 +3461,74 @@ def skill_status():
     else:
         click.echo("Bubble skill is installed but outdated.")
         click.echo("  Update with: bubble skill install")
+
+
+# ---------------------------------------------------------------------------
+# tools
+# ---------------------------------------------------------------------------
+
+
+@main.group("tools")
+def tools_group():
+    """Manage tools installed in container images."""
+
+
+@tools_group.command("list")
+def tools_list():
+    """List available tools and their current settings."""
+    from .tools import TOOLS, available_tools
+
+    config = load_config()
+    tools_config = config.get("tools", {})
+
+    click.echo(f"{'TOOL':<20} {'SETTING':<10}")
+    click.echo("-" * 30)
+    for name in available_tools():
+        setting = tools_config.get(name, "auto")
+        click.echo(f"{name:<20} {setting:<10}")
+
+
+@tools_group.command("set")
+@click.argument("tool_name")
+@click.argument("value", type=click.Choice(["yes", "no", "auto"]))
+def tools_set(tool_name, value):
+    """Set a tool to yes, no, or auto."""
+    from .tools import TOOLS
+
+    if tool_name not in TOOLS:
+        available = ", ".join(sorted(TOOLS.keys()))
+        click.echo(f"Unknown tool: {tool_name}. Available: {available}", err=True)
+        sys.exit(1)
+
+    config = load_config()
+    if "tools" not in config:
+        config["tools"] = {}
+    config["tools"][tool_name] = value
+    save_config(config)
+    click.echo(f"Set {tool_name} = {value}")
+    click.echo("Run 'bubble images build base' to apply changes.")
+
+
+@tools_group.command("status")
+def tools_status():
+    """Show which tools would be installed (resolved state)."""
+    from .tools import TOOLS, resolve_tools, tools_hash
+
+    config = load_config()
+    enabled = resolve_tools(config)
+    tools_config = config.get("tools", {})
+
+    click.echo(f"{'TOOL':<20} {'SETTING':<10} {'RESOLVED':<10}")
+    click.echo("-" * 40)
+    for name in sorted(TOOLS.keys()):
+        setting = tools_config.get(name, "auto")
+        resolved = "install" if name in enabled else "skip"
+        click.echo(f"{name:<20} {setting:<10} {resolved:<10}")
+
+    if enabled:
+        click.echo(f"\nTools hash: {tools_hash(enabled)}")
+    else:
+        click.echo("\nNo tools will be installed.")
 
 
 @main.command()
