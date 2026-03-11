@@ -469,6 +469,20 @@ class TestParseIssueURL:
         assert t.kind == "issue"
         assert t.ref == "7"
 
+    def test_issue_url_with_fragment(self, registry):
+        t = parse_target(
+            "https://github.com/leanprover/lean4/issues/42#issuecomment-123456", registry
+        )
+        assert t.kind == "issue"
+        assert t.ref == "42"
+
+    def test_issue_url_with_query(self, registry):
+        t = parse_target(
+            "https://github.com/leanprover/lean4/issues/42?foo=bar", registry
+        )
+        assert t.kind == "issue"
+        assert t.ref == "42"
+
 
 # ---------------------------------------------------------------------------
 # Test: Target dataclass new fields

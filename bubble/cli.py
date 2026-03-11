@@ -1633,6 +1633,7 @@ def open_cmd(
             kind="branch",
             ref=new_branch,
             original=t.original,
+            local_path=t.local_path,
             new_branch=True,
             base_ref=base_ref or "",
         )
@@ -1769,14 +1770,24 @@ def _reattach(
                 ["su", "-", "user", "-c", f"cd {q_dir} && git status --porcelain -uno"],
             ).strip()
             if not status:
-                click.echo("Working tree is clean, pulling latest...")
-                try:
-                    runtime.exec(
-                        name,
-                        ["su", "-", "user", "-c", f"cd {q_dir} && git pull"],
-                    )
-                except RuntimeError:
-                    click.echo("  Pull failed (no tracking branch?), continuing...")
+                # Only pull if there's an upstream tracking branch
+                has_upstream = runtime.exec(
+                    name,
+                    [
+                        "su", "-", "user", "-c",
+                        f"cd {q_dir} && git rev-parse --abbrev-ref"
+                        " @{upstream} 2>/dev/null || true",
+                    ],
+                ).strip()
+                if has_upstream:
+                    click.echo("Working tree is clean, pulling latest...")
+                    try:
+                        runtime.exec(
+                            name,
+                            ["su", "-", "user", "-c", f"cd {q_dir} && git pull --ff-only"],
+                        )
+                    except RuntimeError:
+                        pass  # Silently continue if pull fails
         except RuntimeError:
             pass  # Can't check status, skip pull
 

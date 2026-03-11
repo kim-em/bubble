@@ -204,6 +204,9 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
     # Strip URL scheme
     s = re.sub(r"^https?://", "", s)
 
+    # Strip fragment and query string (e.g. #issuecomment-123, ?query=1)
+    s = re.sub(r"[#?].*$", "", s)
+
     # Strip github.com/ prefix
     s = re.sub(r"^github\.com/", "", s)
 

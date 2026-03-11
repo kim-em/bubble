@@ -151,7 +151,7 @@ def inject_claude_task(
         f"cd {q_dir} && "
         f"GIT_DIR=$(git rev-parse --git-dir) && "
         f"mkdir -p $GIT_DIR/info && "
-        f"for f in .vscode/claude-prompt.txt .vscode/settings.json; do "
+        f"for f in .vscode/claude-prompt.txt .vscode/settings.json .vscode/tasks.json; do "
         f"  grep -qxF \"$f\" $GIT_DIR/info/exclude 2>/dev/null"
         f" || echo \"$f\" >> $GIT_DIR/info/exclude; "
         f"done"
