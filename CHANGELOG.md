@@ -1,6 +1,11 @@
 # Changelog
 
 ## 0.5.9 — 2026-03-11
+- Emacs and Neovim editor support: `--emacs`, `--neovim` flags or `editor = "emacs"` / `editor = "neovim"` in config
+- Uniform editor image naming: `base-vscode`, `base-emacs`, `base-neovim`, `lean-vscode`, `lean-emacs`, `lean-neovim`
+- `lean` is now the core image (elan + leantar); VS Code Server and extensions live in `-vscode` variants
+- VS Code Server moved from `base` to `vscode.sh` script (shared by `base-vscode` and `lean-vscode`)
+- Lean VS Code extensions installed conditionally (only when elan is present in the image)
 - Mount `~/.claude` config read-only into containers by default (CLAUDE.md, settings.json, skills/, keybindings.json)
 - Credentials (`.credentials.json`, `.current-account`) opt-in via `--claude-credentials` for security
 - Nag message reminds you about `--claude-credentials` when credentials exist on host
