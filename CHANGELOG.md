@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.14 — 2026-03-12
+- Fix `symlink-claude-projects`: abort on file conflicts instead of deleting skipped files (#118)
+  - Merge now tracks skipped files and aborts if any conflicts remain, preventing data loss
+  - Softened messaging from "replace" to "link" to better reflect non-destructive behavior
+
 ## 0.6.13 — 2026-03-12
 - Install Claude Code VS Code extension (`anthropic.claude-code`) when both `claude` and `vscode` tools are enabled (#116)
 

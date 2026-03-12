@@ -414,11 +414,11 @@ def register_settings_commands(main):
 
     @config_group.command("symlink-claude-projects")
     def config_symlink_claude_projects():
-        """Replace ~/.bubble/claude-projects/ with a symlink to ~/.claude/projects/.
+        """Link ~/.bubble/claude-projects/ to ~/.claude/projects/ via symlink.
 
         If ~/.claude/projects/ is inside a git repo, this command merges any
         existing session data from ~/.bubble/claude-projects/ into
-        ~/.claude/projects/ and replaces the directory with a symlink.
+        ~/.claude/projects/ and creates a symlink in its place.
 
         This lets bubble session state live inside the git-tracked directory
         and get synced across machines automatically.
