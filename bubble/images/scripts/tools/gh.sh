@@ -22,6 +22,7 @@ apt-get install -y -qq gh
 # GH_CONFIG_DIR is set at container creation time (not image build time)
 # because the auth token is per-container.
 mkdir -p /etc/bubble/gh
+chown 1001:1001 /etc/bubble/gh
 
 # Pre-populate config.yml with http_unix_socket pointing to the
 # auth proxy socket exposed by Incus proxy device.

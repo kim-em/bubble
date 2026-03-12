@@ -987,18 +987,22 @@ def _get_github_token() -> str:
     return token
 
 
-def run_daemon():
+def run_daemon(port: int = 0):
     """Run the auth proxy daemon.
 
     Listens on TCP (both macOS and Linux — HTTP needs TCP).
+
+    Args:
+        port: Port to listen on. 0 means use config or default.
     """
     _setup_logging()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    from .config import load_config
+    if not port:
+        from .config import load_config
 
-    config = load_config()
-    port = config.get("auth_proxy", {}).get("port", DEFAULT_PORT)
+        config = load_config()
+        port = config.get("auth_proxy", {}).get("port", DEFAULT_PORT)
 
     # Get GitHub token
     github_token = _get_github_token()
