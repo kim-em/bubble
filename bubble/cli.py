@@ -352,7 +352,9 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     ensure_running(runtime, name)
 
     if no_interactive:
-        click.echo(f"Bubble '{name}' is running.")
+        from .output import step
+
+        step(f"Bubble '{name}' is running.")
         return
 
     project_dir = detect_project_dir(runtime, name)

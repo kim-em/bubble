@@ -71,7 +71,7 @@ def open_native(
                 "and network access. Use bubble without --native for isolation."
             )
             click.echo()
-            click.echo(f"Reattaching to native workspace '{name}' at {native_path}")
+            step(f"Reattaching to native workspace '{name}' at {native_path}")
             if not no_interactive:
                 open_editor_native(editor, native_path, command=command)
             return
