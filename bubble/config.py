@@ -285,11 +285,6 @@ def claude_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
     return CLAUDE_CONFIG.config_mounts(include_credentials)
 
 
-def has_claude_credentials() -> bool:
-    """Check if the host has Claude credential files."""
-    return CLAUDE_CONFIG.has_credentials()
-
-
 # Editor config directories to mount into containers.
 # Config is read-only; data/state directories are mounted read-write so
 # plugin managers and caches can function.
@@ -436,11 +431,6 @@ CODEX_CONFIG = SafeConfigDir(
 def codex_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
     """Return read-only mounts for Codex config files that exist on the host."""
     return CODEX_CONFIG.config_mounts(include_credentials)
-
-
-def has_codex_credentials() -> bool:
-    """Check if the host has Codex credential files."""
-    return CODEX_CONFIG.has_credentials()
 
 
 CLAUDE_PROJECTS_DIR = DATA_DIR / "claude-projects"

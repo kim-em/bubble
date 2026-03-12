@@ -7,7 +7,6 @@ from bubble.tools import (
     combined_tool_script,
     load_pins,
     resolve_tools,
-    tool_network_domains,
     tool_runtime_domains,
     tool_script,
     tools_hash,
@@ -120,29 +119,6 @@ def test_tool_script_reads_file():
     script = tool_script("claude")
     assert "claude" in script.lower()
     assert "#!/bin/bash" in script
-
-
-def test_tool_network_domains():
-    domains = tool_network_domains(["claude"])
-    assert "registry.npmjs.org" in domains
-
-
-def test_tool_network_domains_combined():
-    domains = tool_network_domains(["claude", "codex"])
-    assert "registry.npmjs.org" in domains
-    assert "nodejs.org" in domains
-
-
-def test_tool_network_domains_no_duplicates():
-    domains = tool_network_domains(["claude", "codex"])
-    assert domains.count("registry.npmjs.org") == 1
-
-
-def test_tool_network_domains_nodejs_org():
-    """Node.js tools should use nodejs.org for official tarball downloads."""
-    domains = tool_network_domains(["claude"])
-    assert "nodejs.org" in domains
-    assert "deb.nodesource.com" not in domains
 
 
 def test_tool_runtime_domains():

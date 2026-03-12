@@ -10,7 +10,6 @@ def test_notices_first_begin_no_separator(capsys):
     n.begin()
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert n.has_output is True
 
 
 def test_notices_second_begin_prints_separator(capsys):
@@ -36,11 +35,6 @@ def test_notices_finish_no_output(capsys):
     n.finish()
     captured = capsys.readouterr()
     assert captured.err == ""
-
-
-def test_notices_has_output_initially_false():
-    n = Notices()
-    assert n.has_output is False
 
 
 def test_notices_multiple_groups(capsys):

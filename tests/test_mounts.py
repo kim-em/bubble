@@ -9,8 +9,6 @@ from bubble.config import (
     claude_config_mounts,
     codex_config_mounts,
     editor_config_mounts,
-    has_claude_credentials,
-    has_codex_credentials,
     parse_mounts,
 )
 
@@ -460,17 +458,6 @@ class TestClaudeConfigMounts:
 
         assert mounts == []
 
-    def test_has_claude_credentials(self, tmp_path, monkeypatch):
-        """has_claude_credentials() detects credential files."""
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
-
-        assert not has_claude_credentials()
-
-        (claude_dir / ".credentials.json").write_text("{}")
-        assert has_claude_credentials()
-
     def test_rejects_symlinks_escaping_claude_dir(self, tmp_path, monkeypatch):
         """Symlinks that escape ~/.claude are rejected."""
         claude_dir = tmp_path / ".claude"
@@ -794,17 +781,6 @@ class TestCodexConfigMounts:
         mounts = codex_config_mounts(include_credentials=False)
 
         assert mounts == []
-
-    def test_has_codex_credentials(self, tmp_path, monkeypatch):
-        """has_codex_credentials() detects credential files."""
-        codex_dir = tmp_path / ".codex"
-        codex_dir.mkdir()
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
-
-        assert not has_codex_credentials()
-
-        (codex_dir / "auth.json").write_text("{}")
-        assert has_codex_credentials()
 
     def test_rejects_symlinks_escaping_codex_dir(self, tmp_path, monkeypatch):
         """Symlinks that escape ~/.codex are rejected."""
