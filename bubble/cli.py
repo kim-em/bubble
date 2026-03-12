@@ -642,8 +642,8 @@ def _open_single(
     user_mounts_locked = is_locked_off(config, "user_mounts")
     if user_mounts_locked and (mounts or config.get("mounts")):
         click.echo(
-            "Error: user mounts rejected because security.user_mounts=off. "
-            "Re-enable: bubble config set security.user_mounts on",
+            "Error: user mounts rejected because security.user-mounts=off. "
+            "Re-enable: bubble config set security.user-mounts on",
             err=True,
         )
         sys.exit(1)
@@ -651,8 +651,8 @@ def _open_single(
     # Enforce security: reject --claude-credentials when locked off
     if claude_credentials and is_locked_off(config, "claude_credentials"):
         click.echo(
-            "Error: --claude-credentials rejected because security.claude_credentials=off. "
-            "Re-enable: bubble config set security.claude_credentials on",
+            "Error: --claude-credentials rejected because security.claude-credentials=off. "
+            "Re-enable: bubble config set security.claude-credentials on",
             err=True,
         )
         sys.exit(1)
@@ -660,8 +660,8 @@ def _open_single(
     # Enforce security: reject --codex-credentials when locked off
     if codex_credentials and is_locked_off(config, "codex_credentials"):
         click.echo(
-            "Error: --codex-credentials rejected because security.codex_credentials=off. "
-            "Re-enable: bubble config set security.codex_credentials on",
+            "Error: --codex-credentials rejected because security.codex-credentials=off. "
+            "Re-enable: bubble config set security.codex-credentials on",
             err=True,
         )
         sys.exit(1)

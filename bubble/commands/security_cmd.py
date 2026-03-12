@@ -15,6 +15,8 @@ from ..security import (
     apply_preset_default,
     apply_preset_lockdown,
     apply_preset_permissive,
+    display_setting_name,
+    normalize_setting_name,
     print_security_posture,
 )
 
@@ -38,7 +40,7 @@ def register_security_commands(main):
         if changed:
             save_config(config)
             for name in changed:
-                click.echo(f"  security.{name} = on")
+                click.echo(f"  security.{display_setting_name(name)} = on")
             click.echo(f"Set {len(changed)} setting(s) to on. All conveniences enabled.")
         else:
             click.echo("All settings are already on.")
@@ -51,7 +53,7 @@ def register_security_commands(main):
         if changed:
             save_config(config)
             for name in changed:
-                click.echo(f"  security.{name} = auto")
+                click.echo(f"  security.{display_setting_name(name)} = auto")
             click.echo(f"Reset {len(changed)} setting(s) to auto.")
         else:
             click.echo("All settings are already on auto.")
@@ -64,7 +66,7 @@ def register_security_commands(main):
         if changed:
             save_config(config)
             for name in changed:
-                click.echo(f"  security.{name} = off")
+                click.echo(f"  security.{display_setting_name(name)} = off")
             click.echo(f"Set {len(changed)} setting(s) to off. Maximum isolation.")
         else:
             click.echo("All settings are already off.")
@@ -73,12 +75,16 @@ def register_security_commands(main):
     @click.argument("key")
     @click.argument("value", type=click.Choice(SECURITY_VALID_VALUES))
     def security_set(key, value):
-        """Set a security setting: bubble security set <name> <value>."""
-        # Accept both "security.X" and bare "X"
-        name = key.removeprefix("security.")
+        """Set a security setting: bubble security set <name> <value>.
+
+        Setting names use hyphens (e.g. github-auth, claude-credentials).
+        Underscores are also accepted as permanent aliases.
+        """
+        # Accept both "security.X" and bare "X", normalize hyphens to underscores
+        name = normalize_setting_name(key.removeprefix("security."))
         if name not in SECURITY_SETTINGS:
-            available = ", ".join(sorted(SECURITY_SETTINGS.keys()))
-            click.echo(f"Unknown security setting: {name}. Available: {available}", err=True)
+            available = ", ".join(sorted(display_setting_name(k) for k in SECURITY_SETTINGS))
+            click.echo(f"Unknown security setting: {key}. Available: {available}", err=True)
             sys.exit(1)
 
         config = load_config()
@@ -91,4 +97,4 @@ def register_security_commands(main):
             config.setdefault("relay", {})["enabled"] = value == "on"
 
         save_config(config)
-        click.echo(f"Set security.{name} = {value}")
+        click.echo(f"Set security.{display_setting_name(name)} = {value}")

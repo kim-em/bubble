@@ -7,7 +7,7 @@ import click
 from ..config import load_config, save_config
 from ..security import SETTINGS as SECURITY_SETTINGS
 from ..security import VALID_VALUES as SECURITY_VALID_VALUES
-from ..security import get_setting
+from ..security import display_setting_name, get_setting, normalize_setting_name
 
 
 def register_settings_commands(main):
@@ -290,7 +290,7 @@ def register_settings_commands(main):
             click.echo("\nRun 'gh auth login' to authenticate on the host first.")
         elif not enabled:
             click.echo(
-                "\nRun 'bubble security set github_auth on' to enable GitHub auth in bubbles."
+                "\nRun 'bubble security set github-auth on' to enable GitHub auth in bubbles."
             )
 
     @gh_group.group("proxy")
@@ -346,12 +346,16 @@ def register_settings_commands(main):
     @click.argument("key")
     @click.argument("value", type=click.Choice(SECURITY_VALID_VALUES))
     def config_set(key, value):
-        """Set a security setting: bubble config set security.<name> <value>."""
-        # Accept both "security.X" and bare "X"
-        name = key.removeprefix("security.")
+        """Set a security setting: bubble config set security.<name> <value>.
+
+        Setting names use hyphens (e.g. github-auth, claude-credentials).
+        Underscores are also accepted as permanent aliases.
+        """
+        # Accept both "security.X" and bare "X", normalize hyphens to underscores
+        name = normalize_setting_name(key.removeprefix("security."))
         if name not in SECURITY_SETTINGS:
-            available = ", ".join(sorted(SECURITY_SETTINGS.keys()))
-            click.echo(f"Unknown security setting: {name}. Available: {available}", err=True)
+            available = ", ".join(sorted(display_setting_name(k) for k in SECURITY_SETTINGS))
+            click.echo(f"Unknown security setting: {key}. Available: {available}", err=True)
             sys.exit(1)
 
         config = load_config()
@@ -364,7 +368,7 @@ def register_settings_commands(main):
             config.setdefault("relay", {})["enabled"] = value == "on"
 
         save_config(config)
-        click.echo(f"Set security.{name} = {value}")
+        click.echo(f"Set security.{display_setting_name(name)} = {value}")
 
     @config_group.command("lockdown")
     def config_lockdown():
@@ -385,7 +389,7 @@ def register_settings_commands(main):
         if changed:
             save_config(config)
             for name in changed:
-                click.echo(f"  security.{name} = off")
+                click.echo(f"  security.{display_setting_name(name)} = off")
             click.echo(f"Locked down {len(changed)} setting(s).")
         else:
             click.echo("No auto-defaulting-to-off settings to lock down.")
@@ -407,7 +411,7 @@ def register_settings_commands(main):
         if changed:
             save_config(config)
             for name in changed:
-                click.echo(f"  security.{name} = on")
+                click.echo(f"  security.{display_setting_name(name)} = on")
             click.echo(f"Accepted {len(changed)} risk(s). On-by-default warnings silenced.")
         else:
             click.echo("No auto-defaulting-to-on settings to accept.")
