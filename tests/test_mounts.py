@@ -1525,3 +1525,154 @@ class TestEditorConfigProvisioning:
         all_cmds = " ".join(" ".join(c[2]) for c in tmpfs_execs)
         assert "/home/user/.emacs.d/elpa" in all_cmds
         assert "/home/user/.emacs.d/eln-cache" in all_cmds
+
+
+class TestSharedCacheOverlay:
+    """Test shared cache overlay provisioning."""
+
+    def _make_hook(self):
+        """Create a minimal hook that provides shared mounts."""
+        from bubble.hooks import Hook
+
+        class FakeHook(Hook):
+            def name(self):
+                return "Fake"
+
+            def detect(self, bare_repo_path, ref):
+                return True
+
+            def image_name(self):
+                return "base"
+
+            def shared_mounts(self):
+                return [("mathlib-cache", "/shared/mathlib-cache", "MATHLIB_CACHE_DIR")]
+
+        return FakeHook()
+
+    def test_shared_cache_on_mounts_readwrite(self, mock_runtime, tmp_data_dir):
+        """shared_cache=on mounts the cache read-write at the expected path."""
+        from bubble.provisioning import provision_container
+
+        ref_path = tmp_data_dir / "repo.git"
+        ref_path.mkdir()
+        config = {"security": {"shared_cache": "on"}}
+
+        provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            config,
+            hook=self._make_hook(),
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        shared_calls = [c for c in disk_calls if "shared-mathlib" in c[2]]
+        assert len(shared_calls) == 1
+        assert shared_calls[0][4] == "/shared/mathlib-cache"  # path
+        assert shared_calls[0][5] is False  # readonly=False
+
+    def test_shared_cache_off_mounts_readonly(self, mock_runtime, tmp_data_dir):
+        """shared_cache=off mounts the cache read-only at the expected path."""
+        from bubble.provisioning import provision_container
+
+        ref_path = tmp_data_dir / "repo.git"
+        ref_path.mkdir()
+        config = {"security": {"shared_cache": "off"}}
+
+        provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            config,
+            hook=self._make_hook(),
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        shared_calls = [c for c in disk_calls if "shared-mathlib" in c[2]]
+        assert len(shared_calls) == 1
+        assert shared_calls[0][4] == "/shared/mathlib-cache"  # path
+        assert shared_calls[0][5] is True  # readonly=True
+
+    def test_shared_cache_overlay_mounts_readonly_at_staging(self, mock_runtime, tmp_data_dir):
+        """shared_cache=overlay mounts read-only at a staging path, not the final path."""
+        from bubble.provisioning import provision_container
+
+        ref_path = tmp_data_dir / "repo.git"
+        ref_path.mkdir()
+        config = {"security": {"shared_cache": "overlay"}}
+
+        provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            config,
+            hook=self._make_hook(),
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        shared_calls = [c for c in disk_calls if "shared-mathlib" in c[2]]
+        assert len(shared_calls) == 1
+        # Should mount read-only at the staging path (with -ro suffix)
+        assert shared_calls[0][4] == "/shared/mathlib-cache-ro"
+        assert shared_calls[0][5] is True  # readonly=True
+
+    def test_shared_cache_overlay_sets_up_overlayfs(self, mock_runtime, tmp_data_dir):
+        """shared_cache=overlay runs overlayfs mount command inside container."""
+        from bubble.provisioning import provision_container
+
+        ref_path = tmp_data_dir / "repo.git"
+        ref_path.mkdir()
+        config = {"security": {"shared_cache": "overlay"}}
+
+        provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            config,
+            hook=self._make_hook(),
+        )
+
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        overlay_execs = [c for c in exec_calls if "overlay" in " ".join(c[2])]
+        assert len(overlay_execs) >= 1
+        overlay_cmd = " ".join(overlay_execs[0][2])
+        assert "mount -t overlay" in overlay_cmd
+        assert "lowerdir=/shared/mathlib-cache-ro" in overlay_cmd
+        assert "upperdir=/shared/mathlib-cache-overlay/upper" in overlay_cmd
+        assert "workdir=/shared/mathlib-cache-overlay/work" in overlay_cmd
+        assert "/shared/mathlib-cache" in overlay_cmd
+        # Should chown the upper dir (not workdir) to the container user
+        assert "chown user:user" in overlay_cmd
+
+    def test_shared_cache_overlay_sets_env_var(self, mock_runtime, tmp_data_dir):
+        """shared_cache=overlay still sets MATHLIB_CACHE_DIR to the final path."""
+        from bubble.provisioning import provision_container
+
+        ref_path = tmp_data_dir / "repo.git"
+        ref_path.mkdir()
+        config = {"security": {"shared_cache": "overlay"}}
+
+        provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            config,
+            hook=self._make_hook(),
+        )
+
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        env_execs = [c for c in exec_calls if "profile.d" in " ".join(c[2])]
+        assert len(env_execs) == 1
+        env_cmd = " ".join(env_execs[0][2])
+        assert "MATHLIB_CACHE_DIR" in env_cmd
+        assert "/shared/mathlib-cache" in env_cmd

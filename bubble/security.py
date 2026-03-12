@@ -69,13 +69,14 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         category="Network",
     ),
     "shared_cache": SecuritySettingDef(
-        description="Writable shared mounts (mathlib cache) across containers",
+        description="Shared mounts (mathlib cache) across containers",
         auto_default="on",
         warning=(
             "mathlib cache is shared read-write across containers;"
             " a compromised container could poison cached artifacts"
         ),
         category="Filesystem",
+        extra_values=("overlay",),
     ),
     "user_mounts": SecuritySettingDef(
         description="--mount flag support for arbitrary host paths",
@@ -256,6 +257,8 @@ def print_security_posture(config: dict):
                     "    containers get read-write GitHub API access"
                     " (mutations, PR comments, issue management)"
                 )
+            elif value == "overlay" and name == "shared_cache":
+                click.echo("    shared cache is read-only with per-container writable overlay")
             else:
                 click.echo(f"    {defn.warning}")
             values_hint = "|".join(valid_values_for(name))
