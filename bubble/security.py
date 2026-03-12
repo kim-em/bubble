@@ -16,6 +16,18 @@ import click
 VALID_VALUES = ("auto", "on", "off")
 
 
+def valid_values_for(name: str) -> tuple[str, ...]:
+    """Return the valid values for a security setting.
+
+    Most settings accept auto/on/off. Some (like github_api) accept
+    additional values.
+    """
+    defn = SETTINGS.get(name)
+    if defn and defn.extra_values:
+        return VALID_VALUES + defn.extra_values
+    return VALID_VALUES
+
+
 def normalize_setting_name(name: str) -> str:
     """Normalize a setting name: hyphens → underscores for internal lookup.
 
@@ -38,6 +50,7 @@ class SecuritySettingDef:
     auto_default: str  # "on" or "off" — what "auto" acts as
     warning: str  # One-line description of the security trade-off
     category: str  # Grouping category for display
+    extra_values: tuple[str, ...] = ()  # Additional valid values beyond auto/on/off
 
 
 # Categories and their display order
@@ -96,6 +109,7 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         auto_default="on",
         warning="containers get read-only GitHub API access (account-wide reads via GraphQL)",
         category="Authentication",
+        extra_values=("read-write",),
     ),
     "relay": SecuritySettingDef(
         description="Bubble-in-bubble relay daemon",
@@ -125,7 +139,11 @@ GITHUB_DOMAINS = {
 
 
 def get_setting(config: dict, name: str) -> str:
-    """Get the raw value of a security setting (auto/on/off).
+    """Get the validated value of a security setting.
+
+    Returns auto/on/off (or extra values like read-write for github_api).
+    Unrecognized values from hand-edited config are treated as "auto"
+    (fail-closed: typos don't escalate access).
 
     Handles backwards compatibility for the relay setting, which was
     previously controlled by [relay] enabled = true/false.
@@ -134,6 +152,13 @@ def get_setting(config: dict, name: str) -> str:
         raise ValueError(f"Unknown security setting: {name}")
 
     value = config.get("security", {}).get(name, "auto")
+
+    # Validate: reject unrecognized values (typos, corruption) by
+    # falling back to "auto". This prevents e.g. github_api = "readwrtie"
+    # from being treated as enabled.
+    allowed = valid_values_for(name)
+    if value not in allowed:
+        return "auto"
 
     # Backwards compat: if relay is auto but [relay] enabled = true,
     # treat as "on" (user explicitly enabled via old config).
@@ -156,15 +181,16 @@ def get_setting(config: dict, name: str) -> str:
 def is_enabled(config: dict, name: str) -> bool:
     """Check if a security feature is effectively enabled.
 
-    Returns True when the setting is "on", or "auto" with auto_default="on".
+    Returns True when the setting is "on" (or any extra value like
+    "read-write"), or "auto" with auto_default="on".
     """
     value = get_setting(config, name)
-    if value == "on":
-        return True
     if value == "off":
         return False
-    # auto: use the defined default
-    return SETTINGS[name].auto_default == "on"
+    if value == "auto":
+        return SETTINGS[name].auto_default == "on"
+    # "on", "read-write", or any other extra value counts as enabled
+    return True
 
 
 def is_locked_off(config: dict, name: str) -> bool:
@@ -234,8 +260,15 @@ def print_security_posture(config: dict):
                 status = value
 
             click.echo(f"  {display}: {status}")
-            click.echo(f"    {defn.warning}")
-            click.echo(f"    Set: bubble security set {display} on|off|auto")
+            if value == "read-write" and name == "github_api":
+                click.echo(
+                    "    containers get read-write GitHub API access"
+                    " (mutations, PR comments, issue management)"
+                )
+            else:
+                click.echo(f"    {defn.warning}")
+            values_hint = "|".join(valid_values_for(name))
+            click.echo(f"    Set: bubble security set {display} {values_hint}")
             click.echo()
 
     if auto_count == 0:
@@ -255,15 +288,23 @@ def print_security_posture(config: dict):
 
 
 def apply_preset_permissive(config: dict) -> list[str]:
-    """Set all settings to 'on' (enable all conveniences)."""
+    """Set all settings to 'on' (enable all conveniences).
+
+    Does not downgrade settings that have a stronger explicit value
+    (e.g. github_api = "read-write" is preserved, not reset to "on").
+    """
     config.setdefault("security", {})
     changed = []
     for name in SETTINGS:
-        if get_setting(config, name) != "on":
-            config["security"][name] = "on"
-            if name == "relay":
-                config.setdefault("relay", {})["enabled"] = True
-            changed.append(name)
+        current = get_setting(config, name)
+        # Skip if already "on" or a stronger explicit extra value
+        defn = SETTINGS[name]
+        if current == "on" or (defn.extra_values and current in defn.extra_values):
+            continue
+        config["security"][name] = "on"
+        if name == "relay":
+            config.setdefault("relay", {})["enabled"] = True
+        changed.append(name)
     return changed
 
 
