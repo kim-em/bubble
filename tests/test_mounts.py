@@ -1649,8 +1649,8 @@ class TestSharedCacheOverlay:
         assert "upperdir=/shared/mathlib-cache-overlay/upper" in overlay_cmd
         assert "workdir=/shared/mathlib-cache-overlay/work" in overlay_cmd
         assert "/shared/mathlib-cache" in overlay_cmd
-        # Should also add fstab entry for persistence
-        assert "/etc/fstab" in overlay_cmd
+        # Should chown the upper dir (not workdir) to the container user
+        assert "chown user:user" in overlay_cmd
 
     def test_shared_cache_overlay_sets_env_var(self, mock_runtime, tmp_data_dir):
         """shared_cache=overlay still sets MATHLIB_CACHE_DIR to the final path."""

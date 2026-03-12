@@ -34,8 +34,11 @@ def _setup_overlay(runtime, container: str, lower_path: str, mount_path: str):
 
     Creates per-container upper/work directories and mounts overlayfs so that
     reads come from lower_path (the shared cache) and writes go to the
-    container-local upper directory. Also adds an fstab entry so the overlay
-    survives container restarts.
+    container-local upper directory.
+
+    The overlay survives pause/resume (frozen state preserves mounts) but not
+    stop/start. Bubbles are rarely stopped — they're typically paused or
+    destroyed — so this is acceptable.
     """
     overlay_base = f"{mount_path}-overlay"
     upper = f"{overlay_base}/upper"
@@ -44,21 +47,18 @@ def _setup_overlay(runtime, container: str, lower_path: str, mount_path: str):
     q_mount = shlex.quote(mount_path)
     q_upper = shlex.quote(upper)
     q_work = shlex.quote(work)
-    q_overlay_base = shlex.quote(overlay_base)
     runtime.exec(
         container,
         [
             "bash",
             "-c",
-            # Create directories, mount overlayfs, fix ownership, add fstab entry
+            # Create directories, mount overlayfs, fix upper ownership.
+            # workdir stays root-owned (overlayfs internal use only).
             f"mkdir -p {q_upper} {q_work} {q_mount}"
             f" && mount -t overlay overlay"
             f" -o lowerdir={q_lower},upperdir={q_upper},workdir={q_work}"
             f" {q_mount}"
-            f" && chown -R 1001:1001 {q_overlay_base}"
-            f" && echo 'overlay {q_mount} overlay"
-            f" lowerdir={q_lower},upperdir={q_upper},workdir={q_work} 0 0'"
-            f" >> /etc/fstab",
+            f" && chown user:user {q_upper}",
         ],
     )
 
