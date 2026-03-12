@@ -88,8 +88,12 @@ def _install_completion(shell: str, script: str) -> None:
     if "$(" in path:
         try:
             path = subprocess.check_output(["bash", "-c", f"echo {path}"], text=True).strip()
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             path = os.path.expanduser("~/.local/share/bash-completion/completions/bubble")
+
+    # Warn before overwriting an existing file
+    if os.path.exists(path):
+        click.echo(f"Overwriting existing completion script at {path}")
 
     parent = os.path.dirname(path)
     os.makedirs(parent, exist_ok=True)

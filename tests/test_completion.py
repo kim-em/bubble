@@ -75,6 +75,46 @@ def test_completion_install_fish(tmp_path, monkeypatch):
     assert script_path.exists()
 
 
+def test_completion_install_bash(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "bubble.commands.completion._INSTALL_PATHS",
+        {
+            "bash": {"linux": str(tmp_path / "bash" / "bubble")},
+            "zsh": {"all": str(tmp_path / "zsh" / "_bubble")},
+            "fish": {"all": str(tmp_path / "fish" / "bubble.fish")},
+        },
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["completion", "bash", "--install"])
+    assert result.exit_code == 0
+    assert "Completion script written to" in result.output
+
+    script_path = tmp_path / "bash" / "bubble"
+    assert script_path.exists()
+    assert "_bubble_completion" in script_path.read_text()
+
+
+def test_completion_install_overwrites_with_warning(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "bubble.commands.completion._INSTALL_PATHS",
+        {
+            "bash": {"linux": str(tmp_path / "bash" / "bubble")},
+            "zsh": {"all": str(tmp_path / "zsh" / "_bubble")},
+            "fish": {"all": str(tmp_path / "fish" / "bubble.fish")},
+        },
+    )
+    # Pre-create the file
+    zsh_dir = tmp_path / "zsh"
+    zsh_dir.mkdir()
+    (zsh_dir / "_bubble").write_text("old content")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["completion", "zsh", "--install"])
+    assert result.exit_code == 0
+    assert "Overwriting existing completion script" in result.output
+    assert "#compdef bubble" in (zsh_dir / "_bubble").read_text()
+
+
 def test_completion_help():
     runner = CliRunner()
     result = runner.invoke(main, ["completion", "--help"])
