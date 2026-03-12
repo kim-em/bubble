@@ -68,8 +68,9 @@ ACTIVE=false
 REASON=""
 
 # Check for established SSH connections (sport = local port = 22).
-# Use -H to suppress the header line so grep only matches real connections.
-SSH_CONNS=$(ss -Htnp state established 'sport = :22' 2>/dev/null | wc -l)
+# Use -H to suppress the header line so wc only counts real connections.
+# The "|| true" ensures a failing ss doesn't abort the script under set -e.
+SSH_CONNS=$(ss -Htnp state established 'sport = :22' 2>/dev/null | wc -l || true)
 if [ "$SSH_CONNS" -gt 0 ]; then
     ACTIVE=true
     REASON="ssh=${SSH_CONNS}"
