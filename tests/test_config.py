@@ -51,11 +51,11 @@ def test_save_load_roundtrip(tmp_data_dir):
     assert reloaded["runtime"]["colima_cpu"] == 42
 
 
-def test_default_config_has_claude_credentials_false(tmp_data_dir):
+def test_default_config_has_claude_credentials_true(tmp_data_dir):
     from bubble.config import load_config
 
     config = load_config()
-    assert config["claude"]["credentials"] is False
+    assert config["claude"]["credentials"] is True
 
 
 def test_claude_credentials_roundtrip(tmp_data_dir):
@@ -112,7 +112,7 @@ def test_claude_credentials_show_current(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["claude", "credentials"])
     assert result.exit_code == 0
-    assert "off" in result.output
+    assert "on" in result.output
 
 
 def test_claude_status_cli(tmp_data_dir):
@@ -123,13 +123,13 @@ def test_claude_status_cli(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["claude", "status"])
     assert result.exit_code == 0
-    assert "credentials: off" in result.output
+    assert "credentials: on" in result.output
 
-    # Enable and check again
-    runner.invoke(main, ["claude", "credentials", "on"])
+    # Disable and check again
+    runner.invoke(main, ["claude", "credentials", "off"])
     result = runner.invoke(main, ["claude", "status"])
     assert result.exit_code == 0
-    assert "credentials: on" in result.output
+    assert "credentials: off" in result.output
 
 
 def test_load_raw_config_fresh_install(tmp_data_dir):
@@ -166,14 +166,14 @@ def test_load_raw_config_legacy_no_claude(tmp_data_dir):
     assert "claude" not in raw
     # But merged config should still have defaults
     merged = config.load_config()
-    assert merged["claude"]["credentials"] is False
+    assert merged["claude"]["credentials"] is True
 
 
-def test_default_config_has_codex_credentials_false(tmp_data_dir):
+def test_default_config_has_codex_credentials_true(tmp_data_dir):
     from bubble.config import load_config
 
     config = load_config()
-    assert config["codex"]["credentials"] is False
+    assert config["codex"]["credentials"] is True
 
 
 def test_codex_credentials_roundtrip(tmp_data_dir):
@@ -230,7 +230,7 @@ def test_codex_credentials_show_current(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["codex", "credentials"])
     assert result.exit_code == 0
-    assert "off" in result.output
+    assert "on" in result.output
 
 
 def test_codex_status_cli(tmp_data_dir):
@@ -241,13 +241,13 @@ def test_codex_status_cli(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["codex", "status"])
     assert result.exit_code == 0
-    assert "credentials: off" in result.output
+    assert "credentials: on" in result.output
 
-    # Enable and check again
-    runner.invoke(main, ["codex", "credentials", "on"])
+    # Disable and check again
+    runner.invoke(main, ["codex", "credentials", "off"])
     result = runner.invoke(main, ["codex", "status"])
     assert result.exit_code == 0
-    assert "credentials: on" in result.output
+    assert "credentials: off" in result.output
 
 
 def test_load_raw_config_legacy_no_codex(tmp_data_dir):
@@ -267,7 +267,7 @@ def test_load_raw_config_legacy_no_codex(tmp_data_dir):
     assert "codex" not in raw
     # But merged config should still have defaults
     merged = config.load_config()
-    assert merged["codex"]["credentials"] is False
+    assert merged["codex"]["credentials"] is True
 
 
 def test_deep_merge_does_not_mutate_default(tmp_data_dir):

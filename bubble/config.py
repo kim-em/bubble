@@ -62,10 +62,10 @@ DEFAULT_CONFIG = {
         "default": False,
     },
     "claude": {
-        "credentials": False,
+        "credentials": True,
     },
     "codex": {
-        "credentials": False,
+        "credentials": True,
     },
     "security": {},
     "tools": {},
@@ -217,7 +217,7 @@ _CLAUDE_CONFIG_ITEMS = [
     "commands",
 ]
 
-# Credential files — opt-in only (--claude-credentials).
+# Credential files — included by default, opt-out with --no-claude-credentials.
 _CLAUDE_CREDENTIAL_ITEMS = [
     ".credentials.json",
 ]
@@ -242,7 +242,7 @@ def _safe_claude_path(item: str) -> Path | None:
     return resolved
 
 
-def claude_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
+def claude_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
     """Return read-only mounts for Claude Code config files that exist on the host.
 
     Mounts specific files/directories from ~/.claude into /home/user/.claude/
@@ -250,7 +250,7 @@ def claude_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
 
     Args:
         include_credentials: If True, also mount .credentials.json.
-            Off by default for security.
+            On by default; opt out with --no-claude-credentials.
     """
     mounts = []
     if not CLAUDE_CONFIG_DIR.is_dir():
@@ -413,7 +413,7 @@ _CODEX_CONFIG_ITEMS = [
     "config.toml",
 ]
 
-# Credential files — opt-in only (--codex-credentials).
+# Credential files — included by default, opt-out with --no-codex-credentials.
 _CODEX_CREDENTIAL_ITEMS = [
     "auth.json",
 ]
@@ -438,7 +438,7 @@ def _safe_codex_path(item: str) -> Path | None:
     return resolved
 
 
-def codex_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
+def codex_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
     """Return read-only mounts for Codex config files that exist on the host.
 
     Mounts specific files from ~/.codex into /home/user/.codex/
@@ -446,7 +446,7 @@ def codex_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
 
     Args:
         include_credentials: If True, also mount auth.json.
-            Off by default for security.
+            On by default; opt out with --no-codex-credentials.
     """
     mounts = []
     if not CODEX_CONFIG_DIR.is_dir():

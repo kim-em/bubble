@@ -466,12 +466,12 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
 @click.option(
     "--claude-credentials/--no-claude-credentials",
     default=None,
-    help="Mount ~/.claude credentials into container (default: from config or disabled)",
+    help="Mount ~/.claude credentials into container (default: from config or enabled)",
 )
 @click.option(
     "--codex-credentials/--no-codex-credentials",
     default=None,
-    help="Mount ~/.codex credentials into container (default: from config or disabled)",
+    help="Mount ~/.codex credentials into container (default: from config or enabled)",
 )
 @click.option(
     "--claude-prompt-stdin",
@@ -733,13 +733,13 @@ def _open_single(
 
                 remote_host = RemoteHost.parse(default)
 
-    # Resolve claude_credentials: CLI flag > config > default (False)
+    # Resolve claude_credentials: CLI flag > config > default (True)
     if claude_credentials is None:
-        claude_credentials = config.get("claude", {}).get("credentials", False)
+        claude_credentials = config.get("claude", {}).get("credentials", True)
 
-    # Resolve codex_credentials: CLI flag > config > default (False)
+    # Resolve codex_credentials: CLI flag > config > default (True)
     if codex_credentials is None:
-        codex_credentials = config.get("codex", {}).get("credentials", False)
+        codex_credentials = config.get("codex", {}).get("credentials", True)
 
     if remote_host:
         if mount_specs:

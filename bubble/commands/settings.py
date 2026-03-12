@@ -94,7 +94,7 @@ def register_settings_commands(main):
         """
         config = load_config()
         if setting is None:
-            current = config.get("claude", {}).get("credentials", False)
+            current = config.get("claude", {}).get("credentials", True)
             state = "on" if current else "off"
             click.echo(f"Claude credentials: {state}")
             if current:
@@ -115,7 +115,7 @@ def register_settings_commands(main):
     def claude_status_cmd():
         """Show current Claude Code settings."""
         config = load_config()
-        creds = config.get("claude", {}).get("credentials", False)
+        creds = config.get("claude", {}).get("credentials", True)
         click.echo(f"  credentials: {'on' if creds else 'off'}")
 
     # --- codex ---
@@ -137,7 +137,7 @@ def register_settings_commands(main):
         """
         config = load_config()
         if setting is None:
-            current = config.get("codex", {}).get("credentials", False)
+            current = config.get("codex", {}).get("credentials", True)
             state = "on" if current else "off"
             click.echo(f"Codex credentials: {state}")
             if current:
@@ -158,7 +158,7 @@ def register_settings_commands(main):
     def codex_status_cmd():
         """Show current Codex settings."""
         config = load_config()
-        creds = config.get("codex", {}).get("credentials", False)
+        creds = config.get("codex", {}).get("credentials", True)
         click.echo(f"  credentials: {'on' if creds else 'off'}")
 
     # --- tools ---

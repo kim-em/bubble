@@ -61,13 +61,13 @@ SETTINGS: dict[str, SecuritySettingDef] = {
     ),
     "claude_credentials": SecuritySettingDef(
         description="Mount ~/.claude credentials into containers",
-        auto_default="off",
+        auto_default="on",
         warning="credentials give containers access to Claude API auth",
         category="Authentication",
     ),
     "codex_credentials": SecuritySettingDef(
         description="Mount ~/.codex credentials into containers",
-        auto_default="off",
+        auto_default="on",
         warning="credentials give containers access to OpenAI/Codex API auth",
         category="Authentication",
     ),
