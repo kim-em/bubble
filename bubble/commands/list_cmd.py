@@ -1,6 +1,8 @@
 """The 'list' command and its helper functions."""
 
 import json
+import shutil
+import unicodedata
 from pathlib import Path
 
 import click
@@ -41,6 +43,41 @@ def _format_age(dt: "datetime | None") -> str:  # noqa: F821
         return f"{days}d ago"
     months = days // 30
     return f"{months}mo ago"
+
+
+def _char_width(ch: str) -> int:
+    """Return the display width of a single character."""
+    if unicodedata.combining(ch) or ch in ("\u200b", "\u200c", "\u200d", "\ufe0f", "\ufe0e"):
+        return 0
+    cat = unicodedata.east_asian_width(ch)
+    return 2 if cat in ("W", "F") else 1
+
+
+def _display_width(s: str) -> int:
+    """Return the display width of *s*, counting wide Unicode chars as 2."""
+    return sum(_char_width(ch) for ch in s)
+
+
+def _truncate(s: str, max_width: int) -> str:
+    """Truncate *s* to *max_width* display columns, adding ``...`` if needed."""
+    if _display_width(s) <= max_width:
+        return s
+    if max_width <= 3:
+        return "." * max_width
+    result: list[str] = []
+    w = 0
+    for ch in s:
+        cw = _char_width(ch)
+        if w + cw + 3 > max_width:  # leave room for "..."
+            break
+        result.append(ch)
+        w += cw
+    return "".join(result) + "..."
+
+
+def _pad(s: str, width: int) -> str:
+    """Left-align *s* in a field of *width* display columns."""
+    return s + " " * max(0, width - _display_width(s))
 
 
 def _parse_iso(s: str | None):
@@ -336,30 +373,69 @@ def register_list_command(main):
 
         # Build header and rows based on flags
         show_location = has_remote or local_only
-        header = f"{'NAME':<30} {'STATE':<12}"
+
+        # --- Compute dynamic column widths ---
+        MAX_NAME = 50
+        MAX_LOCATION = 30
+        name_w = max(len("NAME"), *(min(_display_width(e["name"]), MAX_NAME) for e in entries))
         if show_location:
-            header += f" {'LOCATION':<18}"
-        header += f" {'CREATED':<12} {'LAST USED':<12}"
+            loc_w = max(
+                len("LOCATION"),
+                *(min(_display_width(e["location"]), MAX_LOCATION) for e in entries),
+            )
+        else:
+            loc_w = 0
+
+        # Fixed-width columns
+        STATE_W = 12
+        TIME_W = 12
+        DISK_W = 10
+        IPV4_W = 16
+
+        # Clamp dynamic columns if total exceeds terminal width
+        term_w = shutil.get_terminal_size((80, 24)).columns
+        fixed = STATE_W + 2 * TIME_W + 3  # separating spaces
+        if show_location:
+            fixed += 1  # space before LOCATION (loc_w added separately)
         if verbose:
-            header += f" {'DISK':<10} {'IPv4':<16}"
+            fixed += DISK_W + IPV4_W + 2
+        if show_clean:
+            fixed += 8  # rough allowance for STATUS
+        avail = term_w - fixed
+        if name_w + loc_w > avail:
+            # Shrink name first, then location if needed
+            name_w = max(len("NAME"), avail - loc_w)
+            if name_w + loc_w > avail:
+                loc_w = max(len("LOCATION") if show_location else 0, avail - name_w)
+
+        # Truncate values to their column widths
+        names = [_truncate(e["name"], name_w) for e in entries]
+        locations = [_truncate(e["location"], loc_w) for e in entries] if show_location else []
+
+        header = _pad("NAME", name_w) + " " + _pad("STATE", STATE_W)
+        if show_location:
+            header += " " + _pad("LOCATION", loc_w)
+        header += " " + _pad("CREATED", TIME_W) + " " + _pad("LAST USED", TIME_W)
+        if verbose:
+            header += " " + _pad("DISK", DISK_W) + " " + _pad("IPv4", IPV4_W)
         if show_clean:
             header += " STATUS"
         click.echo(header)
-        click.echo("-" * len(header))
-        for e in entries:
+        click.echo("-" * _display_width(header))
+        for i, e in enumerate(entries):
             created = _format_age(e.get("created_at"))
             used = _format_age(e.get("last_used_at"))
-            line = f"{e['name']:<30} {e['state']:<12}"
+            line = _pad(names[i], name_w) + " " + _pad(e["state"], STATE_W)
             if show_location:
-                line += f" {e['location']:<18}"
-            line += f" {created:<12} {used:<12}"
+                line += " " + _pad(locations[i], loc_w)
+            line += " " + _pad(created, TIME_W) + " " + _pad(used, TIME_W)
             if verbose:
                 disk = _format_bytes(e["disk_usage"]) if e.get("disk_usage") else "-"
                 ipv4 = e.get("ipv4") or "-"
-                line += f" {disk:<10} {ipv4:<16}"
+                line += " " + _pad(disk, DISK_W) + " " + _pad(ipv4, IPV4_W)
             if show_clean:
                 cs = e.get("clean_status")
-                line += f" {cs.summary}" if cs else ""
+                line += " " + cs.summary if cs else ""
             click.echo(line)
 
         # Help text hints
