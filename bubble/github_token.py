@@ -104,7 +104,6 @@ def _ensure_auth_proxy_running() -> int | None:
     return None
 
 
-
 def _resolve_access_level(config: dict, gh_enabled: bool) -> int:
     """Determine the auth proxy access level for a container.
 
