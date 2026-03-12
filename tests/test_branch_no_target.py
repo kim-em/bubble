@@ -129,6 +129,17 @@ class TestBranchWithoutTarget:
         assert result.exit_code == 0
         assert "bubble TARGET" in result.output
 
+    def test_help_shows_common_target_options(self):
+        """bubble --help should surface common target options and a hint."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["--help"])
+        assert result.exit_code == 0
+        assert "Common target options:" in result.output
+        assert "--shell" in result.output
+        assert "--cloud" in result.output
+        assert "-b, --new-branch" in result.output
+        assert "bubble open --help" in result.output
+
     def test_version_not_routed_to_open(self):
         """bubble --version should work, not be routed to open."""
         runner = CliRunner()

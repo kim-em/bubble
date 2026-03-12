@@ -104,9 +104,9 @@ class BubbleGroup(click.Group):
                     ("--shell", "Drop into SSH session instead of VSCode"),
                     ("--ssh HOST", "Run on a remote host"),
                     ("--cloud", "Run on auto-provisioned Hetzner Cloud server"),
-                    ("-b NAME", "Create a new branch"),
-                    ("--mount PATH", "Mount a host directory into the container"),
-                    ("--native", "Non-containerized workspace (local clone)"),
+                    ("--local", "Force local execution (override remote/cloud default)"),
+                    ("-b, --new-branch NAME", "Create a new branch"),
+                    ("--mount SRC:DST", "Mount a host directory into the container"),
                 ]
             )
         formatter.write_paragraph()
