@@ -185,7 +185,7 @@ def maybe_install_skill():
         msg = install_skill()
         click.echo(f"  {msg}")
         click.echo("  To manage later: bubble skill status")
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError, ImportError):
         pass  # Best-effort; failures surface via `bubble doctor`
 
 
