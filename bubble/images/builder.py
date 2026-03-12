@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 from ..config import DATA_DIR, load_config
+from ..lean import LEAN_VERSION_RE
 from ..runtime.base import ContainerRuntime
 from ..spinner import heartbeat
 from ..tools import combined_tool_script, resolve_tools, tools_hash
@@ -549,9 +550,6 @@ def build_image(
         print(f"{image_name} image built successfully.")
 
 
-_LEAN_VERSION_RE = re.compile(r"^v\d+\.\d+\.\d+(-rc\d+)?$")
-
-
 def build_lean_toolchain_image(
     runtime: ContainerRuntime,
     version: str,
@@ -564,7 +562,7 @@ def build_lean_toolchain_image(
     Launches from the base lean image and installs one specific toolchain.
     With ``force=True``, deletes and rebuilds even if the image exists.
     """
-    if not _LEAN_VERSION_RE.fullmatch(version):
+    if not LEAN_VERSION_RE.fullmatch(version):
         raise ValueError(f"Invalid Lean toolchain version: {version!r}")
 
     # Ensure base lean image exists
