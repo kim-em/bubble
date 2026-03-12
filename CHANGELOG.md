@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.23 — 2026-03-12
+- Add `bubble config show` command to display effective configuration with origin annotations (#149)
+
 ## 0.6.22 — 2026-03-12
 - Add heartbeat messages for slow image builds (#145)
   - Prints `still building...` / `still installing tools...` to stderr every 10s after 5s of silence
