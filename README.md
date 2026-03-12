@@ -1,6 +1,9 @@
 # bubble
 
-Containerized development environments for the Lean language, powered by [Incus](https://linuxcontainers.org/incus/).
+Containerized development environments,
+with opinionated presets for users of the [Lean](https://lean-lang.org/) programming language,
+powered by [Incus](https://linuxcontainers.org/incus/).
+We assume that you work using VSCode, emacs, or neovim, and that you collaborate via GitHub.
 
 ## Quick Start
 
@@ -16,6 +19,29 @@ bubble list
 ```
 
 See [Examples](#examples) for branches, local repos, issues, remote, and non-interactive use.
+
+## Use cases
+
+You might be worried about:
+* Reviewing and running Lean code from strangers.
+* Running an AI agent like Claude in "yolo" mode.
+* Managing work and AI threads across many repositories and branches.
+
+The `bubble` tool attempts to provide a fast, low-friction, secure solution to these problems.
+It launches containers pre-built for working with Lean (and your favorite AI tools),
+and handles repository management and caches behind the scenes.
+
+By working in containers, you can prevent AI tools from accidentally damaging your system
+(or other repositories you have access to)
+and handle potentially adversarial code from other humans or agents.
+Opening Lean files from untrusted sources
+(e.g. reviewing code, or supply chain attacks on your upstream dependencies)
+can execute arbitrary code, so if you regularly do this you should be using containers.
+
+`bubble` also allows you to limit how your GitHub access can be used:
+containers don't have direct access to GitHub, and never see your authorization token,
+but interact through a restricted proxy.
+You can choose via the `bubble security` tool the capability/security trade-off you prefer.
 
 ## Examples
 
@@ -114,21 +140,37 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble cloud default on\|off` | Set cloud as the default for all bubbles |
 | `bubble cloud ssh` | SSH directly to the cloud server |
 | `bubble tools list\|set\|status` | Manage tools installed in container images |
+| `bubble security [set\|permissive\|lockdown\|default]` | Review and manage security posture |
 | `bubble doctor` | Diagnose and fix common issues |
+
+## Security
+
+- **No sudo**: The `user` account has no sudo access and a locked password
+- **Network allowlisting**: iptables rules restrict outbound connections to allowed domains only
+- **IPv6 blocked**: All IPv6 traffic is dropped
+- **DNS restricted**: DNS queries only go to the container's configured resolver
+- **No outbound SSH**: Containers cannot SSH out (VSCode uses `incus exec` ProxyCommand)
+- **SSH key-only auth**: Password authentication is disabled
+- **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
+- **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
+- **Bubble-in-bubble relay**: Containers can open new bubbles on the host, but only for repos already cloned in `~/.bubble/git/`. Disable with `bubble security set relay off`
+- **GitHub auth proxy**: Host token never enters containers. Git and REST API are repo-scoped. **GraphQL queries are read-only but account-wide** — can read any data the host token can access. API access can be set to `off`, `on` (read-only, the default), or `read-write` (enables mutations) via `bubble security set github-api`
+- **Shared mathlib cache**: The mathlib cache at `~/.bubble/mathlib-cache/` is shared across Lean containers. Modes: `on` (default) = read-write (a compromised container could poison cached artifacts), `off` = read-only (prevents poisoning), `overlay` = read-only with per-container writable overlay. This cache is *not* shared with `lake exe cache` run outside a bubble. Configure with `bubble security set shared-cache`. If you suspect poisoning, delete `~/.bubble/mathlib-cache/`.
 
 ## Images
 
-Images are built automatically on first use.
+Images are built automatically on first use. Any enabled [tools](#tools) are installed in the `base` image and inherited by all derived images.
 
 | Image | Contents |
 |-------|----------|
-| `base` | Ubuntu 24.04, git, openssh-server, build-essential, pre-baked VS Code Server |
-| `lean` | base + elan, leantar, VS Code Lean 4 extension, auto-cache extension |
+| `base` | Ubuntu 24.04, git, openssh-server, build-essential, plus configured tools |
+| `lean` | base + leantar (+ elan fallback if not installed as a tool) |
+| `python` | base + uv, ruff |
 | `lean-v4.X.Y` | lean + specific toolchain pre-installed (built lazily on demand) |
 
-`base` and `lean` are static images you can rebuild with `bubble images build <name>`. Versioned `lean-v4.X.Y` images are built automatically in the background when a project uses a stable/RC toolchain not yet cached — the current bubble proceeds immediately with elan downloading the toolchain on demand, and the next bubble for that version starts instantly.
+`base`, `lean`, and `python` are static images you can rebuild with `bubble images build <name>`. Versioned `lean-v4.X.Y` images are built automatically in the background when a project uses a stable/RC toolchain not yet cached — the current bubble proceeds immediately with elan downloading the toolchain on demand, and the next bubble for that version starts instantly.
 
-For mathlib or mathlib-dependent projects, a VS Code terminal automatically runs `lake exe cache get` when the workspace opens.
+When VS Code is the configured editor and elan is installed, the base image also includes pre-baked VS Code Lean 4 extensions and an auto-cache extension. For mathlib or mathlib-dependent projects, a VS Code terminal automatically runs `lake exe cache get` when the workspace opens.
 
 ## Configuration
 
@@ -169,7 +211,7 @@ Tools like Claude Code and OpenAI Codex can be installed in container images. Ea
 
 ```bash
 bubble tools list                  # show all tools and their settings
-bubble tools set claude yes   # always install
+bubble tools set claude yes        # always install
 bubble tools set codex no          # never install
 bubble tools status                # show what would actually be installed
 ```
@@ -289,33 +331,17 @@ The `HETZNER_TOKEN` environment variable is always required — the token is nev
 
 ## Bubble-in-Bubble
 
-You can run `bubble` from inside a container to open another bubble on the host. This is useful when reviewing a related PR while working on a feature branch.
+You can run `bubble` from inside a container to open another bubble on the host. This is enabled by default and is useful when reviewing a related PR while working on a feature branch.
 
 ```bash
-# On the host: enable the relay (one-time setup)
-bubble relay enable
-
 # Inside a container: open another bubble
 bubble leanprover/lean4/pull/456
 bubble mathlib4
 ```
 
-The relay only allows opening repos already cloned in `~/.bubble/git/` — it cannot trigger cloning of new repos. Local paths are rejected. Existing bubbles need to be recreated after enabling the relay to get the relay socket.
+The relay only allows opening repos already cloned in `~/.bubble/git/` — it cannot trigger cloning of new repos. Local paths are rejected. To disable the relay, run `bubble security set relay off`.
 
-## Security
-
-- **No sudo**: The `user` account has no sudo access and a locked password
-- **Network allowlisting**: iptables rules restrict outbound connections to allowed domains only
-- **IPv6 blocked**: All IPv6 traffic is dropped
-- **DNS restricted**: DNS queries only go to the container's configured resolver
-- **No outbound SSH**: Containers cannot SSH out (VSCode uses `incus exec` ProxyCommand)
-- **SSH key-only auth**: Password authentication is disabled
-- **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
-- **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
-- **GitHub auth proxy**: Host token never enters containers. Git and REST API are repo-scoped. **GraphQL queries are read-only but account-wide** — can read any data the host token can access. Disable API access with `bubble security set github-api off`
-- **Shared mathlib cache**: When `shared_cache` is enabled (the default), the mathlib cache at `~/.bubble/mathlib-cache/` is mounted **read-write** into every Mathlib-using Lean container. A compromised container could write poisoned build artifacts that would be picked up by subsequent containers running `lake exe cache get`. This cache is *not* shared with `lake exe cache` run outside a bubble — it only affects bubble containers. To prevent future poisoning, run `bubble security set shared-cache off`, which mounts the cache read-only. If you suspect the cache has already been compromised, delete `~/.bubble/mathlib-cache/`.
-
-### Known Limitations
+## Other Security Limitations
 
 These are inherent consequences of the architecture, not bugs. Understanding them helps you make informed trust decisions.
 
@@ -327,7 +353,7 @@ These are inherent consequences of the architecture, not bugs. Understanding the
 
 4. **Boot-time network window**: There is a brief window between container launch and iptables rule application during which the container has unrestricted network access. No user code runs during this window with stock images.
 
-5. **Auth proxy token visibility**: The per-container auth proxy token is stored in the user's git config and in `/etc/profile.d/bubble-gh.sh` (mode 644). Any process in the container can read it. The token is scoped to one repository and access level for git and REST API requests, but GraphQL queries (level 3+) are not repo-scoped and can read any data the host token can access.
+5. **Auth proxy token visibility**: The per-container auth proxy token (an internal bubble token, not a GitHub token) is stored in the user's git config and in `/etc/profile.d/bubble-gh.sh` (mode 644). Any process in the container can read it and use it to make requests through the auth proxy. The proxy enforces repo-scoping for git and REST API requests, but GraphQL queries (level 3+) are not repo-scoped and can read any data the host's GitHub token can access.
 
 ## License
 
