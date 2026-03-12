@@ -329,8 +329,17 @@ def _open_remote(
     # Inject local SSH keys into the container so the chained ProxyCommand works
     inject_local_ssh_keys(remote_host, name)
 
-    # Set up GitHub auth via tunneled auth proxy
-    if is_enabled(config, "github_auth"):
+    # Set up GitHub auth: token injection (level 5) or tunneled proxy (levels 1-4)
+    if is_enabled(config, "github_token_inject"):
+        from .github_token import setup_gh_token
+
+        setup_gh_token(
+            None,
+            name,
+            remote_host=remote_host,
+            token_inject=True,
+        )
+    elif is_enabled(config, "github_auth"):
         from .github_token import setup_gh_token
         from .tools import resolve_tools
 

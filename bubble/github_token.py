@@ -1,7 +1,6 @@
-"""GitHub authentication for containers via auth proxy.
+"""GitHub authentication for containers via auth proxy or direct injection.
 
-Instead of injecting the host's full GitHub token into containers,
-we run an HTTP reverse proxy on the host that:
+Levels 1-4 use an HTTP reverse proxy on the host:
 1. Receives plain HTTP git requests from the container
 2. Validates the request targets only the allowed repository
 3. Adds the real Authorization header
@@ -9,6 +8,10 @@ we run an HTTP reverse proxy on the host that:
 
 The host GitHub token never enters the container. Each container
 gets a per-container bearer token scoped to one repository.
+
+Level 5 (token injection) bypasses the proxy entirely: the host's
+actual GitHub token is injected into the container as GH_TOKEN and
+GITHUB_TOKEN environment variables, giving unrestricted access.
 
 For local containers, the proxy is exposed via Incus proxy devices.
 For remote/cloud containers, an SSH reverse tunnel forwards the
@@ -19,6 +22,7 @@ Access levels:
   Level 1: git only (push/pull)
   Level 3: git + gh read-only (REST read + GraphQL queries)
   Level 4: git + gh read-write (REST read-write + GraphQL mutations)
+  Level 5: direct token injection (bypasses proxy)
 
 When the gh tool is installed and github_api is enabled, the proxy
 is also exposed as a Unix socket at /bubble/gh-proxy.sock and gh
@@ -28,8 +32,6 @@ is configured to route through it via http_unix_socket.
 import platform
 import shlex
 import subprocess
-
-import click
 
 from .output import detail
 from .runtime.base import ContainerRuntime
@@ -240,8 +242,8 @@ def _setup_gh_proxy(
         )
     except Exception as e:
         if not machine_readable:
-            click.echo(f"  Warning: failed to add gh proxy device: {e}")
-            click.echo("  gh CLI will not have API access.")
+            detail(f"Warning: failed to add gh proxy device: {e}")
+            detail("gh CLI will not have API access.")
         return
 
     # Configure GH_CONFIG_DIR and GH_TOKEN in the container via profile.d.
@@ -259,7 +261,7 @@ def _setup_gh_proxy(
         runtime.exec(container, ["bash", "-c", profile_script])
     except RuntimeError as e:
         if not machine_readable:
-            click.echo(f"  Warning: failed to configure gh environment: {e}")
+            detail(f"Warning: failed to configure gh environment: {e}")
 
 
 def setup_auth_proxy_remote(
@@ -410,8 +412,8 @@ def _setup_gh_proxy_remote(
         )
     except Exception as e:
         if not machine_readable:
-            click.echo(f"  Warning: failed to add gh proxy device on remote: {e}")
-            click.echo("  gh CLI will not have API access.")
+            detail(f"Warning: failed to add gh proxy device on remote: {e}")
+            detail("gh CLI will not have API access.")
         return
 
     # Configure gh environment via profile.d
@@ -430,7 +432,88 @@ def _setup_gh_proxy_remote(
         )
     except RuntimeError as e:
         if not machine_readable:
-            click.echo(f"  Warning: failed to configure gh environment on remote: {e}")
+            detail(f"Warning: failed to configure gh environment on remote: {e}")
+
+
+def inject_gh_token(
+    runtime: ContainerRuntime,
+    container: str,
+    machine_readable: bool = False,
+) -> bool:
+    """Inject the host's GitHub token directly into a local container.
+
+    Sets GH_TOKEN and GITHUB_TOKEN environment variables via /etc/profile.d
+    so both gh CLI and git credential helpers have full access.
+
+    This is the level 5 escape hatch — the real token is inside the container.
+
+    Returns True if injection succeeded.
+    """
+    token = get_host_gh_token()
+    if not token:
+        if not machine_readable:
+            detail("Warning: no host GitHub token available. Run 'gh auth login' first.")
+        return False
+
+    q_token = shlex.quote(token)
+    profile_script = (
+        f'echo "export GH_TOKEN={q_token}" > /etc/profile.d/bubble-gh-inject.sh'
+        f" && echo 'export GITHUB_TOKEN={q_token}' >> /etc/profile.d/bubble-gh-inject.sh"
+        f" && chmod 644 /etc/profile.d/bubble-gh-inject.sh"
+    )
+
+    try:
+        runtime.exec(container, ["bash", "-c", profile_script])
+    except RuntimeError as e:
+        if not machine_readable:
+            detail(f"Warning: failed to inject GitHub token: {e}")
+        return False
+
+    if not machine_readable:
+        detail("GitHub token injected directly (level 5: unrestricted access).")
+    return True
+
+
+def inject_gh_token_remote(
+    remote_host,
+    container: str,
+    machine_readable: bool = False,
+) -> bool:
+    """Inject the host's GitHub token directly into a remote container.
+
+    Same as inject_gh_token but operates on a remote host via SSH.
+
+    Returns True if injection succeeded.
+    """
+    from .remote import _ssh_run
+
+    token = get_host_gh_token()
+    if not token:
+        if not machine_readable:
+            detail("Warning: no host GitHub token available. Run 'gh auth login' first.")
+        return False
+
+    q_token = shlex.quote(token)
+    profile_script = (
+        f'echo "export GH_TOKEN={q_token}" > /etc/profile.d/bubble-gh-inject.sh'
+        f" && echo 'export GITHUB_TOKEN={q_token}' >> /etc/profile.d/bubble-gh-inject.sh"
+        f" && chmod 644 /etc/profile.d/bubble-gh-inject.sh"
+    )
+
+    try:
+        _ssh_run(
+            remote_host,
+            ["incus", "exec", container, "--", "bash", "-c", profile_script],
+            timeout=15,
+        )
+    except Exception as e:
+        if not machine_readable:
+            detail(f"Warning: failed to inject GitHub token on remote: {e}")
+        return False
+
+    if not machine_readable:
+        detail("GitHub token injected directly (level 5: unrestricted access).")
+    return True
 
 
 def setup_gh_token(
@@ -442,13 +525,17 @@ def setup_gh_token(
     remote_host=None,
     gh_enabled: bool = False,
     config: dict | None = None,
+    token_inject: bool = False,
 ) -> bool:
     """Set up GitHub auth for a container.
 
-    For local containers: uses the auth proxy via Incus proxy device.
+    When token_inject is True (level 5), the host's actual GitHub token
+    is injected directly into the container, bypassing the proxy.
+
+    Otherwise, for local containers: uses the auth proxy via Incus proxy device.
     For remote/cloud containers: tunnels the auth proxy via SSH -R.
 
-    Both paths provide repo-scoped auth — the host token never enters
+    Both proxy paths provide repo-scoped auth — the host token never enters
     the container.
 
     When gh_enabled is True and github_api security is on, also sets up
@@ -457,6 +544,14 @@ def setup_gh_token(
 
     Returns True if auth was successfully configured.
     """
+    # Level 5: direct token injection (bypasses proxy entirely)
+    if token_inject:
+        if remote_host:
+            return inject_gh_token_remote(remote_host, container, machine_readable)
+        if runtime:
+            return inject_gh_token(runtime, container, machine_readable)
+        return False
+
     if not owner or not repo:
         if not machine_readable:
             detail("Warning: no owner/repo available, cannot set up scoped auth.")
