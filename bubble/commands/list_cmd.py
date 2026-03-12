@@ -9,7 +9,7 @@ import click
 
 from ..clean import CleanStatus, check_clean, check_native_clean
 from ..config import load_config
-from ..lifecycle import load_registry
+from ..lifecycle import load_registry, prune_stale_entries
 from ..setup import get_runtime
 
 
@@ -230,6 +230,7 @@ def register_list_command(main):
                     clean_statuses[c.name] = CleanStatus(clean=False, error="not running")
 
         local_names = {c.name for c in containers}
+        prune_stale_entries(local_names)
         entries = []
         for c in containers:
             entry = {

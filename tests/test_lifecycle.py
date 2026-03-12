@@ -4,6 +4,7 @@ import json
 
 from bubble.lifecycle import (
     get_bubble_info,
+    prune_stale_entries,
     register_bubble,
     unregister_bubble,
 )
@@ -70,3 +71,37 @@ class TestRegistry:
         info = get_bubble_info("no-dir-bubble")
         assert info is not None
         assert "project_dir" not in info
+
+
+class TestPruneStaleEntries:
+    def test_prunes_missing_local_containers(self, tmp_data_dir):
+        register_bubble("alive", "org/repo")
+        register_bubble("dead", "org/repo")
+        pruned = prune_stale_entries({"alive"})
+        assert pruned == ["dead"]
+        assert get_bubble_info("alive") is not None
+        assert get_bubble_info("dead") is None
+
+    def test_preserves_remote_entries(self, tmp_data_dir):
+        register_bubble("remote-one", "org/repo", remote_host="user@host")
+        pruned = prune_stale_entries(set())
+        assert pruned == []
+        assert get_bubble_info("remote-one") is not None
+
+    def test_preserves_native_entries(self, tmp_data_dir):
+        register_bubble("native-one", "org/repo", native=True, native_path="/tmp/x")
+        pruned = prune_stale_entries(set())
+        assert pruned == []
+        assert get_bubble_info("native-one") is not None
+
+    def test_no_stale_entries(self, tmp_data_dir):
+        register_bubble("a", "org/repo")
+        register_bubble("b", "org/repo")
+        pruned = prune_stale_entries({"a", "b", "extra"})
+        assert pruned == []
+        assert get_bubble_info("a") is not None
+        assert get_bubble_info("b") is not None
+
+    def test_empty_registry(self, tmp_data_dir):
+        pruned = prune_stale_entries({"something"})
+        assert pruned == []
