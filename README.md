@@ -6,14 +6,20 @@ Containerized development environments for the Lean language, powered by [Incus]
 
 ```bash
 # Install
-uv tool install git+https://github.com/kim-em/bubble.git
-
-# Also available on PyPI: uv tool install dev-bubble
-# For development: uv pip install -e '.[dev]'
+uv tool install dev-bubble
 
 # Open a bubble for a GitHub PR — just paste the URL, and you get a containerized VSCode window!
 bubble https://github.com/leanprover-community/mathlib4/pull/35219
 
+# List your bubbles
+bubble list
+```
+
+See [Examples](#examples) for branches, local repos, issues, remote/cloud, and non-interactive use.
+
+## Examples
+
+```bash
 # Shorter forms work too
 bubble leanprover-community/mathlib4/pull/35219
 bubble mathlib4/pull/35219    # after first use, short names are learned
@@ -36,11 +42,11 @@ bubble mathlib4/issues/42
 # PR or issue number shorthand (when in a cloned repo, requires gh CLI)
 bubble 123                   # auto-detects PR vs issue via GitHub API
 
-# List your bubbles
-bubble list
-
 # Drop into an SSH session instead of VSCode
 bubble leanprover/lean4 --shell
+
+# Just create, don't open anything
+bubble leanprover/lean4 --no-interactive
 
 # Run on a remote host
 bubble leanprover/lean4 --ssh myserver
@@ -48,14 +54,21 @@ bubble leanprover/lean4 --ssh user@host:2222
 bubble remote set-default myserver         # all future bubbles go remote
 bubble leanprover/lean4 --local            # override remote default
 
-# Just create, don't open anything
-bubble leanprover/lean4 --no-interactive
-
 # Pause a bubble
 bubble pause mathlib4-pr-35219
 
 # Pop (destroy permanently)
 bubble pop mathlib4-pr-35219
+```
+
+### Development Install
+
+```bash
+# Install from GitHub
+uv tool install git+https://github.com/kim-em/bubble.git
+
+# For development
+uv pip install -e '.[dev]'
 ```
 
 ## How It Works
