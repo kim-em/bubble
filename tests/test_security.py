@@ -479,7 +479,15 @@ def test_all_settings_have_valid_category():
 def test_valid_values_for_normal_setting():
     """Normal settings accept only auto/on/off."""
     assert valid_values_for("relay") == ("auto", "on", "off")
-    assert valid_values_for("shared_cache") == ("auto", "on", "off")
+
+
+def test_valid_values_for_shared_cache():
+    """shared_cache also accepts overlay."""
+    vals = valid_values_for("shared_cache")
+    assert "auto" in vals
+    assert "on" in vals
+    assert "off" in vals
+    assert "overlay" in vals
 
 
 def test_valid_values_for_github_api():
@@ -697,3 +705,66 @@ def test_should_include_credentials_requested_false_security_auto():
 def test_should_include_credentials_requested_true_security_auto():
     config = {}
     assert should_include_credentials(True, config, "claude_credentials") is True
+
+
+# --- shared_cache overlay tests ---
+
+
+def test_get_setting_shared_cache_overlay():
+    config = {"security": {"shared_cache": "overlay"}}
+    assert get_setting(config, "shared_cache") == "overlay"
+
+
+def test_is_enabled_shared_cache_overlay():
+    """overlay counts as enabled (shared mounts are still used)."""
+    config = {"security": {"shared_cache": "overlay"}}
+    assert is_enabled(config, "shared_cache") is True
+
+
+def test_is_locked_off_shared_cache_overlay():
+    """overlay is not locked off."""
+    config = {"security": {"shared_cache": "overlay"}}
+    assert is_locked_off(config, "shared_cache") is False
+
+
+def test_security_set_shared_cache_overlay(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "shared-cache", "overlay"])
+    assert result.exit_code == 0
+    assert "Set security.shared-cache = overlay" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["shared_cache"] == "overlay"
+
+
+def test_security_set_overlay_rejected_for_other_settings(tmp_data_dir):
+    """overlay is only valid for shared_cache, not other settings."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "relay", "overlay"])
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output
+
+
+def test_security_posture_shows_overlay(tmp_data_dir, capsys):
+    """security posture display shows overlay description for shared-cache."""
+    from bubble.security import print_security_posture
+
+    config = {"security": {"shared_cache": "overlay"}}
+    print_security_posture(config)
+    captured = capsys.readouterr()
+    assert "overlay" in captured.out
+    assert "per-container writable overlay" in captured.out
+
+
+def test_permissive_preserves_overlay():
+    """permissive does not downgrade shared_cache from overlay to on."""
+    config = {"security": {"shared_cache": "overlay"}}
+    changed = apply_preset_permissive(config)
+    assert "shared_cache" not in changed
+    assert config["security"]["shared_cache"] == "overlay"

@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 
 from .config import DATA_DIR
-from .security import is_enabled
+from .security import SETTINGS, get_setting, is_enabled
 
 
 def mount_overlaps(target: Path, user_targets: set[Path]) -> bool:
@@ -27,6 +27,40 @@ def mount_overlaps(target: Path, user_targets: set[Path]) -> bool:
         except ValueError:
             pass
     return False
+
+
+def _setup_overlay(runtime, container: str, lower_path: str, mount_path: str):
+    """Set up an overlayfs mount combining a read-only lower with a writable upper.
+
+    Creates per-container upper/work directories and mounts overlayfs so that
+    reads come from lower_path (the shared cache) and writes go to the
+    container-local upper directory. Also adds an fstab entry so the overlay
+    survives container restarts.
+    """
+    overlay_base = f"{mount_path}-overlay"
+    upper = f"{overlay_base}/upper"
+    work = f"{overlay_base}/work"
+    q_lower = shlex.quote(lower_path)
+    q_mount = shlex.quote(mount_path)
+    q_upper = shlex.quote(upper)
+    q_work = shlex.quote(work)
+    q_overlay_base = shlex.quote(overlay_base)
+    runtime.exec(
+        container,
+        [
+            "bash",
+            "-c",
+            # Create directories, mount overlayfs, fix ownership, add fstab entry
+            f"mkdir -p {q_upper} {q_work} {q_mount}"
+            f" && mount -t overlay overlay"
+            f" -o lowerdir={q_lower},upperdir={q_upper},workdir={q_work}"
+            f" {q_mount}"
+            f" && chown -R 1001:1001 {q_overlay_base}"
+            f" && echo 'overlay {q_mount} overlay"
+            f" lowerdir={q_lower},upperdir={q_upper},workdir={q_work} 0 0'"
+            f" >> /etc/fstab",
+        ],
+    )
 
 
 def provision_container(
@@ -88,8 +122,12 @@ def provision_container(
             )
 
     # Add shared mounts from hook (e.g. mathlib cache)
-    # When shared_cache is off, mount read-only so containers can't poison the cache
-    shared_cache_enabled = is_enabled(config, "shared_cache")
+    # Modes: on = read-write, off = read-only, overlay = read-only + overlayfs
+    shared_cache_setting = get_setting(config, "shared_cache")
+    if shared_cache_setting == "auto":
+        shared_cache_setting = SETTINGS["shared_cache"].auto_default
+    use_overlay = shared_cache_setting == "overlay"
+    shared_cache_writable = shared_cache_setting not in ("off", "overlay")
     if hook:
         env_lines = []
         for host_dir_name, container_path, env_var in hook.shared_mounts():
@@ -97,13 +135,26 @@ def provision_container(
             host_path.mkdir(parents=True, exist_ok=True)
             # Make group-writable so container user can write with UID mapping
             host_path.chmod(0o770)
-            runtime.add_disk(
-                name,
-                f"shared-{host_dir_name}",
-                str(host_path),
-                container_path,
-                readonly=not shared_cache_enabled,
-            )
+            if use_overlay:
+                # Mount shared cache read-only at a staging path; overlayfs
+                # will provide writable access at the expected container_path
+                lower_path = f"{container_path}-ro"
+                runtime.add_disk(
+                    name,
+                    f"shared-{host_dir_name}",
+                    str(host_path),
+                    lower_path,
+                    readonly=True,
+                )
+                _setup_overlay(runtime, name, lower_path, container_path)
+            else:
+                runtime.add_disk(
+                    name,
+                    f"shared-{host_dir_name}",
+                    str(host_path),
+                    container_path,
+                    readonly=not shared_cache_writable,
+                )
             if env_var:
                 env_lines.append(f"export {env_var}={shlex.quote(container_path)}")
         if env_lines:
