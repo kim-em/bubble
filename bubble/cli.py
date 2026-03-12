@@ -203,7 +203,11 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
         if no_clone:
             bare_path = bare_repo_path(t.org_repo)
             if not bare_path.exists():
-                click.echo(f"Repo '{t.org_repo}' is not available in the git store.", err=True)
+                click.echo(
+                    f"Repo '{t.org_repo}' has not been cloned yet. "
+                    f"Run without --no-clone to fetch it automatically.",
+                    err=True,
+                )
                 sys.exit(1)
         else:
             bare_path = init_bare_repo(t.org_repo)
@@ -578,6 +582,16 @@ def open_cmd(
                 raise
             if e.code:  # Only treat nonzero exits as failures
                 errors.append(target)
+        except TargetParseError as e:
+            if not multi:
+                raise
+            click.echo(
+                f"Error processing target '{target}': {e}\n"
+                f"  Supported formats: GitHub URL, owner/repo, local path, "
+                f"PR/issue number, or short name.",
+                err=True,
+            )
+            errors.append(target)
         except Exception as e:
             if not multi:
                 raise
