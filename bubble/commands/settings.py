@@ -5,7 +5,7 @@ import sys
 
 import click
 
-from ..config import DEFAULT_CONFIG, load_config, load_raw_config, save_config
+from ..config import DEFAULT_CONFIG, _deep_merge, load_config, load_raw_config, save_config
 from ..security import SETTINGS as SECURITY_SETTINGS
 from ..security import VALID_VALUES as SECURITY_VALID_VALUES
 from ..security import display_setting_name, get_setting, normalize_setting_name
@@ -390,9 +390,11 @@ def register_settings_commands(main):
 
         For security settings, use `bubble security` instead.
         """
-        config = load_config()
+        # Merge in memory without writing to disk (load_config would
+        # create config.toml with defaults as a side effect).
         raw = load_raw_config()
         defaults = copy.deepcopy(DEFAULT_CONFIG)
+        config = _deep_merge(defaults, raw)
 
         # Sections to display (skip security — that's `bubble security`)
         sections = [
@@ -416,13 +418,14 @@ def register_settings_commands(main):
                 click.echo(f"{key} = {_format_value(value)}  {origin}")
             else:
                 section = config.get(key, {})
-                if not section:
-                    continue
                 click.echo(f"\n[{key}]")
                 if isinstance(section, dict):
-                    for subkey, value in section.items():
-                        origin = _origin(key, subkey, config, defaults)
-                        click.echo(f"  {subkey} = {_format_value(value)}  {origin}")
+                    if not section:
+                        click.echo("  (empty)  (default)")
+                    else:
+                        for subkey, value in section.items():
+                            origin = _origin(key, subkey, config, defaults)
+                            click.echo(f"  {subkey} = {_format_value(value)}  {origin}")
                 elif isinstance(section, list):
                     origin = _origin(key, None, config, defaults)
                     click.echo(f"  {_format_value(section)}  {origin}")
@@ -436,15 +439,23 @@ def register_settings_commands(main):
             if key == "editor":
                 continue
             value = config.get(key, raw[key])
-            click.echo(f"\n[{key}]")
-            if isinstance(value, dict):
-                for subkey, subval in value.items():
-                    click.echo(f"  {subkey} = {_format_value(subval)}  (set in config)")
-            elif isinstance(value, list):
+            if isinstance(value, list) and value and isinstance(value[0], dict):
+                # Array of tables (e.g. [[mounts]])
                 for item in value:
-                    click.echo(f"  {_format_value(item)}  (set in config)")
+                    click.echo(f"\n[[{key}]]")
+                    for subkey, subval in item.items():
+                        click.echo(f"  {subkey} = {_format_value(subval)}")
+                click.echo("  (set in config)")
             else:
-                click.echo(f"  {_format_value(value)}  (set in config)")
+                click.echo(f"\n[{key}]")
+                if isinstance(value, dict):
+                    for subkey, subval in value.items():
+                        click.echo(f"  {subkey} = {_format_value(subval)}  (set in config)")
+                elif isinstance(value, list):
+                    for item in value:
+                        click.echo(f"  {_format_value(item)}  (set in config)")
+                else:
+                    click.echo(f"  {_format_value(value)}  (set in config)")
 
         click.echo(
             "\nSecurity settings are managed separately. "

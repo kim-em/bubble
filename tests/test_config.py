@@ -340,6 +340,63 @@ def test_config_show_security_deferred(tmp_data_dir):
     assert "bubble security" in result.output
 
 
+def test_config_show_no_side_effects(tmp_data_dir):
+    """config show should not create config.toml on a fresh install."""
+    import bubble.config as config
+
+    # Ensure config file doesn't exist
+    if config.CONFIG_FILE.exists():
+        config.CONFIG_FILE.unlink()
+
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0
+    # config.toml should NOT have been created
+    assert not config.CONFIG_FILE.exists()
+
+
+def test_config_show_empty_sections(tmp_data_dir):
+    """config show displays empty sections like [tools] and [security]."""
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0
+    assert "[tools]" in result.output
+    assert "(empty)" in result.output
+
+
+def test_config_show_mounts(tmp_data_dir):
+    """config show displays [[mounts]] array-of-tables correctly."""
+    import tomli_w
+
+    import bubble.config as config
+
+    cfg = {
+        "mounts": [
+            {"source": "~/projects", "target": "/home/user/projects", "mode": "ro"},
+        ]
+    }
+    with open(config.CONFIG_FILE, "wb") as f:
+        tomli_w.dump(cfg, f)
+
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0
+    assert "[[mounts]]" in result.output
+    assert "(set in config)" in result.output
+
+
 def test_deep_merge_does_not_mutate_default(tmp_data_dir):
     """Verify _deep_merge doesn't mutate DEFAULT_CONFIG nested dicts."""
     from bubble.config import DEFAULT_CONFIG
