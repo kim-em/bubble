@@ -313,6 +313,7 @@ The relay only allows opening repos already cloned in `~/.bubble/git/` — it ca
 - **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
 - **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
 - **GitHub auth proxy**: Host token never enters containers. Git and REST API are repo-scoped. **GraphQL queries are read-only but account-wide** — can read any data the host token can access. Disable API access with `bubble security set github-api off`
+- **Shared mathlib cache**: When `shared_cache` is enabled (the default), the mathlib cache at `~/.bubble/mathlib-cache/` is mounted **read-write** into every Mathlib-using Lean container. A compromised container could write poisoned build artifacts that would be picked up by subsequent containers running `lake exe cache get`. This cache is *not* shared with `lake exe cache` run outside a bubble — it only affects bubble containers. To prevent future poisoning, run `bubble security set shared-cache off`, which mounts the cache read-only. If you suspect the cache has already been compromised, delete `~/.bubble/mathlib-cache/`.
 
 ### Known Limitations
 

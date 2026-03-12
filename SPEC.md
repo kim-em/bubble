@@ -335,6 +335,14 @@ of the versioned image for next time.
 - `~/.bubble/mathlib-cache/` ↔ `/shared/mathlib-cache/` (read-write)
 - Environment variable `MATHLIB_CACHE_DIR=/shared/mathlib-cache`
 
+> **Security note:** The shared cache is mounted read-write by default, so a
+> compromised container could write poisoned `.olean` files that subsequent
+> containers would pick up via `lake exe cache get`. The cache is *not* shared
+> with `lake exe cache` run on the host — only bubble containers are affected.
+> Set `shared-cache` to `off` (via `bubble security set shared-cache off`) to
+> mount the cache read-only and prevent future poisoning. If you suspect the
+> cache has already been compromised, delete `~/.bubble/mathlib-cache/`.
+
 **Post-clone behavior:**
 - Pre-populate Lake dependencies from `lake-manifest.json` (see 2.4)
 - Write auto-build command to `~/.bubble-fetch-cache` marker file
@@ -1097,7 +1105,7 @@ values: `auto`, `on`, `off`.
 | Setting | Auto default | Description |
 |---------|-------------|-------------|
 | `network-github` | on | GitHub domains in network allowlist |
-| `shared-cache` | on | Writable shared mounts (mathlib cache) |
+| `shared-cache` | on | Writable shared mounts (mathlib cache) — see [Lean 4 hook](#22-lean-4-hook) security note |
 | `user-mounts` | on | `--mount` flag support |
 | `git-manifest-trust` | on | Auto-clone Lake manifest dependencies |
 | `claude-credentials` | on | Mount Claude credentials into containers |
