@@ -62,12 +62,6 @@ CATEGORIES = [
 ]
 
 SETTINGS: dict[str, SecuritySettingDef] = {
-    "network_github": SecuritySettingDef(
-        description="GitHub in network allowlist (exfiltration risk)",
-        auto_default="on",
-        warning="github.com in allowlist enables data exfiltration",
-        category="Network",
-    ),
     "shared_cache": SecuritySettingDef(
         description="Shared mounts (mathlib cache) across containers",
         auto_default="on",
@@ -133,18 +127,6 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         warning="SSH host keys not verified for container connections",
         category="SSH",
     ),
-}
-
-# GitHub-related domains that are stripped from the network allowlist
-# when network_github is off. Includes API and CDN domains.
-GITHUB_DOMAINS = {
-    "github.com",
-    "api.github.com",
-    "raw.githubusercontent.com",
-    "release-assets.githubusercontent.com",
-    "objects.githubusercontent.com",
-    "codeload.githubusercontent.com",
-    "cli.github.com",
 }
 
 
@@ -324,6 +306,24 @@ def apply_preset_lockdown(config: dict) -> list[str]:
     return changed
 
 
+def github_domains_for_allowlist(domains: list[str]) -> list[str]:
+    """GitHub-related domains that appear in a domain list.
+
+    Used to strip direct GitHub network access when traffic should go
+    through the auth proxy instead.  Case-insensitive to prevent bypass
+    via mixed-case domains.
+    """
+    github_suffixes = (".github.com", ".githubusercontent.com")
+    return [
+        d
+        for d in domains
+        if d.lower() == "github.com"
+        or d.lower() == "cli.github.com"
+        or any(d.lower().endswith(s) for s in github_suffixes)
+    ]
+
+
 def filter_github_domains(domains: list[str]) -> list[str]:
     """Remove GitHub-related domains from a domain list."""
-    return [d for d in domains if d not in GITHUB_DOMAINS]
+    gh = set(github_domains_for_allowlist(domains))
+    return [d for d in domains if d not in gh]

@@ -1104,7 +1104,6 @@ values: `auto`, `on`, `off`.
 
 | Setting | Auto default | Description |
 |---------|-------------|-------------|
-| `network-github` | on | GitHub domains in network allowlist |
 | `shared-cache` | on | Writable shared mounts (mathlib cache) — see [Lean 4 hook](#22-lean-4-hook) security note |
 | `user-mounts` | on | `--mount` flag support |
 | `git-manifest-trust` | on | Auto-clone Lake manifest dependencies |
@@ -1126,8 +1125,10 @@ user to `bubble security`. Suppressed by `BUBBLE_QUIET_SECURITY=1`.
 - `bubble security lockdown` — set all to `off`
 - `bubble security default` — reset all to `auto`
 
-When `network-github` is `off`, all GitHub-related domains are stripped from the
-network allowlist.
+**GitHub network access:** Direct GitHub network access (via iptables) is only
+allowed when `github-token-inject` is enabled (level 5). At all other auth
+levels (0–4), iptables blocks direct GitHub traffic and forces it through the
+auth proxy on loopback, which enforces repo-scoping and rate limits.
 
 ---
 
