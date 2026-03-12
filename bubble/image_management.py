@@ -4,11 +4,10 @@ import shutil
 import subprocess
 import sys
 
-import click
-
 from .config import load_config
 from .hooks import select_hook
 from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit, is_build_locked
+from .output import detail, step
 from .runtime.base import ContainerRuntime
 
 
@@ -83,7 +82,7 @@ def maybe_rebuild_tools(runtime: ContainerRuntime, notices=None):
 
     if notices:
         notices.begin()
-    click.echo("Tools configuration changed, rebuilding base image...")
+    step("Tools configuration changed, rebuilding base image...")
     build_image(runtime, "base", force=True, still_needed=_tools_still_stale)
 
 
@@ -117,11 +116,11 @@ def maybe_rebuild_customize(notices=None):
     if notices:
         notices.begin()
     if current is None:
-        click.echo("Customization script removed, rebuilding base image in background...")
+        step("Customization script removed, rebuilding base image in background...")
     elif stored is None:
-        click.echo("Customization script detected, rebuilding base image in background...")
+        step("Customization script detected, rebuilding base image in background...")
     else:
-        click.echo("Customization script changed, rebuilding base image in background...")
+        step("Customization script changed, rebuilding base image in background...")
 
     _spawn_background_bubble(
         ["images", "build", "base", "--force"],
@@ -141,7 +140,7 @@ def detect_and_build_image(runtime, ref_path, t):
 
     hook = select_hook(ref_path, hook_ref)
     if hook:
-        click.echo(f"  Detected: {hook.name()}")
+        detail(f"Detected: {hook.name()}")
         image_name = hook.image_name()
     else:
         image_name = "base"
@@ -153,21 +152,21 @@ def detect_and_build_image(runtime, ref_path, t):
             # Toolchain-specific image doesn't exist yet — fall back to base lean
             # and build the toolchain image in the background for next time.
             version = image_name[len("lean-") :]
-            click.echo(
-                f"  Toolchain {version} image not cached, using lean image"
+            detail(
+                f"Toolchain {version} image not cached, using lean image"
                 f" (building {image_name} in background for next time)"
             )
             pending_toolchain_build = version
             image_name = "lean"
         if not runtime.image_exists(image_name):
-            click.echo(f"Building {image_name} image (one-time setup, may take a few minutes)...")
+            step(f"Building {image_name} image (one-time setup, may take a few minutes)...")
             from .images.builder import build_image
 
             build_image(runtime, image_name)
-            click.echo(f"  {image_name} image ready.")
+            detail(f"{image_name} image ready.")
     elif is_toolchain_image:
         version = image_name[len("lean-") :]
-        click.echo(f"  Using cached toolchain image ({version})")
+        detail(f"Using cached toolchain image ({version})")
 
     if pending_toolchain_build:
         _background_build_lean_toolchain(pending_toolchain_build)
@@ -183,7 +182,7 @@ def _background_build_lean_toolchain(version: str):
     # Skip if a build is already in progress (avoid spawning redundant processes)
     if is_build_locked(safe_alias):
         return
-    click.echo(f"  Building {image_alias} image in background for next time...")
+    detail(f"Building {image_alias} image in background for next time...")
     _spawn_background_bubble(
         ["images", "build", image_alias],
         f"/tmp/bubble-{image_alias}-build.log",

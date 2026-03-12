@@ -20,8 +20,7 @@ import platform
 import shlex
 import subprocess
 
-import click
-
+from .output import detail
 from .runtime.base import ContainerRuntime
 
 # Port inside the container where the auth proxy is exposed
@@ -127,8 +126,8 @@ def setup_auth_proxy(
     port = _ensure_auth_proxy_running()
     if not port:
         if not machine_readable:
-            click.echo("  Warning: auth proxy failed to start. No GitHub auth configured.")
-            click.echo("  Run 'bubble gh proxy start' to diagnose.")
+            detail("Warning: auth proxy failed to start. No GitHub auth configured.")
+            detail("Run 'bubble gh proxy start' to diagnose.")
         return False
 
     # Generate per-container token
@@ -155,8 +154,8 @@ def setup_auth_proxy(
         )
     except Exception as e:
         if not machine_readable:
-            click.echo(f"  Warning: failed to add proxy device: {e}")
-            click.echo("  No GitHub auth configured (fail-closed).")
+            detail(f"Warning: failed to add proxy device: {e}")
+            detail("No GitHub auth configured (fail-closed).")
         return False
 
     # Configure git inside the container to use the proxy
@@ -175,12 +174,12 @@ def setup_auth_proxy(
         )
     except RuntimeError as e:
         if not machine_readable:
-            click.echo(f"  Warning: failed to configure git proxy: {e}")
-            click.echo("  No GitHub auth configured (fail-closed).")
+            detail(f"Warning: failed to configure git proxy: {e}")
+            detail("No GitHub auth configured (fail-closed).")
         return False
 
     if not machine_readable:
-        click.echo(f"  GitHub auth proxy configured (scoped to {owner}/{repo}).")
+        detail(f"GitHub auth proxy configured (scoped to {owner}/{repo}).")
     return True
 
 
@@ -208,14 +207,14 @@ def setup_auth_proxy_remote(
     port = _ensure_auth_proxy_running()
     if not port:
         if not machine_readable:
-            click.echo("  Warning: auth proxy failed to start. No GitHub auth configured.")
-            click.echo("  Run 'bubble gh proxy start' to diagnose.")
+            detail("Warning: auth proxy failed to start. No GitHub auth configured.")
+            detail("Run 'bubble gh proxy start' to diagnose.")
         return False
 
     # Start SSH reverse tunnel (per-remote-host, shared across containers)
     if not start_tunnel(remote_host, local_port=port):
         if not machine_readable:
-            click.echo("  Warning: SSH tunnel to remote failed. No GitHub auth configured.")
+            detail("Warning: SSH tunnel to remote failed. No GitHub auth configured.")
         return False
 
     # Generate per-container token
@@ -246,8 +245,8 @@ def setup_auth_proxy_remote(
         )
     except Exception as e:
         if not machine_readable:
-            click.echo(f"  Warning: failed to add remote proxy device: {e}")
-            click.echo("  No GitHub auth configured (fail-closed).")
+            detail(f"Warning: failed to add remote proxy device: {e}")
+            detail("No GitHub auth configured (fail-closed).")
         remove_auth_tokens(container)
         return False
 
@@ -276,13 +275,13 @@ def setup_auth_proxy_remote(
         )
     except Exception as e:
         if not machine_readable:
-            click.echo(f"  Warning: failed to configure git proxy on remote: {e}")
-            click.echo("  No GitHub auth configured (fail-closed).")
+            detail(f"Warning: failed to configure git proxy on remote: {e}")
+            detail("No GitHub auth configured (fail-closed).")
         remove_auth_tokens(container)
         return False
 
     if not machine_readable:
-        click.echo(f"  GitHub auth proxy configured (scoped to {owner}/{repo}, via SSH tunnel).")
+        detail(f"GitHub auth proxy configured (scoped to {owner}/{repo}, via SSH tunnel).")
     return True
 
 
@@ -306,7 +305,7 @@ def setup_gh_token(
     """
     if not owner or not repo:
         if not machine_readable:
-            click.echo("  Warning: no owner/repo available, cannot set up scoped auth.")
+            detail("Warning: no owner/repo available, cannot set up scoped auth.")
         return False
 
     if remote_host:

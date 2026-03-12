@@ -5,8 +5,6 @@ import re
 import shlex
 import subprocess
 
-import click
-
 from .config import DATA_DIR
 from .runtime.base import ContainerRuntime
 
@@ -64,7 +62,9 @@ def _load_template(kind: str) -> str | None:
         try:
             return path.read_text()
         except (OSError, UnicodeError):
-            click.echo(f"  Warning: could not read template {path}, using default.", err=True)
+            from .output import detail
+
+            detail(f"Warning: could not read template {path}, using default.", err=True)
     return None
 
 
@@ -266,4 +266,6 @@ def inject_claude_task(
     runtime.exec(container, ["su", "-", "user", "-c", trust_script])
 
     if not quiet:
-        click.echo("  Claude Code task injected (will start on VS Code folder open).")
+        from .output import detail
+
+        detail("Claude Code task injected (will start on VS Code folder open).")

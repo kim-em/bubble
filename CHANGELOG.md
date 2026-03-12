@@ -34,6 +34,10 @@
   - Extracted shared `_power_on_and_wait()` helper used by both `start_server()` and `get_cloud_remote_host()`
 
 ## 0.6.16 — 2026-03-12
+- Consistent indentation in `bubble open` progress output (#144)
+  - Introduce `step()` / `detail()` helpers in `output.py` for two-level output formatting
+  - Top-level steps have no indent; sub-details get 2-space indent
+  - Applied consistently across local, native, and remote code paths
 - Print a welcome banner on first run when `config.toml` is created (#139)
 - Split README Quick Start into a short 3-command section plus a detailed Examples section (#154)
 - Standardize error handling across the codebase (#155)
