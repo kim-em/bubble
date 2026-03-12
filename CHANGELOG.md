@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.18 — 2026-03-12
+- Extract shared `TokenStore` class to deduplicate token/rate-limit/logging infrastructure between relay and auth proxy (#127)
+  - Fix relay token generation race: `generate_relay_token` now uses `fcntl` file locking (was missing, unlike auth proxy)
+  - Shared `RateLimiter` with configurable windows replaces two near-identical implementations
+
 ## 0.6.17 — 2026-03-12
 - Use `action.wait_until_finished()` instead of `time.sleep(3)` after `power_on()` in cloud server start (#156)
   - Ensures Hetzner confirms the server is running before fetching IP, preventing stale IP on reassignment

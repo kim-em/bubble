@@ -22,18 +22,18 @@ import logging
 import os
 import platform
 import re
-import secrets
 import socket
 import subprocess
 import threading
 import time
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 from .config import DATA_DIR
 from .git_store import repo_is_known
 from .repo_registry import RepoRegistry
 from .target import TargetParseError, parse_target
+from .token_store import RateLimiter as _RateLimiter
+from .token_store import RateWindow, TokenStore, setup_file_logging
 
 RELAY_SOCK = DATA_DIR / "relay.sock"
 RELAY_PORT_FILE = DATA_DIR / "relay.port"
@@ -69,72 +69,38 @@ def _sanitize_for_log(s: str) -> str:
 def generate_relay_token(container_name: str) -> str:
     """Generate a relay token for a container and persist it.
 
-    Returns the token string. The token→container mapping is stored in
-    ~/.bubble/relay-tokens.json.
+    Returns the token string. The token->container mapping is stored in
+    ~/.bubble/relay-tokens.json. Uses file locking to prevent races
+    when multiple bubbles are created concurrently.
     """
-    token = secrets.token_hex(32)
-    tokens = _load_tokens()
-    tokens[token] = container_name
-    _save_tokens(tokens)
-    return token
+    return TokenStore(RELAY_TOKENS).generate(container_name)
 
 
 def _load_tokens() -> dict[str, str]:
-    """Load token→container_name mapping from disk."""
-    if RELAY_TOKENS.exists():
-        try:
-            return json.loads(RELAY_TOKENS.read_text())
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
-
-
-def _save_tokens(tokens: dict[str, str]):
-    """Save token→container_name mapping to disk."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = RELAY_TOKENS.with_suffix(".tmp")
-    tmp.write_text(json.dumps(tokens))
-    tmp.replace(RELAY_TOKENS)
-    # Owner-only permissions — tokens are secrets
-    os.chmod(str(RELAY_TOKENS), 0o600)
+    """Load token->container_name mapping from disk."""
+    return TokenStore(RELAY_TOKENS)._load()
 
 
 def remove_relay_token(container_name: str):
     """Remove all tokens for a container (e.g. on pop)."""
-    tokens = _load_tokens()
-    tokens = {t: c for t, c in tokens.items() if c != container_name}
-    _save_tokens(tokens)
+    TokenStore(RELAY_TOKENS).remove(lambda v: v == container_name)
 
 
 class TokenRegistry:
-    """Thread-safe token→container lookup with file-based persistence.
+    """Thread-safe token->container lookup with file-based persistence.
 
     Caches the tokens file and reloads when the mtime changes.
     """
 
     def __init__(self):
-        self._tokens: dict[str, str] = {}
-        self._mtime: float = 0
-        self._lock = threading.Lock()
+        self._store = TokenStore(RELAY_TOKENS)
 
     def lookup(self, token: str) -> str | None:
         """Look up a token. Returns container name or None."""
-        with self._lock:
-            self._maybe_reload()
-            return self._tokens.get(token)
-
-    def _maybe_reload(self):
-        try:
-            st = RELAY_TOKENS.stat()
-            if st.st_mtime != self._mtime:
-                self._tokens = _load_tokens()
-                self._mtime = st.st_mtime
-        except FileNotFoundError:
-            self._tokens = {}
-            self._mtime = 0
+        return self._store.lookup(token)
 
 
-class RateLimiter:
+class RateLimiter(_RateLimiter):
     """Per-container rate limiter with sliding windows.
 
     Limits: 3/minute, 10/10 minutes, 20/hour per container.
@@ -143,41 +109,11 @@ class RateLimiter:
     """
 
     def __init__(self):
-        self._requests: dict[str, deque] = {}  # container → timestamps
-        self._global: deque = deque()  # all timestamps
-        self._lock = threading.Lock()
-
-    def check(self, container: str) -> bool:
-        """Check if a request is allowed. Records it if so."""
-        now = time.time()
-        with self._lock:
-            # Prune global entries
-            while self._global and self._global[0] < now - 3600:
-                self._global.popleft()
-
-            # Global rate limit
-            if len(self._global) >= GLOBAL_RATE_LIMIT_PER_HOUR:
-                return False
-
-            # Evict oldest container if too many tracked
-            if container not in self._requests and len(self._requests) >= MAX_TRACKED_CONTAINERS:
-                oldest_key = min(
-                    self._requests, key=lambda k: self._requests[k][-1] if self._requests[k] else 0
-                )
-                del self._requests[oldest_key]
-
-            q = self._requests.setdefault(container, deque())
-            # Prune entries older than 1 hour
-            while q and q[0] < now - 3600:
-                q.popleft()
-            # Check windows
-            last_60 = sum(1 for t in q if t > now - 60)
-            last_600 = sum(1 for t in q if t > now - 600)
-            if last_60 >= 3 or last_600 >= 10 or len(q) >= 20:
-                return False
-            q.append(now)
-            self._global.append(now)
-            return True
+        super().__init__(
+            windows=[RateWindow(60, 3), RateWindow(600, 10), RateWindow(3600, 20)],
+            global_per_hour=GLOBAL_RATE_LIMIT_PER_HOUR,
+            max_tracked=MAX_TRACKED_CONTAINERS,
+        )
 
 
 def validate_relay_target(target: str) -> tuple[str, str]:
@@ -236,11 +172,7 @@ def validate_relay_target(target: str) -> tuple[str, str]:
 
 def _setup_logging():
     """Configure relay request logging to ~/.bubble/relay.log."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(str(RELAY_LOG))
-    handler.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    setup_file_logging(logger, RELAY_LOG)
 
 
 def _handle_connection(
