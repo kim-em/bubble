@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.17 — 2026-03-12
+- Use `action.wait_until_finished()` instead of `time.sleep(3)` after `power_on()` in cloud server start (#156)
+  - Ensures Hetzner confirms the server is running before fetching IP, preventing stale IP on reassignment
+  - Extracted shared `_power_on_and_wait()` helper used by both `start_server()` and `get_cloud_remote_host()`
+
 ## 0.6.16 — 2026-03-12
 - Standardize error handling across the codebase (#155)
   - `IncusRuntime.exec()` now raises `IncusError` (a `RuntimeError` subclass) instead of bare `RuntimeError`, matching `_run()`

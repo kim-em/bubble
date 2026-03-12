@@ -391,15 +391,18 @@ def start_server():
         return
 
     click.echo(f"Starting '{state['server_name']}'...")
-    client.servers.power_on(server)
-
-    # Wait for the server to get its IP
-    time.sleep(3)
-    _update_ip(client, state)
-
-    # Wait for SSH
-    _wait_for_ssh(state["ipv4"])
+    _power_on_and_wait(client, server, state)
     click.echo("Server is running.")
+
+
+def _power_on_and_wait(client, server, state: dict):
+    """Power on a server, wait for the action to complete, then wait for SSH."""
+    action = client.servers.power_on(server)
+    action.wait_until_finished()
+    _update_ip(client, state)
+    if not state.get("ipv4"):
+        raise click.ClickException("Server started but no IPv4 address available.")
+    _wait_for_ssh(state["ipv4"])
 
 
 def _update_ip(client, state: dict):
@@ -486,10 +489,7 @@ def get_cloud_remote_host(config: dict) -> RemoteHost:
     status = server.data_model.status
     if status == "off":
         click.echo("Cloud server is off, starting...")
-        client.servers.power_on(server)
-        time.sleep(3)
-        _update_ip(client, state)
-        _wait_for_ssh(state["ipv4"])
+        _power_on_and_wait(client, server, state)
     elif status != "running":
         raise click.ClickException(
             f"Cloud server is in unexpected state: {status}\nCheck with: bubble cloud status"

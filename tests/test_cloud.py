@@ -17,6 +17,7 @@ from bubble.cloud import (
     _ensure_ssh_key,
     _get_cloud_init,
     _load_state,
+    _power_on_and_wait,
     _save_state,
     _ssh_cmd_base,
 )
@@ -226,3 +227,170 @@ class TestProvisionValidation:
 
         with pytest.raises(ClickException, match="No cloud server provisioned"):
             get_cloud_remote_host({})
+
+
+class TestPowerOnAndWait:
+    """Test _power_on_and_wait helper."""
+
+    def test_calls_wait_then_update_then_ssh(self, tmp_data_dir):
+        """Verify correct call order: power_on → wait → update_ip → wait_for_ssh."""
+        from unittest.mock import MagicMock, patch
+
+        client = MagicMock()
+        server = MagicMock()
+        action = MagicMock()
+        client.servers.power_on.return_value = action
+
+        state = {"server_id": 1, "ipv4": "1.2.3.4"}
+
+        with (
+            patch("bubble.cloud._update_ip") as mock_update,
+            patch("bubble.cloud._wait_for_ssh") as mock_ssh,
+        ):
+            _power_on_and_wait(client, server, state)
+
+        client.servers.power_on.assert_called_once_with(server)
+        action.wait_until_finished.assert_called_once()
+        mock_update.assert_called_once_with(client, state)
+        mock_ssh.assert_called_once_with("1.2.3.4")
+
+    def test_uses_refreshed_ip(self, tmp_data_dir):
+        """If _update_ip changes the IP, _wait_for_ssh should use the new one."""
+        from unittest.mock import MagicMock, patch
+
+        client = MagicMock()
+        server = MagicMock()
+        action = MagicMock()
+        client.servers.power_on.return_value = action
+
+        state = {"server_id": 1, "ipv4": "1.2.3.4"}
+
+        def update_ip_side_effect(_client, s):
+            s["ipv4"] = "5.6.7.8"
+
+        with (
+            patch("bubble.cloud._update_ip", side_effect=update_ip_side_effect),
+            patch("bubble.cloud._wait_for_ssh") as mock_ssh,
+        ):
+            _power_on_and_wait(client, server, state)
+
+        mock_ssh.assert_called_once_with("5.6.7.8")
+
+    def test_raises_if_no_ipv4(self, tmp_data_dir):
+        """If no IPv4 is available after power-on, raise ClickException."""
+        from unittest.mock import MagicMock, patch
+
+        from click import ClickException
+
+        client = MagicMock()
+        server = MagicMock()
+        action = MagicMock()
+        client.servers.power_on.return_value = action
+
+        state = {"server_id": 1}  # no ipv4 key
+
+        with (
+            patch("bubble.cloud._update_ip"),
+            patch("bubble.cloud._wait_for_ssh") as mock_ssh,
+        ):
+            with pytest.raises(ClickException, match="no IPv4"):
+                _power_on_and_wait(client, server, state)
+
+        mock_ssh.assert_not_called()
+
+
+@pytest.mark.skipif(not HAS_HCLOUD, reason="hcloud not installed")
+class TestStartServerPowerOn:
+    """Test start_server uses _power_on_and_wait."""
+
+    def test_start_server_calls_power_on_and_wait(self, tmp_data_dir):
+        from unittest.mock import MagicMock, patch
+
+        from bubble.cloud import start_server
+
+        _save_state({"server_id": 1, "server_name": "test", "ipv4": "1.2.3.4"})
+
+        server = MagicMock()
+        server.data_model.status = "off"
+        client = MagicMock()
+        client.servers.get_by_id.return_value = server
+
+        with (
+            patch("bubble.cloud._get_client", return_value=client),
+            patch("bubble.cloud._power_on_and_wait") as mock_pow,
+        ):
+            start_server()
+
+        mock_pow.assert_called_once_with(client, server, _load_state())
+
+    def test_start_server_already_running(self, tmp_data_dir):
+        from unittest.mock import MagicMock, patch
+
+        from bubble.cloud import start_server
+
+        _save_state({"server_id": 1, "server_name": "test", "ipv4": "1.2.3.4"})
+
+        server = MagicMock()
+        server.data_model.status = "running"
+        client = MagicMock()
+        client.servers.get_by_id.return_value = server
+
+        with (
+            patch("bubble.cloud._get_client", return_value=client),
+            patch("bubble.cloud._power_on_and_wait") as mock_pow,
+            patch("bubble.cloud._update_ip"),
+        ):
+            start_server()
+
+        mock_pow.assert_not_called()
+
+
+@pytest.mark.skipif(not HAS_HCLOUD, reason="hcloud not installed")
+class TestGetCloudRemoteHostAutoStart:
+    """Test get_cloud_remote_host auto-starts off servers."""
+
+    def test_auto_starts_off_server(self, tmp_data_dir):
+        from unittest.mock import MagicMock, patch
+
+        from bubble.cloud import get_cloud_remote_host
+
+        _save_state({"server_id": 1, "server_name": "test", "ipv4": "1.2.3.4"})
+
+        server = MagicMock()
+        server.data_model.status = "off"
+        client = MagicMock()
+        client.servers.get_by_id.return_value = server
+
+        with (
+            patch("bubble.cloud._get_client", return_value=client),
+            patch("bubble.cloud._power_on_and_wait") as mock_pow,
+        ):
+            host = get_cloud_remote_host({})
+
+        mock_pow.assert_called_once()
+        assert host.hostname == "1.2.3.4"
+        assert host.user == "root"
+
+    def test_returns_refreshed_ip_after_start(self, tmp_data_dir):
+        from unittest.mock import MagicMock, patch
+
+        from bubble.cloud import get_cloud_remote_host
+
+        _save_state({"server_id": 1, "server_name": "test", "ipv4": "1.2.3.4"})
+
+        server = MagicMock()
+        server.data_model.status = "off"
+        client = MagicMock()
+        client.servers.get_by_id.return_value = server
+
+        def power_on_side_effect(_client, _server, state):
+            state["ipv4"] = "9.8.7.6"
+            _save_state(state)
+
+        with (
+            patch("bubble.cloud._get_client", return_value=client),
+            patch("bubble.cloud._power_on_and_wait", side_effect=power_on_side_effect),
+        ):
+            host = get_cloud_remote_host({})
+
+        assert host.hostname == "9.8.7.6"
