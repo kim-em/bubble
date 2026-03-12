@@ -997,7 +997,7 @@ exclude = ["subdir1", "subdir2"]
 - Source must exist on host
 - No duplicate container targets
 - No overlap with auto-mounts (Claude, editor, etc.)
-- Rejected entirely when `security.user_mounts = "off"`
+- Rejected entirely when `security.user-mounts = "off"`
 
 ---
 
@@ -1084,15 +1084,15 @@ values: `auto`, `on`, `off`.
 
 | Setting | Auto default | Description |
 |---------|-------------|-------------|
-| `network_github` | on | GitHub domains in network allowlist |
-| `shared_cache` | on | Writable shared mounts (mathlib cache) |
-| `user_mounts` | on | `--mount` flag support |
-| `git_manifest_trust` | on | Auto-clone Lake manifest dependencies |
-| `claude_credentials` | off | Mount Claude credentials into containers |
-| `codex_credentials` | off | Mount Codex credentials into containers |
-| `github_auth` | on | Repo-scoped GitHub auth via proxy |
+| `network-github` | on | GitHub domains in network allowlist |
+| `shared-cache` | on | Writable shared mounts (mathlib cache) |
+| `user-mounts` | on | `--mount` flag support |
+| `git-manifest-trust` | on | Auto-clone Lake manifest dependencies |
+| `claude-credentials` | off | Mount Claude credentials into containers |
+| `codex-credentials` | off | Mount Codex credentials into containers |
+| `github-auth` | on | Repo-scoped GitHub auth via proxy |
 | `relay` | on | Bubble-in-bubble relay |
-| `host_key_trust` | on | Disable SSH StrictHostKeyChecking |
+| `host-key-trust` | on | Disable SSH StrictHostKeyChecking |
 
 **When set to `auto`:** A reminder is printed on each invocation directing the
 user to `bubble security`. Suppressed by `BUBBLE_QUIET_SECURITY=1`.
@@ -1104,7 +1104,7 @@ user to `bubble security`. Suppressed by `BUBBLE_QUIET_SECURITY=1`.
 - `bubble security lockdown` — set all to `off`
 - `bubble security default` — reset all to `auto`
 
-When `network_github` is `off`, all GitHub-related domains are stripped from the
+When `network-github` is `off`, all GitHub-related domains are stripped from the
 network allowlist.
 
 ---

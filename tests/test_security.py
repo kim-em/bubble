@@ -233,9 +233,10 @@ def test_security_cli_shows_posture(tmp_data_dir):
     # Display should use hyphenated forms
     assert "shared-cache" in result.output
     assert "relay" in result.output
-    # Underscored forms should NOT appear in display
-    assert "shared_cache" not in result.output
-    assert "github_auth" not in result.output
+    # No underscore setting names should appear in display output
+    for name in SETTINGS:
+        if "_" in name:
+            assert name not in result.output, f"Underscore name '{name}' leaked into display"
 
 
 def test_security_cli_shows_categories(tmp_data_dir):
@@ -334,6 +335,21 @@ def test_security_set_cli_hyphenated_compound(tmp_data_dir):
     assert config["security"]["github_auth"] == "off"
 
 
+def test_security_set_cli_prefixed_hyphenated(tmp_data_dir):
+    """security.github-auth (prefix + hyphen) works in security set."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "security.github-auth", "on"])
+    assert result.exit_code == 0
+    assert "Set security.github-auth = on" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["github_auth"] == "on"
+
+
 def test_security_set_unknown(tmp_data_dir):
     from bubble.cli import main
 
@@ -398,6 +414,21 @@ def test_config_set_cli_hyphenated(tmp_data_dir):
 
     config = load_config()
     assert config["security"]["shared_cache"] == "off"
+
+
+def test_config_set_cli_prefixed_hyphenated_compound(tmp_data_dir):
+    """security.github-auth (prefix + compound hyphen) works in config set."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "set", "security.github-auth", "on"])
+    assert result.exit_code == 0
+    assert "Set security.github-auth = on" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["github_auth"] == "on"
 
 
 def test_config_set_bare_name(tmp_data_dir):
