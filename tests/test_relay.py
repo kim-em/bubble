@@ -403,6 +403,33 @@ class TestTokenManagement:
         assert tokens[t1] == "container-1"
         assert tokens[t2] == "container-2"
 
+    def test_concurrent_token_generation(self, relay_env):
+        """Concurrent generate_relay_token calls must not lose tokens.
+
+        Regression test for the file-locking fix: without fcntl locking,
+        two concurrent read-modify-write cycles could overwrite each other.
+        """
+        import bubble.relay
+
+        results = {}
+
+        def gen(name):
+            token = bubble.relay.generate_relay_token(name)
+            results[name] = token
+
+        threads = [threading.Thread(target=gen, args=(f"c-{i}",)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        tokens = bubble.relay._load_tokens()
+        # All 10 tokens must be present — none lost to races
+        assert len(results) == 10
+        for name, token in results.items():
+            assert token in tokens, f"Token for {name} was lost"
+            assert tokens[token] == name
+
     def test_remove_token(self, relay_env):
         import bubble.relay
 

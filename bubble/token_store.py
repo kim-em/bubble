@@ -39,7 +39,7 @@ class TokenStore:
     def __init__(self, path: Path):
         self._path = path
         self._tokens: dict = {}
-        self._mtime: float = 0
+        self._mtime_ns: int = 0
         self._thread_lock = threading.Lock()
 
     def _file_lock(self):
@@ -108,12 +108,12 @@ class TokenStore:
         """Reload from disk if the file has been modified."""
         try:
             st = self._path.stat()
-            if st.st_mtime != self._mtime:
+            if st.st_mtime_ns != self._mtime_ns:
                 self._tokens = self._load()
-                self._mtime = st.st_mtime
+                self._mtime_ns = st.st_mtime_ns
         except FileNotFoundError:
             self._tokens = {}
-            self._mtime = 0
+            self._mtime_ns = 0
 
 
 class RateLimiter:
