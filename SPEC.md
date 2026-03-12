@@ -44,13 +44,32 @@ equivalent to `bubble open <url>`.
 |------|------|---------|-------------|
 | `--editor` | `vscode\|emacs\|neovim\|shell` | config or `vscode` | Editor to use |
 | `--shell` | flag | | Shortcut for `--editor shell` |
+| `--emacs` | flag | | Shortcut for `--editor emacs` |
+| `--neovim` | flag | | Shortcut for `--editor neovim` |
 | `--no-interactive` | flag | | Create but don't attach |
 | `--machine-readable` | flag (hidden) | | Output JSON for orchestration |
 | `--network/--no-network` | flag | `--network` | Apply network allowlist |
 | `--name` | string | | Custom container name |
 | `--command` | string | | Run command via SSH (implies shell) |
+| `--native` | flag | | Non-containerized workspace |
+| `--path` | flag | | Force interpretation as local path |
+| `-b`, `--new-branch` | string | | Create a new branch |
+| `--base` | string | | Base branch for `-b` |
+| `--mount` | string (repeatable) | | Mount host dir into container |
+| `--claude-config/--no-claude-config` | flag | enabled | Mount ~/.claude config read-only |
+| `--claude-credentials/--no-claude-credentials` | flag | disabled | Mount Claude credentials |
+| `--codex-credentials/--no-codex-credentials` | flag | disabled | Mount Codex credentials |
+| `--ssh HOST` | string | | Run on remote host |
+| `--cloud` | flag | | Run on Hetzner Cloud server |
+| `--local` | flag | | Force local execution |
+| `--no-clone` | flag (hidden) | | Fail if bare repo missing (relay) |
 | `-h`, `--help` | flag | | Show help |
 | `--version` | flag | | Show version |
+
+Note: Many of these flags correspond to features defined in later stages. An
+implementation MAY defer adding these flags until the relevant stage is
+implemented. They are listed here for completeness since the `open` command is
+the central entry point through which most features are accessed.
 
 ### 1.2 Target parsing
 
@@ -237,8 +256,11 @@ For `--command CMD`: `ssh bubble-<name> <cmd args...>`
 ### 1.10 Reattachment
 
 Before creating a new container, check if one already exists for the target:
-1. Check by exact container name
-2. Check by registry lookup (org_repo + kind + ref)
+1. Check by exact container name match against running containers
+2. Check by generated name match against running containers
+3. Check by registry lookup — but only for `pr` and `branch` kinds (matches
+   on `org_repo` + `kind` + `ref`). Other kinds (`repo`, `issue`, `commit`)
+   do not support registry-based reattachment.
 
 If found:
 - Ensure it's running (start if stopped/frozen)
@@ -324,7 +346,23 @@ of the versioned image for next time.
 `reservoir.lean-cache.cloud`, `mathlib4.lean-cache.cloud`,
 `lakecache.blob.core.windows.net`
 
-### 2.3 Lake dependency pre-population
+### 2.3 Python hook
+
+**Detection:** `pyproject.toml` file exists at the target ref.
+
+**Image:**
+
+| Image | Parent | Script |
+|-------|--------|--------|
+| `python` | `base` | `python.sh` |
+
+**Post-clone behavior:**
+- Writes `cd <dir> && uv sync` to `~/.bubble-fetch-cache` marker file
+- `uv sync` runs automatically on first SSH login
+
+**Network domains:** `pypi.org`, `files.pythonhosted.org`
+
+### 2.4 Lake dependency pre-population
 
 Parse `lake-manifest.json` from the bare repo. For each git dependency with a
 GitHub URL:
@@ -344,7 +382,7 @@ This is best-effort — failures are non-fatal (Lake will clone the dep normally
 **Validation:** Package names must match `[A-Za-z0-9._-]+`. Revisions must be
 40-character hex SHAs. Non-GitHub URLs are skipped.
 
-### 2.4 Build marker consumption
+### 2.5 Build marker consumption
 
 The `~/.bubble-fetch-cache` file contains a shell command. It is consumed:
 - By the `.profile` shell hook on SSH login (for shell/emacs/neovim editors)
@@ -453,22 +491,28 @@ directory's git remote.
 
 ### 4.1 Commands
 
-**`bubble list [--json] [-v|--verbose]`**
+**`bubble list [--json] [-v|--verbose] [-c|--clean]`**
 
 List active bubbles. Shows local containers, native workspaces, and remote
-bubbles. Verbose mode includes cleanness status.
+bubbles. Verbose mode includes IP and disk usage. Clean mode checks each
+container's cleanness status.
 
 JSON output format:
 ```json
 [
   {
     "name": "mathlib4-pr-12345",
-    "status": "running",
-    "org_repo": "leanprover-community/mathlib4",
-    "location": "local"
+    "state": "running",
+    "location": "local",
+    "created_at": "2026-03-12T10:30:00+00:00",
+    "last_used_at": "2026-03-12T10:30:00+00:00"
   }
 ]
 ```
+
+With `-v`/`--verbose`, adds `ipv4` (string) and `disk_usage` (bytes, number).
+With `-c`/`--clean`, adds `clean` (object with `status` bool and `reasons`
+list, or null on error).
 
 **`bubble pause NAME`**
 
@@ -478,12 +522,15 @@ entry has `remote_host` set.
 **`bubble pop NAME [-f|--force]`**
 
 Destroy a bubble permanently:
-1. Without `-f`: check if clean (see 4.2). Refuse if not clean.
-2. Delete the container (`incus delete --force`)
-3. Remove SSH config entry
-4. Remove auth proxy tokens
-5. Remove relay tokens
-6. Unregister from registry
+1. With `-f`: skip cleanness checks entirely.
+2. Without `-f`: check if clean (see 4.2). If clean, prompt for confirmation.
+   If dirty, show the reasons then prompt for confirmation. The user can
+   always confirm to proceed — `pop` does not refuse, it warns.
+3. Delete the container (`incus delete --force`)
+4. Remove SSH config entry
+5. Remove auth proxy tokens
+6. Remove relay tokens
+7. Unregister from registry
 
 **For native workspaces:** Delete the directory under `~/.bubble/native/`.
 Safety check: refuse to delete paths not under `~/.bubble/native/`.
@@ -517,13 +564,17 @@ A container is "clean" (safe to discard) when ALL of:
       "pr": 12345,
       "created_at": "2026-03-12T10:30:00+00:00",
       "base_image": "lean-v4.16.0",
-      "remote_host": "",
-      "native": false,
-      "native_path": ""
+      "remote_host": "user@example.com",
+      "native": true,
+      "native_path": "/home/user/.bubble/native/project"
     }
   }
 }
 ```
+
+**Always present:** `org_repo`, `branch`, `commit`, `pr`, `created_at`.
+**Conditionally present** (only written when truthy): `base_image`,
+`remote_host`, `native`, `native_path`.
 
 Registry modifications MUST use file locking to prevent concurrent corruption.
 Writes MUST be atomic (write to temp file, rename).
@@ -1010,9 +1061,17 @@ credentials = false
 Config is deep-merged with defaults — user settings override defaults, missing
 keys inherit defaults.
 
-**`bubble config get KEY`** — get a config value.
+Configuration is managed through dedicated subcommands rather than a generic
+get/set interface:
 
-**`bubble config set KEY VALUE`** — set a config value.
+- `bubble tools set TOOL yes|no|auto` — configure tool installation
+- `bubble claude credentials on|off` — toggle Claude credential mounting
+- `bubble codex credentials on|off` — toggle Codex credential mounting
+- `bubble security set NAME on|off|auto` — configure security settings
+- `bubble config set KEY VALUE` — set security settings (alias)
+- `bubble config lockdown` — disable all off-by-default security features
+- `bubble config accept-risks` — enable all on-by-default risk features
+- `bubble config symlink-claude-projects` — symlink Claude projects directory
 
 ---
 
@@ -1063,9 +1122,21 @@ network allowlist.
 
 ---
 
-## Diagnostics
+## Additional commands
 
-**`bubble doctor`** — check system health (Incus, Colima, SSH config, etc.)
+These commands support infrastructure management and are not core to the
+container lifecycle, but a complete implementation should include them:
+
+- `bubble doctor` — check system health (Incus, Colima, SSH config, etc.)
+- `bubble network apply NAME` — apply network allowlist to a container
+- `bubble network remove NAME` — remove network restrictions
+- `bubble automation install` — install periodic automation jobs
+- `bubble automation remove` — remove automation jobs
+- `bubble automation status` — show automation status
+- `bubble remote set-default HOST` — set default remote SSH host
+- `bubble remote clear-default` — clear default remote host
+- `bubble remote status` — show remote configuration and list remote bubbles
+- `bubble gh status` — show GitHub authentication status
 
 ---
 
