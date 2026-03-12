@@ -231,6 +231,8 @@ def test_security_cli_shows_posture(tmp_data_dir):
     assert "Quick presets" in result.output
     assert "bubble security permissive" in result.output
     assert "bubble security lockdown" in result.output
+    # Presets should appear after the settings, not before (#151)
+    assert result.output.index("Network") < result.output.index("Quick presets")
     # Display should use hyphenated forms
     assert "shared-cache" in result.output
     assert "relay" in result.output

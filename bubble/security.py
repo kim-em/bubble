@@ -210,13 +210,6 @@ def print_warnings(config: dict, notices=None):
 
 def print_security_posture(config: dict):
     """Print the full security posture grouped by category."""
-    # Preset commands
-    click.echo("Quick presets:")
-    click.echo("  bubble security permissive   Enable all conveniences")
-    click.echo("  bubble security default      Restore all to auto (defaults)")
-    click.echo("  bubble security lockdown     Disable everything risky")
-    click.echo()
-
     auto_count = 0
     for cat_name, cat_desc in CATEGORIES:
         cat_settings = [
@@ -252,6 +245,13 @@ def print_security_posture(config: dict):
             f"{auto_count} setting(s) still on 'auto'. "
             "A reminder will be shown on each bubble invocation until all are set."
         )
+
+    # Preset commands at the bottom so current state is visible first
+    click.echo()
+    click.echo("Quick presets:")
+    click.echo("  bubble security permissive   Enable all conveniences")
+    click.echo("  bubble security default      Restore all to auto (defaults)")
+    click.echo("  bubble security lockdown     Disable everything risky")
 
 
 def apply_preset_permissive(config: dict) -> list[str]:
