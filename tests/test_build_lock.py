@@ -3,10 +3,13 @@
 import threading
 import time
 
+import pytest
+
 from bubble.images.builder import (
     _ancestor_chain,
     _build_lock,
     build_image,
+    build_lean_toolchain_image,
     is_build_locked,
 )
 
@@ -108,11 +111,37 @@ def test_is_build_locked_true_when_held():
     t.join(timeout=5)
 
 
+def test_build_lean_toolchain_rejects_invalid_version(mock_runtime):
+    """build_lean_toolchain_image rejects versions that don't match the expected pattern."""
+    for bad in [
+        "nightly-2024-01-01",
+        "v4.16.0; rm -rf /",
+        "../../../etc/passwd",
+        "leanprover/lean4:v4.16.0",
+        "v4",
+        "v4.16",
+        "",
+        "hello",
+    ]:
+        with pytest.raises(ValueError, match="Invalid Lean toolchain version"):
+            build_lean_toolchain_image(mock_runtime, bad)
+
+
+def test_build_lean_toolchain_accepts_valid_version(mock_runtime, monkeypatch, tmp_data_dir):
+    """build_lean_toolchain_image accepts stable and RC versions."""
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
+    mock_runtime._images.add("lean")
+
+    build_lean_toolchain_image(mock_runtime, "v4.16.0")
+    assert mock_runtime.image_exists("lean-v4.16.0")
+
+    build_lean_toolchain_image(mock_runtime, "v4.16.0-rc2")
+    assert mock_runtime.image_exists("lean-v4.16.0-rc2")
+
+
 def test_build_lean_toolchain_lock(mock_runtime, monkeypatch, tmp_data_dir):
     """Lean toolchain builds also use build locks."""
     monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
-
-    from bubble.images.builder import build_lean_toolchain_image
 
     mock_runtime._images.add("lean")
 
