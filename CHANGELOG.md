@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.22 — 2026-03-12
+- Add heartbeat messages for slow image builds (#145)
+  - Prints `still building...` / `still installing tools...` to stderr every 10s after 5s of silence
+  - Automatically disabled for non-TTY output (piped, `--machine-readable`, CI)
+
 ## 0.6.21 — 2026-03-12
 - Hide `skill`, `claude`, `codex` from top-level help; hide `config security`, `config lockdown`, `config accept-risks` as deprecated aliases (#142)
   - All commands remain fully functional, just not listed in `--help`

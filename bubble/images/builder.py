@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from ..config import DATA_DIR, load_config
 from ..runtime.base import ContainerRuntime
+from ..spinner import heartbeat
 from ..tools import combined_tool_script, resolve_tools, tools_hash
 
 VSCODE_COMMIT_FILE = DATA_DIR / "vscode-commit"
@@ -410,7 +411,8 @@ def _install_tools_if_base(
         if vscode_commit and "vscode" in enabled:
             script = f"export VSCODE_COMMIT='{vscode_commit}'\n" + script
         print(f"  Installing tools: {', '.join(enabled)}")
-        runtime.exec(build_name, ["bash", "-c", script])
+        with heartbeat("  still installing tools..."):
+            runtime.exec(build_name, ["bash", "-c", script])
     return enabled
 
 
@@ -503,7 +505,8 @@ def build_image(
 
             # Run setup script
             script = (SCRIPTS_DIR / spec["script"]).read_text()
-            runtime.exec(build_name, ["bash", "-c", script])
+            with heartbeat(f"  still building {image_name} image..."):
+                runtime.exec(build_name, ["bash", "-c", script])
 
             # Install configured tools (only on base image — derived images inherit them)
             enabled_tools = _install_tools_if_base(runtime, build_name, image_name)
@@ -601,7 +604,8 @@ def build_lean_toolchain_image(
 
             script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
             script = f"export LEAN_TOOLCHAIN='{version}'\n" + script
-            runtime.exec(build_name, ["bash", "-c", script])
+            with heartbeat(f"  still building {alias} image..."):
+                runtime.exec(build_name, ["bash", "-c", script])
 
             # Run user customization script as the final build step
             _run_customize_script(runtime, build_name)
