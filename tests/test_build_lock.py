@@ -230,15 +230,30 @@ def test_derived_build_holds_parent_lock(mock_runtime, monkeypatch, tmp_data_dir
 
     order = []
     derived_building = threading.Event()
-    parent_started = threading.Event()
+    parent_lock_requested = threading.Event()
+
+    # Instrument fcntl.flock to signal when the exclusive lock on base is
+    # actually requested, replacing the racy sleep(0.1) that assumed the
+    # parent thread would reach the lock within a fixed time window.
+    import fcntl
+
+    original_flock = fcntl.flock
+
+    def signaling_flock(fd, operation):
+        if (
+            not (operation & fcntl.LOCK_SH)
+            and hasattr(fd, "name")
+            and fd.name.endswith("base.lock")
+        ):
+            parent_lock_requested.set()
+        return original_flock(fd, operation)
 
     def slow_derived_wait(*a, **kw):
         """Simulate a slow derived build that holds the parent lock."""
         order.append("derived-building")
         derived_building.set()
-        # Wait until the parent rebuild has started trying to acquire its lock
-        parent_started.wait(timeout=5)
-        time.sleep(0.1)  # Give parent time to block on the lock
+        # Wait until the parent is actually blocked on the exclusive lock
+        parent_lock_requested.wait(timeout=5)
         order.append("derived-done")
 
     def slow_parent_wait(*a, **kw):
@@ -253,7 +268,7 @@ def test_derived_build_holds_parent_lock(mock_runtime, monkeypatch, tmp_data_dir
 
     def rebuild_base():
         derived_building.wait(timeout=5)
-        parent_started.set()
+        monkeypatch.setattr("bubble.images.builder.fcntl.flock", signaling_flock)
         monkeypatch.setattr("bubble.images.builder.wait_for_container", slow_parent_wait)
         # Delete old base to force rebuild
         mock_runtime._images.discard("base")
