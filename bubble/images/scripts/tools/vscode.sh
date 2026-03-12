@@ -255,12 +255,13 @@ try:
         os.rmdir(nested)
     print(f"  Installed to {ext_dir}")
 
-    # Append to extensions.json manifest
+    # Append to extensions.json manifest (remove any stale entries first)
     manifest_path = os.path.join(EXTENSIONS_DIR, "extensions.json")
     entries = []
     if os.path.exists(manifest_path):
         with open(manifest_path) as mf:
             entries = json.load(mf)
+    entries = [e for e in entries if e.get("identifier", {}).get("id") != EXT_ID]
     rel_location = f"{EXT_ID}-{version}"
     entries.append({
         "identifier": {"id": EXT_ID},
