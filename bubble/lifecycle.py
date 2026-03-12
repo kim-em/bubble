@@ -47,6 +47,7 @@ def register_bubble(
     remote_host: str = "",
     native: bool = False,
     native_path: str = "",
+    project_dir: str = "",
 ):
     """Record a bubble's creation in the registry."""
     with _registry_lock():
@@ -65,6 +66,8 @@ def register_bubble(
         if native:
             entry["native"] = True
             entry["native_path"] = native_path
+        if project_dir:
+            entry["project_dir"] = project_dir
         registry["bubbles"][name] = entry
         _save_registry(registry)
 

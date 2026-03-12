@@ -69,6 +69,7 @@ def finalize_bubble(
         commit=commit,
         pr=int(t.ref) if t.kind == "pr" else 0,
         base_image=image_name,
+        project_dir=project_dir,
     )
 
     workspace_file = hook.workspace_file(project_dir) if hook else None

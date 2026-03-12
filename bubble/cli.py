@@ -319,6 +319,7 @@ def _open_remote(
         branch=result.get("branch", ""),
         base_image=result.get("image", ""),
         remote_host=remote_host.spec_string(),
+        project_dir=project_dir,
     )
 
     click.echo(f"Bubble '{name}' ready on {remote_host.ssh_destination}.")

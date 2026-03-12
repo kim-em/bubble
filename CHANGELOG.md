@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.15
+
+- Store `project_dir` in registry at creation time instead of guessing via `ls` at reattach (#131)
+  - `detect_project_dir` now looks up the registry first, falling back to the `ls` heuristic for pre-existing bubbles
+
 ## 0.6.14 — 2026-03-12
 - Fix `symlink-claude-projects`: abort on file conflicts instead of deleting skipped files (#118)
   - Merge now tracks skipped files and aborts if any conflicts remain, preventing data loss

@@ -58,3 +58,15 @@ class TestRegistry:
         info = get_bubble_info("local-bubble")
         assert info is not None
         assert "remote_host" not in info
+
+    def test_register_with_project_dir(self, tmp_data_dir):
+        register_bubble("dir-bubble", "org/repo", project_dir="/home/user/myrepo")
+        info = get_bubble_info("dir-bubble")
+        assert info is not None
+        assert info["project_dir"] == "/home/user/myrepo"
+
+    def test_register_without_project_dir(self, tmp_data_dir):
+        register_bubble("no-dir-bubble", "org/repo")
+        info = get_bubble_info("no-dir-bubble")
+        assert info is not None
+        assert "project_dir" not in info
