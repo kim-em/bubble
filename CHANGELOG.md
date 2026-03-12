@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.8 — 2026-03-12
+- Support multiple targets in a single command (#36)
+  - `bubble 12 13 14` opens three bubbles at once
+  - All flags apply uniformly to each target
+  - Errors on individual targets don't prevent others from proceeding
+  - `--name` and `-b/--new-branch` are rejected with multiple targets (ambiguous)
+
 ## 0.6.7 — 2026-03-12
 - Fix editable install finder breaking tests in worktrees (#104)
   - Add root `conftest.py` that prepends the project root to `sys.path`
