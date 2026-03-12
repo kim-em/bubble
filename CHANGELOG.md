@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.21 — 2026-03-12
+- Hide `skill`, `claude`, `codex` from top-level help; hide `config security`, `config lockdown`, `config accept-risks` as deprecated aliases (#142)
+  - All commands remain fully functional, just not listed in `--help`
+  - Reduces visual noise: 15+ command groups → 12 visible in top-level help
+
 ## 0.6.20 — 2026-03-12
 - Normalize CLI setting names to hyphens (#143)
   - `bubble security set` and `bubble config set` now accept hyphenated names (e.g. `github-auth`, `claude-credentials`)
