@@ -933,8 +933,10 @@ Similar to Claude. Config: `config.toml` (read-only). Credentials: `auth.json`
 
 ### 10.4 GitHub auth proxy
 
-An HTTP reverse proxy on the host provides repo-scoped GitHub authentication.
-The host's GitHub token never enters the container.
+An HTTP reverse proxy on the host provides GitHub authentication without
+exposing the host's token. Git and REST API requests are repo-scoped;
+GraphQL requests are operation-validated (queries vs mutations) but not
+repo-scoped — see access levels below.
 
 **Port:** 7654 (default, configurable).
 
@@ -942,7 +944,7 @@ The host's GitHub token never enters the container.
 1. Container git is configured with `url.insteadOf` to route HTTPS through the proxy
 2. Container sends request with `X-Bubble-Token` header
 3. Proxy validates token against `~/.bubble/auth-tokens.json` (mode 0600)
-4. Proxy checks path matches the allowed `owner/repo`
+4. For git/REST: proxy checks path matches the allowed `owner/repo`. For GraphQL: proxy validates operation type (queries allowed at level 3, mutations require level 4) but does not scope to a specific repo
 5. Proxy adds `Authorization: token <real-token>` header
 6. Proxy forwards to `https://github.com`
 7. Response returned to container
@@ -959,6 +961,19 @@ The host's GitHub token never enters the container.
 - `GET /git/{owner}/{repo}[.git]/info/refs?service=git-receive-pack`
 - `POST /git/{owner}/{repo}[.git]/git-upload-pack`
 - `POST /git/{owner}/{repo}[.git]/git-receive-pack`
+
+**Access levels (per-container):**
+| Level | Description | Scope |
+|-------|-------------|-------|
+| 1 | Git smart HTTP only (push/pull) | Repo-scoped |
+| 2 | Git + REST API read-only | Repo-scoped (REST paths validated against `/repos/{owner}/{repo}/...`) |
+| 3 (default) | Git + gh read-only (REST read + GraphQL queries) | Git and REST are repo-scoped; **GraphQL is account-wide** — queries can read any data the host token can access |
+| 4 | Git + gh read-write (REST + GraphQL + mutations) | Git and REST are repo-scoped; **GraphQL queries and mutations are account-wide** |
+
+> **Note:** GitHub's GraphQL API does not support path-based scoping.
+> At the default level 3, a container can query any repository, org membership,
+> or user data readable by the host token. To restrict containers to git-only
+> access, use `bubble security set github-api off`.
 
 **Security:**
 - Path canonicalization: reject encoded separators, dot-segments, duplicate slashes
@@ -1090,7 +1105,8 @@ values: `auto`, `on`, `off`.
 | `git-manifest-trust` | on | Auto-clone Lake manifest dependencies |
 | `claude-credentials` | off | Mount Claude credentials into containers |
 | `codex-credentials` | off | Mount Codex credentials into containers |
-| `github-auth` | on | Repo-scoped GitHub auth via proxy |
+| `github-auth` | on | Repo-scoped GitHub auth via proxy (git push/pull) |
+| `github-api` | on | GitHub API access via auth proxy: REST is repo-scoped; **GraphQL queries are read-only but account-wide** (can read any repo the host token can access). Set to `off` for git-only, or `read-write` for mutations |
 | `relay` | on | Bubble-in-bubble relay |
 | `host-key-trust` | on | Disable SSH StrictHostKeyChecking |
 
