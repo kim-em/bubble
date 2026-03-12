@@ -15,7 +15,7 @@ bubble https://github.com/leanprover-community/mathlib4/pull/35219
 bubble list
 ```
 
-See [Examples](#examples) for branches, local repos, issues, remote/cloud, and non-interactive use.
+See [Examples](#examples) for branches, local repos, issues, remote, and non-interactive use.
 
 ## Examples
 
@@ -61,7 +61,7 @@ bubble pause mathlib4-pr-35219
 bubble pop mathlib4-pr-35219
 ```
 
-### Development Install
+## Development Install
 
 ```bash
 # Install from GitHub
