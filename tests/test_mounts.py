@@ -379,7 +379,7 @@ class TestClaudeConfigMounts:
         (claude_dir / "commands").mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts()
 
@@ -405,7 +405,7 @@ class TestClaudeConfigMounts:
         (claude_dir / "commands").mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts(include_credentials=True)
 
@@ -419,7 +419,7 @@ class TestClaudeConfigMounts:
         claude_dir.mkdir()
         (claude_dir / "CLAUDE.md").write_text("# test")
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts()
 
@@ -428,7 +428,7 @@ class TestClaudeConfigMounts:
 
     def test_no_claude_dir(self, tmp_path, monkeypatch):
         """Returns empty when ~/.claude doesn't exist."""
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", tmp_path / "nonexistent")
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", tmp_path / "nonexistent")
 
         mounts = claude_config_mounts()
 
@@ -440,7 +440,7 @@ class TestClaudeConfigMounts:
         claude_dir.mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts()
 
@@ -454,7 +454,7 @@ class TestClaudeConfigMounts:
         claude_dir.mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts(include_credentials=False)
 
@@ -464,7 +464,7 @@ class TestClaudeConfigMounts:
         """has_claude_credentials() detects credential files."""
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         assert not has_claude_credentials()
 
@@ -481,7 +481,7 @@ class TestClaudeConfigMounts:
         # Symlink from inside ~/.claude to outside
         (claude_dir / "CLAUDE.md").symlink_to(secret)
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts()
 
@@ -495,7 +495,7 @@ class TestClaudeConfigMounts:
         real.write_text("# config")
         (claude_dir / "CLAUDE.md").symlink_to(real)
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts()
 
@@ -511,7 +511,7 @@ class TestClaudeConfigMounts:
         (claude_dir / "history.jsonl").write_text("")
         (claude_dir / "todos").mkdir()
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts()
 
@@ -523,7 +523,7 @@ class TestClaudeConfigMounts:
         claude_dir.mkdir()
         (claude_dir / "CLAUDE.md").write_text("# test")
 
-        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
 
         mounts = claude_config_mounts()
 
@@ -721,7 +721,7 @@ class TestCodexConfigMounts:
         (codex_dir / "config.toml").write_text("[settings]")
         (codex_dir / "auth.json").write_text("{}")
 
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         mounts = codex_config_mounts()
 
@@ -739,7 +739,7 @@ class TestCodexConfigMounts:
         (codex_dir / "config.toml").write_text("[settings]")
         (codex_dir / "auth.json").write_text("{}")
 
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         mounts = codex_config_mounts(include_credentials=True)
 
@@ -754,7 +754,7 @@ class TestCodexConfigMounts:
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("[settings]")
 
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         mounts = codex_config_mounts(include_credentials=True)
 
@@ -763,7 +763,7 @@ class TestCodexConfigMounts:
 
     def test_no_codex_dir(self, tmp_path, monkeypatch):
         """Returns empty when ~/.codex doesn't exist."""
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", tmp_path / "nonexistent")
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", tmp_path / "nonexistent")
 
         mounts = codex_config_mounts()
 
@@ -775,7 +775,7 @@ class TestCodexConfigMounts:
         codex_dir.mkdir()
         (codex_dir / "auth.json").write_text("{}")
 
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         mounts = codex_config_mounts()
 
@@ -789,7 +789,7 @@ class TestCodexConfigMounts:
         codex_dir.mkdir()
         (codex_dir / "auth.json").write_text("{}")
 
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         mounts = codex_config_mounts(include_credentials=False)
 
@@ -799,7 +799,7 @@ class TestCodexConfigMounts:
         """has_codex_credentials() detects credential files."""
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         assert not has_codex_credentials()
 
@@ -816,7 +816,7 @@ class TestCodexConfigMounts:
         # Symlink from inside ~/.codex to outside
         (codex_dir / "config.toml").symlink_to(secret)
 
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         mounts = codex_config_mounts()
 
@@ -830,7 +830,7 @@ class TestCodexConfigMounts:
         real.write_text("[settings]")
         (codex_dir / "config.toml").symlink_to(real)
 
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         mounts = codex_config_mounts()
 
@@ -843,7 +843,7 @@ class TestCodexConfigMounts:
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("[settings]")
 
-        monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
 
         mounts = codex_config_mounts()
 
