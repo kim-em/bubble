@@ -153,7 +153,7 @@ class TestGeneratePrPrompt:
             assert "This PR adds feature X to the system." in prompt
             assert "owner/repo" in prompt
             assert "feature-x" in prompt
-            assert "gh pr checks 42" in prompt
+            assert "CI status" in prompt
 
     def test_pr_fetch_failure(self):
         with patch("bubble.claude.subprocess.run") as mock_run:

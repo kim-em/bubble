@@ -20,7 +20,7 @@ def test_build_lock_prevents_concurrent_builds(mock_runtime, monkeypatch, tmp_da
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no"}
     save_config(config)
 
     mock_runtime._images.discard("base")
@@ -225,7 +225,7 @@ def test_derived_build_holds_parent_lock(mock_runtime, monkeypatch, tmp_data_dir
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no"}
     save_config(config)
 
     order = []
@@ -312,7 +312,7 @@ def test_grandchild_build_holds_ancestor_locks(mock_runtime, monkeypatch, tmp_da
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no"}
+    config["tools"] = {"claude": "no", "codex": "no"}
     save_config(config)
 
     # Temporarily add a grandchild image for this test

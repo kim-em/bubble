@@ -226,10 +226,10 @@ def register_settings_commands(main):
     def tools_update():
         """Fetch latest upstream versions and update pinned versions.
 
-        Checks nodejs.org, npmjs.org, and cli.github.com for the latest
-        versions and checksums, then updates the local pins. This is a
-        maintainer workflow — the updated pins should be committed and
-        released so users get the new versions via package upgrade.
+        Checks nodejs.org and npmjs.org for the latest versions and
+        checksums, then updates the local pins. This is a maintainer
+        workflow — the updated pins should be committed and released so
+        users get the new versions via package upgrade.
         """
         from ..tools import fetch_latest_pins, load_pins, save_pins
 

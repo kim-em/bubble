@@ -41,7 +41,7 @@ bubble/
 │       ├── base.sh     # Ubuntu 24.04 + git + ssh + build-essential (user: "user")
 │       ├── lean.sh     # Fallback elan install (skipped if elan tool already installed)
 │       ├── lean-toolchain.sh  # Installs one specific Lean toolchain (for versioned images)
-│       └── tools/      # Per-tool install scripts (claude.sh, codex.sh, elan.sh, emacs.sh, gh.sh, neovim.sh, vscode.sh)
+│       └── tools/      # Per-tool install scripts (claude.sh, codex.sh, elan.sh, emacs.sh, neovim.sh, vscode.sh)
 ```
 
 ## Key Design Decisions
@@ -72,7 +72,7 @@ Images are defined in `builder.py`'s `IMAGES` dict with script and parent refere
 Tools are installed in container images via the `[tools]` config section. Each tool has a self-contained install script in `bubble/images/scripts/tools/` and is registered in the `TOOLS` dict in `tools.py` with its script filename, host detection command, required network domains, and a priority for install ordering. Tools include:
 
 - **Language tools** (priority 10): `elan` — auto-detected if elan is on the host
-- **General tools** (priority 50): `claude`, `codex`, `gh` — auto-detected via host commands
+- **General tools** (priority 50): `claude`, `codex` — auto-detected via host commands
 - **Editors** (priority 90): `vscode`, `emacs`, `neovim` — driven by the `editor` config key
 
 Config values are `"yes"`, `"no"`, or `"auto"` (default). Editor tools are special: the configured editor (default: vscode) is treated as `"yes"` unless explicitly `"no"` in `[tools]`. Tools are installed into the `base` image during `build_image("base")` in priority order (language tools before editors, so vscode can detect elan and install Lean extensions). When the resolved tool set changes (detected via a content-aware hash stored in `~/.bubble/tools-hash`), the `base` image is rebuilt synchronously, and stale derived images are purged.

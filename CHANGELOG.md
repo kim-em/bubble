@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.6 — 2026-03-12
+- Remove `gh` from the pluggable tools system entirely (#82)
+  - With the auth proxy (#71) keeping the GitHub token out of containers, `gh` inside containers is misleading
+  - Removes the tool registry entry, install script, and `GH_GPG_KEY_SHA256` pin
+  - Reduces base image build time and size
+
 ## 0.6.5 — 2026-03-12
 - Forward Codex/OpenAI credentials into containers (#96)
   - `--codex-credentials` / `--no-codex-credentials` flag on `bubble open`

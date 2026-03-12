@@ -18,25 +18,24 @@ def test_available_tools():
     tools = available_tools()
     assert "claude" in tools
     assert "codex" in tools
-    assert "gh" in tools
     assert "elan" in tools
     assert "vscode" in tools
     assert "emacs" in tools
     assert "neovim" in tools
+    assert "gh" not in tools
     assert tools == sorted(tools)
 
 
 def test_resolve_tools_yes():
-    config = {"tools": {"claude": "yes", "codex": "yes", "gh": "yes"}, "editor": "shell"}
+    config = {"tools": {"claude": "yes", "codex": "yes"}, "editor": "shell"}
     enabled = resolve_tools(config)
     assert "claude" in enabled
     assert "codex" in enabled
-    assert "gh" in enabled
 
 
 def test_resolve_tools_no():
     config = {
-        "tools": {"claude": "no", "codex": "no", "gh": "no", "elan": "no"},
+        "tools": {"claude": "no", "codex": "no", "elan": "no"},
         "editor": "shell",
     }
     enabled = resolve_tools(config)
@@ -44,11 +43,10 @@ def test_resolve_tools_no():
 
 
 def test_resolve_tools_auto_with_host_cmd(monkeypatch):
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     config = {"tools": {}, "editor": "shell"}
     enabled = resolve_tools(config)
-    assert "gh" in enabled
-    assert "claude" not in enabled
+    assert "claude" in enabled
     assert "codex" not in enabled
 
 
@@ -60,12 +58,12 @@ def test_resolve_tools_auto_nothing_on_host(monkeypatch):
 
 
 def test_resolve_tools_mixed(monkeypatch):
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
-    config = {"tools": {"claude": "yes", "codex": "no"}, "editor": "shell"}
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
+    config = {"tools": {"codex": "yes", "elan": "no"}, "editor": "shell"}
     enabled = resolve_tools(config)
+    assert "codex" in enabled
     assert "claude" in enabled
-    assert "gh" in enabled
-    assert "codex" not in enabled
+    assert "elan" not in enabled
 
 
 def test_resolve_tools_default_is_auto(monkeypatch):
@@ -95,20 +93,20 @@ def test_resolve_tools_priority_ordering(monkeypatch):
 
 
 def test_tools_hash_stable():
-    h1 = tools_hash(["claude", "gh"])
-    h2 = tools_hash(["claude", "gh"])
+    h1 = tools_hash(["claude", "codex"])
+    h2 = tools_hash(["claude", "codex"])
     assert h1 == h2
 
 
 def test_tools_hash_order_independent():
-    h1 = tools_hash(["gh", "claude"])
-    h2 = tools_hash(["claude", "gh"])
+    h1 = tools_hash(["codex", "claude"])
+    h2 = tools_hash(["claude", "codex"])
     assert h1 == h2
 
 
 def test_tools_hash_different_sets():
     h1 = tools_hash(["claude"])
-    h2 = tools_hash(["gh"])
+    h2 = tools_hash(["codex"])
     assert h1 != h2
 
 
@@ -119,20 +117,20 @@ def test_tools_hash_empty():
 
 
 def test_tool_script_reads_file():
-    script = tool_script("gh")
-    assert "gh" in script
+    script = tool_script("claude")
+    assert "claude" in script.lower()
     assert "#!/bin/bash" in script
 
 
 def test_tool_network_domains():
-    domains = tool_network_domains(["gh"])
-    assert "cli.github.com" in domains
+    domains = tool_network_domains(["claude"])
+    assert "registry.npmjs.org" in domains
 
 
 def test_tool_network_domains_combined():
-    domains = tool_network_domains(["claude", "gh"])
+    domains = tool_network_domains(["claude", "codex"])
     assert "registry.npmjs.org" in domains
-    assert "cli.github.com" in domains
+    assert "nodejs.org" in domains
 
 
 def test_tool_network_domains_no_duplicates():
@@ -153,14 +151,13 @@ def test_tool_runtime_domains():
 
 
 def test_tool_runtime_domains_combined():
-    domains = tool_runtime_domains(["claude", "gh"])
+    domains = tool_runtime_domains(["claude", "codex"])
     assert "api.anthropic.com" in domains
-    assert "api.github.com" in domains
-    assert "github.com" in domains
+    assert "api.openai.com" in domains
 
 
 def test_tool_runtime_domains_no_duplicates():
-    domains = tool_runtime_domains(["claude", "gh"])
+    domains = tool_runtime_domains(["claude", "codex"])
     # Each domain should appear exactly once
     assert len(domains) == len(set(domains))
 
@@ -175,9 +172,9 @@ def test_combined_tool_script_none_when_empty():
 
 
 def test_combined_tool_script_includes_all():
-    script = combined_tool_script(["claude", "gh"])
-    assert "claude" in script
-    assert "gh" in script
+    script = combined_tool_script(["claude", "codex"])
+    assert "claude" in script.lower()
+    assert "codex" in script.lower()
     assert "#!/bin/bash" in script
 
 
@@ -191,7 +188,6 @@ def test_load_pins():
     assert "NODE_SHA256_ARM64" in pins
     assert "CLAUDE_CODE_VERSION" in pins
     assert "CODEX_VERSION" in pins
-    assert "GH_GPG_KEY_SHA256" in pins
 
 
 def test_pins_are_nonempty():
@@ -210,9 +206,6 @@ def test_tool_script_injects_pins():
     script = tool_script("codex")
     assert "CODEX_VERSION=" in script
 
-    script = tool_script("gh")
-    assert "GH_GPG_KEY_SHA256=" in script
-
 
 def test_tool_script_uses_pinned_npm_versions():
     """Verify scripts install specific npm package versions, not unpinned."""
@@ -230,25 +223,18 @@ def test_tool_script_verifies_node_checksum():
     assert "nodejs.org/dist" in script
 
 
-def test_tool_script_verifies_gpg_key():
-    """Verify gh.sh checks GPG key checksum."""
-    script = tool_script("gh")
-    assert "sha256sum -c" in script
-    assert "GH_GPG_KEY_SHA256" in script
-
-
 def test_tools_hash_changes_with_pins(tmp_path, monkeypatch):
     """Verify that changing pins changes the tools hash."""
-    h1 = tools_hash(["gh"])
+    h1 = tools_hash(["claude"])
 
     # Monkeypatch load_pins to return modified pins
     def patched_load():
         pins = dict(load_pins())
-        pins["GH_GPG_KEY_SHA256"] = "0" * 64
+        pins["CLAUDE_CODE_VERSION"] = "0.0.0"
         return pins
 
     monkeypatch.setattr("bubble.tools.load_pins", patched_load)
-    h2 = tools_hash(["gh"])
+    h2 = tools_hash(["claude"])
     assert h1 != h2
 
 
@@ -262,7 +248,6 @@ def test_tools_list_cli(tmp_data_dir):
     result = runner.invoke(main, ["tools", "list"])
     assert result.exit_code == 0
     assert "claude" in result.output
-    assert "gh" in result.output
     assert "TOOL" in result.output
 
 
@@ -270,15 +255,15 @@ def test_tools_set_cli(tmp_data_dir):
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["tools", "set", "gh", "yes"])
+    result = runner.invoke(main, ["tools", "set", "claude", "yes"])
     assert result.exit_code == 0
-    assert "Set gh = yes" in result.output
+    assert "Set claude = yes" in result.output
 
     # Verify it was saved
     from bubble.config import load_config
 
     config = load_config()
-    assert config["tools"]["gh"] == "yes"
+    assert config["tools"]["claude"] == "yes"
 
 
 def test_tools_set_unknown_tool(tmp_data_dir):
@@ -294,12 +279,12 @@ def test_tools_set_invalid_value(tmp_data_dir):
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["tools", "set", "gh", "maybe"])
+    result = runner.invoke(main, ["tools", "set", "claude", "maybe"])
     assert result.exit_code != 0
 
 
 def test_tools_status_cli(tmp_data_dir, monkeypatch):
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     from bubble.cli import main
 
     runner = CliRunner()
@@ -313,12 +298,12 @@ def test_tools_config_roundtrip(tmp_data_dir):
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "yes", "gh": "no"}
+    config["tools"] = {"claude": "yes", "codex": "no"}
     save_config(config)
 
     reloaded = load_config()
     assert reloaded["tools"]["claude"] == "yes"
-    assert reloaded["tools"]["gh"] == "no"
+    assert reloaded["tools"]["codex"] == "no"
 
 
 def test_tools_update_cli(tmp_data_dir, monkeypatch):
@@ -359,7 +344,7 @@ def test_tools_update_no_changes(tmp_data_dir, monkeypatch):
 
 def test_build_image_installs_tools(mock_runtime, monkeypatch, tmp_data_dir):
     """Verify that building the base image runs tool install scripts."""
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
 
@@ -374,7 +359,7 @@ def test_build_image_installs_tools(mock_runtime, monkeypatch, tmp_data_dir):
     assert len(exec_calls) >= 2
     # The last exec before stop should be the tools script
     tool_exec = exec_calls[-1]
-    assert "gh" in tool_exec[2][-1]  # script content contains gh
+    assert "claude" in tool_exec[2][-1].lower()  # script content contains claude
 
 
 def test_build_image_no_tools_when_none_enabled(mock_runtime, monkeypatch, tmp_data_dir):
@@ -387,7 +372,7 @@ def test_build_image_no_tools_when_none_enabled(mock_runtime, monkeypatch, tmp_d
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "gh": "no", "elan": "no"}
+    config["tools"] = {"claude": "no", "codex": "no", "elan": "no"}
     config["editor"] = "shell"
     save_config(config)
 
@@ -420,7 +405,7 @@ def test_build_nonbase_image_skips_tools(mock_runtime, monkeypatch, tmp_data_dir
 
 def test_tools_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
     """Verify that the tools hash file is written after building base."""
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
 
@@ -438,17 +423,17 @@ def test_tools_hash_includes_script_content(tmp_path):
     """Verify that hash changes when script content changes."""
     # Same tool names but we can't easily change script content in tests,
     # so just verify the hash is deterministic and non-trivial
-    h1 = tools_hash(["gh"])
-    h2 = tools_hash(["gh"])
+    h1 = tools_hash(["claude"])
+    h2 = tools_hash(["claude"])
     assert h1 == h2
-    # Hash of gh should differ from hash of claude-code (different scripts)
-    h3 = tools_hash(["claude"])
+    # Hash of claude should differ from hash of codex (different scripts)
+    h3 = tools_hash(["codex"])
     assert h1 != h3
 
 
 def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_dir):
     """Verify that building base with tools deletes all derived images recursively."""
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
 
@@ -468,7 +453,7 @@ def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_di
 
 def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, tmp_data_dir):
     """Verify that building base also purges dynamic toolchain images (lean-v4.x.y)."""
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "gh")
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
 

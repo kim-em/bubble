@@ -148,12 +148,11 @@ default_host = ""        # e.g. "user@myserver" or "user@host:2222"
 [tools]
 claude = "auto"     # "yes" | "no" | "auto" (detect from host)
 codex = "auto"
-gh = "auto"
 ```
 
 ### Tools
 
-Tools like Claude Code, GitHub CLI, and OpenAI Codex can be installed in container images. Each tool defaults to `"auto"`, which installs it if the corresponding command is found on your host.
+Tools like Claude Code and OpenAI Codex can be installed in container images. Each tool defaults to `"auto"`, which installs it if the corresponding command is found on your host.
 
 ```bash
 bubble tools list                  # show all tools and their settings
@@ -166,7 +165,7 @@ When the resolved tool set changes, a background image rebuild is triggered auto
 
 ### Claude Code Integration
 
-When a bubble is opened for a GitHub issue with VS Code (the default editor), bubble can set up [Claude Code](https://claude.ai/claude-code) as an autonomous coding agent. It uses the `gh` CLI to fetch the issue title, body, and comments, generates a prompt, and injects a VS Code task that launches Claude Code when the workspace opens.
+When a bubble is opened for a GitHub issue with VS Code (the default editor), bubble can set up [Claude Code](https://claude.ai/claude-code) as an autonomous coding agent. It fetches the issue title, body, and comments via the GitHub API, generates a prompt, and injects a VS Code task that launches Claude Code when the workspace opens.
 
 ```bash
 # Creates a containerized environment; when VS Code opens, Claude starts working on the issue
@@ -181,7 +180,7 @@ You can also provide a custom prompt for any bubble via the `BUBBLE_CLAUDE_PROMP
 BUBBLE_CLAUDE_PROMPT="Refactor the parser module" bubble leanprover/lean4
 ```
 
-Requirements: Claude Code must be installed in the container (see tool settings above), the `gh` CLI must be available on the host, and the default VS Code editor must be used. With `--shell` or `--no-interactive`, the prompt is not injected. If `gh` is unavailable or the API call fails, bubble proceeds without injecting a prompt.
+Requirements: Claude Code must be installed in the container (see tool settings above), the `gh` CLI must be available on the host (for fetching issue/PR metadata), and the default VS Code editor must be used. With `--shell` or `--no-interactive`, the prompt is not injected. If `gh` is unavailable or the API call fails, bubble proceeds without injecting a prompt.
 
 ## Hetzner Cloud
 
