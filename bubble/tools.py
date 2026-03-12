@@ -189,16 +189,6 @@ def tool_script(name: str) -> str:
     return preamble + "\n" + script
 
 
-def tool_network_domains(enabled_tools: list[str]) -> list[str]:
-    """Return extra network domains needed to install the given tools."""
-    domains = []
-    for name in enabled_tools:
-        for d in TOOLS[name].get("network_domains", []):
-            if d not in domains:
-                domains.append(d)
-    return domains
-
-
 def tool_runtime_domains(enabled_tools: list[str]) -> list[str]:
     """Return network domains needed at runtime by the given tools.
 

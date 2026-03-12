@@ -46,11 +46,6 @@ class Notices:
     def __init__(self):
         self._printed = False
 
-    @property
-    def has_output(self) -> bool:
-        """Whether any notice group has been started."""
-        return self._printed
-
     def begin(self):
         """Start a new notice group, printing a separator if needed."""
         if self._printed:
