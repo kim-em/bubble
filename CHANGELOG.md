@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.10 — 2026-03-12
+- Support `bubble -b branch_name` without explicit target (#99)
+  - Infers owner/repo from current directory's git remote when `-b` is used without a target
+  - `bubble -b my_branch` now works like `bubble -b my_branch owner/repo`
+  - `bubble -b my_branch --base some_branch` also works without an explicit target
+
 ## 0.6.9 — 2026-03-12
 - Make relay default to on in auto mode (#102)
 

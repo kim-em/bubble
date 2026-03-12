@@ -102,9 +102,14 @@ class BubbleGroup(click.Group):
         This supports both `bubble TARGET` and `bubble --ssh HOST TARGET`.
         Only the first non-option token is checked, so that targets like
         `list` or `pause` in later positions don't hijack routing.
+        Also handles `bubble -b branch_name` (options only, no target).
         """
         first_positional = next((a for a in args if not a.startswith("-")), None)
-        if args and first_positional is not None and first_positional not in self.commands:
+        has_branch_flag = "-b" in args or "--new-branch" in args
+        if args and (
+            (first_positional is not None and first_positional not in self.commands)
+            or has_branch_flag
+        ):
             args = ["open"] + args
         return super().parse_args(ctx, args)
 
@@ -371,7 +376,7 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
 # `bubble TARGET`. It exists as an explicit subcommand because remote.py calls
 # `bubble open --no-interactive --machine-readable` on remote hosts.
 @main.command("open", hidden=True)
-@click.argument("targets", nargs=-1, required=True)
+@click.argument("targets", nargs=-1)
 @click.option(
     "--editor",
     "editor_choice",
@@ -498,6 +503,21 @@ def open_cmd(
     claude_prompt_stdin,
 ):
     """Open a bubble for one or more targets (GitHub URL, repo, local path, or PR number)."""
+    # When -b is used without an explicit target, infer owner/repo from cwd
+    if not targets:
+        if new_branch:
+            from .target import _git_repo_info
+
+            try:
+                owner, repo, _ = _git_repo_info(".")
+                targets = (f"{owner}/{repo}",)
+            except TargetParseError as e:
+                click.echo(str(e), err=True)
+                sys.exit(1)
+        else:
+            click.echo("Error: missing target. Usage: bubble TARGET [OPTIONS]", err=True)
+            sys.exit(1)
+
     # Reject options that are ambiguous with multiple targets
     if len(targets) > 1:
         if custom_name:
