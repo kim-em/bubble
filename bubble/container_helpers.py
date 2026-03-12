@@ -136,7 +136,18 @@ def apply_network(
 
 
 def detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
-    """Detect the project directory inside a container."""
+    """Detect the project directory inside a container.
+
+    Looks up the registry first; falls back to the ls heuristic for
+    pre-existing bubbles that don't have project_dir stored.
+    """
+    from .lifecycle import get_bubble_info
+
+    info = get_bubble_info(name)
+    if info and info.get("project_dir"):
+        return info["project_dir"]
+
+    # Fallback for legacy bubbles without project_dir in registry
     try:
         return (
             runtime.exec(name, ["bash", "-c", "ls -d /home/user/*/ 2>/dev/null | head -1"])
