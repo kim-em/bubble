@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from .lifecycle import load_registry, prune_stale_entries
+from .lifecycle import load_registry
 from .output import detail, step
 from .runtime.base import ContainerRuntime
 from .security import filter_github_domains, is_enabled
@@ -200,7 +200,6 @@ def find_existing_container(
 ) -> str | None:
     """Find an existing container matching the target. Returns name or None."""
     containers = {c.name for c in runtime.list_containers()}
-    prune_stale_entries(containers)
 
     # Check if raw target string matches a container name
     if target_str in containers:

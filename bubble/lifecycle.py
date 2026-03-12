@@ -105,8 +105,13 @@ def prune_stale_entries(live_containers: set[str]) -> list[str]:
                 registry["bubbles"].pop(name, None)
             _save_registry(registry)
 
+    # Best-effort SSH config cleanup (outside the lock, non-fatal)
+    if stale:
+        try:
             from .vscode import remove_ssh_config
 
             for name in stale:
                 remove_ssh_config(name)
+        except OSError:
+            pass
     return stale
