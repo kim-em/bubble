@@ -377,12 +377,13 @@ def test_security_set_relay_syncs_old_config(tmp_data_dir):
 # --- Legacy config commands still work ---
 
 
-def test_config_security_cli_redirects(tmp_data_dir):
+def test_config_security_cli_deprecated(tmp_data_dir):
     from bubble.cli import main
 
     runner = CliRunner()
     result = runner.invoke(main, ["config", "security"])
     assert result.exit_code == 0
+    assert "deprecated" in result.output
     assert "bubble security" in result.output
     assert "shared-cache" in result.output
 
@@ -479,6 +480,8 @@ def test_config_lockdown(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["config", "lockdown"])
     assert result.exit_code == 0
+    assert "deprecated" in result.output
+    assert "bubble security lockdown" in result.output
 
     from bubble.config import load_config
 
@@ -495,6 +498,8 @@ def test_config_accept_risks(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["config", "accept-risks"])
     assert result.exit_code == 0
+    assert "deprecated" in result.output
+    assert "bubble security permissive" in result.output
 
     from bubble.config import load_config
 

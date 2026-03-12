@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1 — 2026-03-12
+- Deprecate `config security`, `config lockdown`, `config accept-risks` in favor of `security` subcommands (#150)
+  - Add deprecation warnings (to stderr) when deprecated commands are used
+  - Deprecation notes explain behavioral differences (`config lockdown`/`accept-risks` only pin `auto` settings vs `security lockdown`/`permissive` which set all)
+  - Update error messages to suggest `bubble security set` instead of `bubble config set`
+  - Keep `config set security.<name>` as a supported alias
+
 ## 0.7.0 — 2026-03-12
 - GitHub API access via auth proxy: `gh` CLI shim using `http_unix_socket` (#123)
   - Graduated access level model: level 1 (git only), level 2 (REST read), level 3 (gh read-only, default), level 4 (gh read-write)
