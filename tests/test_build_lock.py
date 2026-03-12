@@ -15,7 +15,7 @@ def test_build_lock_prevents_concurrent_builds(mock_runtime, monkeypatch, tmp_da
     """A concurrent build_image call for the same image should skip if the first completes."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.config import load_config, save_config
 
@@ -110,7 +110,7 @@ def test_is_build_locked_true_when_held():
 
 def test_build_lean_toolchain_lock(mock_runtime, monkeypatch, tmp_data_dir):
     """Lean toolchain builds also use build locks."""
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.images.builder import build_lean_toolchain_image
 
@@ -247,14 +247,14 @@ def test_derived_build_holds_parent_lock(mock_runtime, monkeypatch, tmp_data_dir
     mock_runtime._images = {"base"}  # base exists, lean does not
 
     def build_lean():
-        monkeypatch.setattr("bubble.images.builder._wait_for_container", slow_derived_wait)
+        monkeypatch.setattr("bubble.images.builder.wait_for_container", slow_derived_wait)
         build_image(mock_runtime, "lean")
         order.append("lean-published")
 
     def rebuild_base():
         derived_building.wait(timeout=5)
         parent_started.set()
-        monkeypatch.setattr("bubble.images.builder._wait_for_container", slow_parent_wait)
+        monkeypatch.setattr("bubble.images.builder.wait_for_container", slow_parent_wait)
         # Delete old base to force rebuild
         mock_runtime._images.discard("base")
         build_image(mock_runtime, "base")
@@ -343,14 +343,14 @@ def test_grandchild_build_holds_ancestor_locks(mock_runtime, monkeypatch, tmp_da
     mock_runtime._images = {"base", "lean"}
 
     def build_grandchild():
-        monkeypatch.setattr("bubble.images.builder._wait_for_container", slow_derived_wait)
+        monkeypatch.setattr("bubble.images.builder.wait_for_container", slow_derived_wait)
         build_image(mock_runtime, "lean-extra")
         order.append("lean-extra-published")
 
     def rebuild_base():
         derived_building.wait(timeout=5)
         parent_started.set()
-        monkeypatch.setattr("bubble.images.builder._wait_for_container", slow_parent_wait)
+        monkeypatch.setattr("bubble.images.builder.wait_for_container", slow_parent_wait)
         mock_runtime._images.discard("base")
         build_image(mock_runtime, "base")
         order.append("base-published")

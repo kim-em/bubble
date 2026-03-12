@@ -346,7 +346,7 @@ def test_build_image_installs_tools(mock_runtime, monkeypatch, tmp_data_dir):
     """Verify that building the base image runs tool install scripts."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.images.builder import build_image
 
@@ -366,7 +366,7 @@ def test_build_image_no_tools_when_none_enabled(mock_runtime, monkeypatch, tmp_d
     """Verify that no tool script runs when all tools resolve to skip."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     # Explicitly set all tools to "no" and editor to "shell" to skip everything
     from bubble.config import load_config, save_config
@@ -390,7 +390,7 @@ def test_build_nonbase_image_skips_tools(mock_runtime, monkeypatch, tmp_data_dir
     """Verify that non-base images don't install tools (they inherit from base)."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: True)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.images.builder import build_image
 
@@ -407,7 +407,7 @@ def test_tools_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
     """Verify that the tools hash file is written after building base."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.images.builder import TOOLS_HASH_FILE, build_image
 
@@ -435,7 +435,7 @@ def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_di
     """Verify that building base with tools deletes all derived images recursively."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.images.builder import build_image
 
@@ -455,7 +455,7 @@ def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, t
     """Verify that building base also purges dynamic toolchain images (lean-v4.x.y)."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.images.builder import build_image
 

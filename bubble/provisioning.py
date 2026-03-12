@@ -52,10 +52,10 @@ def provision_container(
     click.echo(" done.")
 
     detail("Waiting for network...", nl=False)
-    from .images.builder import _wait_for_container
+    from .images.builder import wait_for_container
 
     try:
-        _wait_for_container(runtime, name)
+        wait_for_container(runtime, name)
         click.echo(" done.")
     except RuntimeError:
         click.echo(" timeout (continuing anyway).")
