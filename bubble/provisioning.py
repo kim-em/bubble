@@ -231,7 +231,7 @@ def provision_container(
 
     if is_enabled(config, "relay"):
         from .relay import RELAY_PORT_FILE, RELAY_SOCK
-        from .setup import colima_host_ip
+        from .runtime.colima import colima_host_ip
 
         # macOS/Colima: Unix sockets can't traverse virtio-fs, use TCP.
         # incus proxy needs an IP (not hostname), so resolve host.lima.internal

@@ -233,3 +233,24 @@ def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
         start_colima(cpu, memory, disk, vm_type)
 
     _ensure_incus_remote()
+
+
+def colima_host_ip() -> str:
+    """Get the host IP as seen from the Colima VM.
+
+    Resolves host.lima.internal from the VM's /etc/hosts.
+    Falls back to 192.168.5.2 (the default vz networking address).
+    """
+    try:
+        result = subprocess.run(
+            ["colima", "ssh", "--", "getent", "hosts", "host.lima.internal"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split()[0]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return "192.168.5.2"
