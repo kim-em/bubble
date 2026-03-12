@@ -149,11 +149,12 @@ def detect_project_dir(runtime: ContainerRuntime, name: str) -> str:
 
     # Fallback for legacy bubbles without project_dir in registry
     try:
-        return (
+        result = (
             runtime.exec(name, ["bash", "-c", "ls -d /home/user/*/ 2>/dev/null | head -1"])
             .strip()
             .rstrip("/")
         )
+        return result or "/home/user"
     except Exception:
         return "/home/user"
 
