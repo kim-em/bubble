@@ -686,6 +686,8 @@ def _open_single(
                 err=True,
             )
             sys.exit(1)
+        if not machine_readable:
+            notices.finish()
         open_native(target, editor, no_interactive, custom_name, command=command_args)
         return
 
@@ -716,6 +718,8 @@ def _open_single(
             sys.exit(1)
         if base_ref and not new_branch:
             click.echo("Warning: --base has no effect without -b/--new-branch", err=True)
+        if not machine_readable:
+            notices.finish()
         _open_remote(
             remote_host,
             target,
@@ -788,6 +792,7 @@ def _open_single(
             project_dir = detect_project_dir(runtime, existing)
             machine_readable_output("reattached", existing, project_dir=project_dir)
             return
+        notices.finish()
         _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
 
@@ -835,6 +840,7 @@ def _open_single(
                 "reattached", existing, project_dir=project_dir, org_repo=t.org_repo
             )
             return
+        notices.finish()
         _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
 
