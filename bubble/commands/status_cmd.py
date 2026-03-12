@@ -1,5 +1,7 @@
 """The 'status' command: concise dashboard of current bubble state."""
 
+import json
+
 import click
 
 from ..config import load_config
@@ -11,25 +13,37 @@ from ..setup import get_runtime
 def _bubble_counts(config: dict) -> dict[str, int]:
     """Count containers by state. Returns {state: count} dict.
 
-    Uses the runtime's list_containers (fast mode) which avoids expensive
-    per-container queries. Falls back to registry-only counts if the
-    runtime is unavailable.
+    Combines local container counts from the runtime with remote/native
+    bubble counts from the registry. Falls back to registry-only counts
+    if the runtime is unavailable.
     """
-
     counts: dict[str, int] = {}
+    local_names: set[str] = set()
     try:
         runtime = get_runtime(config, ensure_ready=False)
         for c in runtime.list_containers(fast=True):
             if is_builder_container(c.name):
                 continue
-            state = c.state
-            counts[state] = counts.get(state, 0) + 1
-    except Exception:
-        # Runtime unavailable — count from registry only
+            local_names.add(c.name)
+            counts[c.state] = counts.get(c.state, 0) + 1
+    except RuntimeError:
+        # Runtime unavailable (e.g. Incus not running) — count all from registry
         registry = load_registry()
         n = len(registry.get("bubbles", {}))
         if n:
             counts["registered"] = n
+        return counts
+
+    # Also count remote and native bubbles from the registry
+    registry = load_registry()
+    for name, info in registry.get("bubbles", {}).items():
+        if name in local_names:
+            continue
+        if info.get("remote_host"):
+            counts["remote"] = counts.get("remote", 0) + 1
+        elif info.get("native"):
+            counts["native"] = counts.get("native", 0) + 1
+
     return counts
 
 
@@ -38,7 +52,7 @@ def _format_counts(counts: dict[str, int]) -> str:
     if not counts:
         return "none"
     # Preferred display order
-    order = ["running", "frozen", "stopped", "registered"]
+    order = ["running", "frozen", "stopped", "remote", "native", "registered"]
     # Map internal state names to display names
     display = {"frozen": "paused"}
     parts = []
@@ -54,10 +68,18 @@ def _format_counts(counts: dict[str, int]) -> str:
 
 
 def _cloud_summary() -> str | None:
-    """Get cloud status from local state file (no API call)."""
-    from ..cloud import _load_state
+    """Get cloud status from local state file (no API call).
 
-    state = _load_state()
+    Returns None if no cloud state exists or if the state file is corrupt.
+    """
+    from ..config import CLOUD_STATE_FILE
+
+    if not CLOUD_STATE_FILE.exists():
+        return None
+    try:
+        state = json.loads(CLOUD_STATE_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return "unavailable (corrupt state file)"
     if not state:
         return None
     server_type = state.get("server_type", "?")
@@ -103,9 +125,9 @@ def _warnings(config: dict, counts: dict[str, int]) -> list[str]:
     # Check if cloud is configured as default but no server exists
     cloud_default = config.get("cloud", {}).get("default", False)
     if cloud_default:
-        from ..cloud import _load_state
+        from ..config import CLOUD_STATE_FILE
 
-        if not _load_state():
+        if not CLOUD_STATE_FILE.exists():
             warns.append("Cloud is default but no server provisioned (run: bubble cloud provision)")
 
     return warns

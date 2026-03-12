@@ -178,3 +178,66 @@ def test_status_skips_builder_containers(tmp_data_dir, mock_runtime, monkeypatch
     result = runner.invoke(main, ["status"])
     assert result.exit_code == 0
     assert "1 running" in result.output
+
+
+def test_status_counts_remote_bubbles(tmp_data_dir, mock_runtime, monkeypatch):
+    """Status counts remote bubbles from registry even when runtime is healthy."""
+    from bubble.lifecycle import register_bubble
+
+    register_bubble("remote-bubble", "owner/repo", remote_host="myserver")
+
+    _patch_runtime(monkeypatch, mock_runtime)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0
+    assert "1 remote" in result.output
+
+
+def test_status_counts_native_bubbles(tmp_data_dir, mock_runtime, monkeypatch):
+    """Status counts native bubbles from registry even when runtime is healthy."""
+    from bubble.lifecycle import register_bubble
+
+    register_bubble("native-ws", "owner/repo", native=True, native_path="/tmp/ws")
+
+    _patch_runtime(monkeypatch, mock_runtime)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0
+    assert "1 native" in result.output
+
+
+def test_status_mixed_local_remote_native(tmp_data_dir, mock_runtime, monkeypatch):
+    """Status shows combined counts for local, remote, and native bubbles."""
+    from bubble.lifecycle import register_bubble
+
+    mock_runtime._containers = {
+        "local-bubble": ContainerInfo(name="local-bubble", state="running"),
+    }
+    register_bubble("remote-bubble", "owner/repo", remote_host="myserver")
+    register_bubble("native-ws", "owner/repo", native=True, native_path="/tmp/ws")
+
+    _patch_runtime(monkeypatch, mock_runtime)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0
+    assert "1 running" in result.output
+    assert "1 remote" in result.output
+    assert "1 native" in result.output
+
+
+def test_status_corrupt_cloud_state(tmp_data_dir, mock_runtime, monkeypatch):
+    """Status handles corrupt cloud.json gracefully."""
+    from bubble.config import CLOUD_STATE_FILE
+
+    CLOUD_STATE_FILE.write_text("not valid json{{{")
+
+    _patch_runtime(monkeypatch, mock_runtime)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0
+    assert "Cloud:" in result.output
+    assert "unavailable" in result.output
