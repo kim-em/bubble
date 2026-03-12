@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.9 — 2026-03-12
+- Make relay default to on in auto mode (#102)
+
 ## 0.6.8 — 2026-03-12
 - Support multiple targets in a single command (#36)
   - `bubble 12 13 14` opens three bubbles at once

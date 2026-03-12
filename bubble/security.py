@@ -79,7 +79,7 @@ SETTINGS: dict[str, SecuritySettingDef] = {
     ),
     "relay": SecuritySettingDef(
         description="Bubble-in-bubble relay daemon",
-        auto_default="off",
+        auto_default="on",
         warning="relay allows containers to create new bubbles on the host",
         category="Authentication",
     ),
