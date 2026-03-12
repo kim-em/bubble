@@ -15,7 +15,7 @@ def maybe_print_welcome(notices=None):
     group callback (before ``load_config`` ran).
     """
     ctx = click.get_current_context(silent=True)
-    if ctx is None or not ctx.obj.get("first_run"):
+    if ctx is None or not (ctx.obj or {}).get("first_run"):
         return
     if not sys.stderr.isatty():
         return

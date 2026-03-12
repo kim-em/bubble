@@ -121,3 +121,14 @@ class TestWelcomeBanner:
         # Should have a separator before the banner (from notices.begin() inside)
         assert SEPARATOR in captured.err
         assert "bubble v" in captured.err
+
+    def test_welcome_banner_safe_with_no_ctx_obj(self, tmp_data_dir, monkeypatch, capsys):
+        """Banner is a no-op when ctx.obj is None (no crash)."""
+        monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+
+        ctx = click.Context(click.Command("test"))  # obj defaults to None
+        with ctx:
+            maybe_print_welcome()
+
+        captured = capsys.readouterr()
+        assert captured.err == ""
