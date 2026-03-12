@@ -15,6 +15,7 @@ from .config import (
     codex_config_mounts,
     editor_config_mounts,
     ensure_dirs,
+    is_first_run,
     load_config,
     maybe_symlink_claude_projects,
     parse_mounts,
@@ -116,7 +117,8 @@ class BubbleGroup(click.Group):
 
 @click.group(cls=BubbleGroup, context_settings=dict(help_option_names=["-h", "--help"]))
 @click.version_option(__version__)
-def main():
+@click.pass_context
+def main(ctx):
     """bubble: Open a containerized dev environment.
 
     Run bubble TARGET to create (or reattach to) an isolated container and
@@ -132,6 +134,9 @@ def main():
       bubble 456                                    PR in current repo
       bubble 12 13 14                               Multiple targets
     """
+    ctx.ensure_object(dict)
+    # Record first-run status before any load_config() creates the file
+    ctx.obj["first_run"] = is_first_run()
 
 
 @main.command("help", hidden=True)
@@ -692,6 +697,9 @@ def _open_single(
 
     notices = Notices()
     if not machine_readable:
+        from .notices import maybe_print_welcome
+
+        maybe_print_welcome(notices=notices)
         print_warnings(config, notices=notices)
 
     # Native mode: skip all container/remote logic

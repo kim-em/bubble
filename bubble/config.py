@@ -78,6 +78,11 @@ def ensure_dirs():
         d.mkdir(parents=True, exist_ok=True)
 
 
+def is_first_run() -> bool:
+    """Check whether this is the first run (config file doesn't exist yet)."""
+    return not CONFIG_FILE.exists()
+
+
 def load_config() -> dict:
     """Load config, creating default if it doesn't exist."""
     ensure_dirs()

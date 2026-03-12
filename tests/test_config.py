@@ -1,6 +1,6 @@
 """Tests for configuration management."""
 
-from bubble.config import _deep_merge, load_raw_config, repo_short_name
+from bubble.config import _deep_merge, is_first_run, load_raw_config, repo_short_name
 
 
 def test_repo_short_name():
@@ -278,3 +278,16 @@ def test_deep_merge_does_not_mutate_default(tmp_data_dir):
     merged = _deep_merge(DEFAULT_CONFIG, {})
     merged["claude"]["credentials"] = not original_val
     assert DEFAULT_CONFIG["claude"]["credentials"] == original_val
+
+
+def test_is_first_run_true_before_config_created(tmp_data_dir):
+    """is_first_run() returns True when config.toml doesn't exist."""
+    assert is_first_run() is True
+
+
+def test_is_first_run_false_after_load_config(tmp_data_dir):
+    """is_first_run() returns False after load_config() creates the file."""
+    from bubble.config import load_config
+
+    load_config()
+    assert is_first_run() is False

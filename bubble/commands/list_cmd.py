@@ -170,7 +170,11 @@ def register_list_command(main):
     @click.option("--local", "local_only", is_flag=True, help="Show only local bubbles")
     def list_bubbles(as_json, verbose, show_clean, query_cloud, ssh_host, local_only):
         """List all bubbles."""
+        from ..notices import maybe_print_welcome
+
         config = load_config()
+        if not as_json:
+            maybe_print_welcome()
         runtime = get_runtime(config, ensure_ready=False)
 
         # --- Local containers ---

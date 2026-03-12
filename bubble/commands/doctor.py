@@ -44,7 +44,10 @@ def register_doctor_command(main):
         import platform
         import re
 
+        from ..notices import maybe_print_welcome
+
         config = load_config()
+        maybe_print_welcome()
         issues = 0
         fixed = 0
         saved_tty = _save_terminal()
