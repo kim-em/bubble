@@ -123,8 +123,11 @@ def apply_network(
     for d in tool_runtime_domains(resolve_tools(config)):
         if d not in domains:
             domains.append(d)
-    # Strip ALL GitHub domains after merging all sources (base, hooks, tools)
-    if not is_enabled(config, "network_github"):
+    # Direct GitHub network access is only allowed when github_token_inject
+    # is enabled (level 5: direct token injection). For proxy-mediated access
+    # (levels 0-4) or no auth, iptables blocks direct GitHub traffic — all
+    # GitHub communication is forced through the auth proxy on loopback.
+    if not is_enabled(config, "github_token_inject"):
         domains = filter_github_domains(domains)
     if domains:
         try:

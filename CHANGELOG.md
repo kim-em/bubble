@@ -278,8 +278,8 @@
 - `bubble config accept-risks` silences on-by-default warnings; `bubble config lockdown` disables off-by-default features
 - Security warnings printed to stderr for all `auto` settings during `bubble open`
 - `BUBBLE_QUIET_SECURITY=1` env var suppresses warnings for CI/automation
-- Settings: `shared_cache`, `user_mounts`, `network_github`, `relay`, `claude_credentials`, `host_key_trust`, `git_manifest_trust`
-- When `shared_cache=off`, shared mounts are read-only; when `network_github=off`, GitHub domains stripped from allowlist
+- Settings: `shared_cache`, `user_mounts`, `relay`, `claude_credentials`, `host_key_trust`, `git_manifest_trust`
+- When `shared_cache=off`, shared mounts are read-only
 - When `user_mounts=off` or `claude_credentials=off`, corresponding CLI flags are rejected
 - Relay enable/disable migrated to `[security] relay` with backwards compatibility for `[relay] enabled`
 - Replaces ad-hoc "Tip: use --claude-credentials" message with unified security warning system

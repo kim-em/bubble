@@ -11,6 +11,7 @@ from bubble.security import (
     display_setting_name,
     filter_github_domains,
     get_setting,
+    github_domains_for_allowlist,
     has_auto_settings,
     is_enabled,
     is_locked_off,
@@ -70,7 +71,6 @@ def test_get_setting_unknown_raises():
 def test_is_enabled_auto_on():
     config = {}
     assert is_enabled(config, "shared_cache") is True  # auto_default = on
-    assert is_enabled(config, "network_github") is True
     assert is_enabled(config, "host_key_trust") is True
     assert is_enabled(config, "git_manifest_trust") is True
     assert is_enabled(config, "user_mounts") is True
@@ -172,6 +172,28 @@ def test_has_auto_settings_none_auto():
 # --- GitHub domain filtering ---
 
 
+def test_github_domains_for_allowlist():
+    domains = [
+        "github.com",
+        "api.github.com",
+        "raw.githubusercontent.com",
+        "example.com",
+        "objects.githubusercontent.com",
+        "cli.github.com",
+    ]
+    gh = github_domains_for_allowlist(domains)
+    assert "github.com" in gh
+    assert "api.github.com" in gh
+    assert "raw.githubusercontent.com" in gh
+    assert "objects.githubusercontent.com" in gh
+    assert "cli.github.com" in gh
+    assert "example.com" not in gh
+
+
+def test_github_domains_for_allowlist_empty():
+    assert github_domains_for_allowlist([]) == []
+
+
 def test_filter_github_domains():
     domains = [
         "github.com",
@@ -208,7 +230,7 @@ def test_security_cli_shows_posture(tmp_data_dir):
     assert "bubble security permissive" in result.output
     assert "bubble security lockdown" in result.output
     # Presets should appear after the settings, not before (#151)
-    assert result.output.index("Network") < result.output.index("Quick presets")
+    assert result.output.index("Filesystem") < result.output.index("Quick presets")
     # Display should use hyphenated forms
     assert "shared-cache" in result.output
     assert "relay" in result.output
@@ -224,8 +246,11 @@ def test_security_cli_shows_categories(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["security"])
     assert result.exit_code == 0
+    # Only categories with settings should appear (Network is empty now)
     for cat_name, _ in CATEGORIES:
-        assert cat_name in result.output
+        cat_settings = [n for n, d in SETTINGS.items() if d.category == cat_name]
+        if cat_settings:
+            assert cat_name in result.output
 
 
 def test_security_permissive_cli(tmp_data_dir):
