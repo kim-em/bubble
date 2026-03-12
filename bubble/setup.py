@@ -105,7 +105,8 @@ def _install_incus_debian():
         subprocess.run(["sudo", "apt-get", "install", "-y", "incus"], check=True)
     except subprocess.CalledProcessError as e:
         cmd_str = " ".join(e.cmd) if isinstance(e.cmd, list) else str(e.cmd)
-        detail = (getattr(e, "stderr", None) or b"").decode("utf-8", errors="replace").strip()
+        raw = getattr(e, "stderr", None) or ""
+        detail = (raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw).strip()
         msg = f"Failed to install Incus: '{cmd_str}' exited with code {e.returncode}"
         if detail:
             msg += f"\n{detail}"

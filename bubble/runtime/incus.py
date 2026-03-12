@@ -7,8 +7,13 @@ from datetime import datetime, timezone
 from .base import ContainerInfo, ContainerRuntime
 
 
-class IncusError(subprocess.CalledProcessError):
-    """CalledProcessError subclass that includes stderr in its message."""
+class IncusError(subprocess.CalledProcessError, RuntimeError):
+    """Error from an incus command.
+
+    Inherits from both CalledProcessError (for returncode/cmd/stderr fields)
+    and RuntimeError (so ``except RuntimeError`` catches it, matching the
+    ContainerRuntime exception contract).
+    """
 
     def __str__(self):
         detail = (self.stderr or self.stdout or "").strip()
