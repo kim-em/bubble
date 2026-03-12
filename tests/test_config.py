@@ -270,6 +270,76 @@ def test_load_raw_config_legacy_no_codex(tmp_data_dir):
     assert merged["codex"]["credentials"] is True
 
 
+def test_config_show_defaults(tmp_data_dir):
+    """config show labels all values as (default) on a fresh install."""
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0
+    assert "(default)" in result.output
+    # All values should be default on fresh install
+    assert "(set in config)" not in result.output
+
+
+def test_config_show_custom_editor(tmp_data_dir):
+    """config show labels editor as (set in config) when changed."""
+    import tomli_w
+
+    import bubble.config as config
+
+    cfg = {"editor": "emacs"}
+    with open(config.CONFIG_FILE, "wb") as f:
+        tomli_w.dump(cfg, f)
+
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0
+    assert '"emacs"  (set in config)' in result.output
+    # Default sections should still show (default)
+    assert "(default)" in result.output
+
+
+def test_config_show_mixed_origins(tmp_data_dir):
+    """config show correctly distinguishes default from user-set values."""
+    import tomli_w
+
+    import bubble.config as config
+
+    cfg = {"claude": {"credentials": False}}
+    with open(config.CONFIG_FILE, "wb") as f:
+        tomli_w.dump(cfg, f)
+
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0
+    assert "credentials = false  (set in config)" in result.output
+    # editor should still be default
+    assert 'editor = "vscode"  (default)' in result.output
+
+
+def test_config_show_security_deferred(tmp_data_dir):
+    """config show defers security settings to `bubble security`."""
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0
+    assert "bubble security" in result.output
+
+
 def test_deep_merge_does_not_mutate_default(tmp_data_dir):
     """Verify _deep_merge doesn't mutate DEFAULT_CONFIG nested dicts."""
     from bubble.config import DEFAULT_CONFIG

@@ -1,13 +1,60 @@
 """Settings command groups: skill, claude, tools, gh, config."""
 
+import copy
 import sys
 
 import click
 
-from ..config import load_config, save_config
+from ..config import DEFAULT_CONFIG, load_config, load_raw_config, save_config
 from ..security import SETTINGS as SECURITY_SETTINGS
 from ..security import VALID_VALUES as SECURITY_VALID_VALUES
 from ..security import display_setting_name, get_setting, normalize_setting_name
+
+
+def _origin(section: str, key: str | None, config: dict, defaults: dict) -> str:
+    """Return an origin annotation for a config value.
+
+    Compares the effective value against the default. Values matching
+    the default are annotated '(default)'; others are '(set in config)'.
+    This handles the fact that load_config() writes defaults to disk,
+    so we can't rely on file presence alone.
+    """
+    if key is None:
+        # Top-level scalar (e.g. editor)
+        default_val = defaults.get(section)
+        effective_val = config.get(section)
+        if effective_val == default_val:
+            return "(default)"
+        return "(set in config)"
+    default_section = defaults.get(section, {})
+    effective_section = config.get(section, {})
+    if isinstance(default_section, dict) and isinstance(effective_section, dict):
+        default_val = default_section.get(key)
+        effective_val = effective_section.get(key)
+        if effective_val == default_val:
+            return "(default)"
+        if key not in default_section:
+            # Key exists in config but not in defaults
+            return "(set in config)"
+        return "(set in config)"
+    return "(set in config)"
+
+
+def _format_value(value) -> str:
+    """Format a config value for display."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        items = ", ".join(_format_value(v) for v in value)
+        return f"[{items}]"
+    if isinstance(value, dict):
+        items = ", ".join(f"{k} = {_format_value(v)}" for k, v in value.items())
+        return f"{{{items}}}"
+    if isinstance(value, str):
+        return f'"{value}"'
+    return str(value)
 
 
 def register_settings_commands(main):
@@ -332,6 +379,77 @@ def register_settings_commands(main):
     @main.group("config")
     def config_group():
         """View and manage bubble configuration."""
+
+    @config_group.command("show")
+    def config_show():
+        """Show effective configuration with origin annotations.
+
+        Displays all non-security settings with their effective values,
+        annotated to show whether each value is a default or was explicitly
+        set in ~/.bubble/config.toml.
+
+        For security settings, use `bubble security` instead.
+        """
+        config = load_config()
+        raw = load_raw_config()
+        defaults = copy.deepcopy(DEFAULT_CONFIG)
+
+        # Sections to display (skip security — that's `bubble security`)
+        sections = [
+            ("editor", "top"),
+            ("runtime", "section"),
+            ("images", "section"),
+            ("network", "section"),
+            ("relay", "section"),
+            ("remote", "section"),
+            ("cloud", "section"),
+            ("claude", "section"),
+            ("codex", "section"),
+            ("tools", "section"),
+        ]
+
+        for key, kind in sections:
+            if kind == "top":
+                # Top-level scalar
+                value = config.get(key, "")
+                origin = _origin(key, None, config, defaults)
+                click.echo(f"{key} = {_format_value(value)}  {origin}")
+            else:
+                section = config.get(key, {})
+                if not section:
+                    continue
+                click.echo(f"\n[{key}]")
+                if isinstance(section, dict):
+                    for subkey, value in section.items():
+                        origin = _origin(key, subkey, config, defaults)
+                        click.echo(f"  {subkey} = {_format_value(value)}  {origin}")
+                elif isinstance(section, list):
+                    origin = _origin(key, None, config, defaults)
+                    click.echo(f"  {_format_value(section)}  {origin}")
+
+        # Show user-defined sections not in defaults (e.g. [[mounts]])
+        for key in raw:
+            if key == "security":
+                continue
+            if key in dict(sections):
+                continue
+            if key == "editor":
+                continue
+            value = config.get(key, raw[key])
+            click.echo(f"\n[{key}]")
+            if isinstance(value, dict):
+                for subkey, subval in value.items():
+                    click.echo(f"  {subkey} = {_format_value(subval)}  (set in config)")
+            elif isinstance(value, list):
+                for item in value:
+                    click.echo(f"  {_format_value(item)}  (set in config)")
+            else:
+                click.echo(f"  {_format_value(value)}  (set in config)")
+
+        click.echo(
+            "\nSecurity settings are managed separately. "
+            "Use `bubble security` to view and configure them."
+        )
 
     @config_group.command("security", hidden=True)
     def config_security():
