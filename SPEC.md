@@ -57,8 +57,8 @@ equivalent to `bubble open <url>`.
 | `--base` | string | | Base branch for `-b` |
 | `--mount` | string (repeatable) | | Mount host dir into container |
 | `--claude-config/--no-claude-config` | flag | enabled | Mount ~/.claude config read-only |
-| `--claude-credentials/--no-claude-credentials` | flag | disabled | Mount Claude credentials |
-| `--codex-credentials/--no-codex-credentials` | flag | disabled | Mount Codex credentials |
+| `--claude-credentials/--no-claude-credentials` | flag | enabled | Mount Claude credentials |
+| `--codex-credentials/--no-codex-credentials` | flag | enabled | Mount Codex credentials |
 | `--ssh HOST` | string | | Run on remote host |
 | `--cloud` | flag | | Run on Hetzner Cloud server |
 | `--local` | flag | | Force local execution |
@@ -908,9 +908,8 @@ When `--claude-config` is enabled (default), mount specific items from
 `~/.claude/` into `/home/user/.claude/` read-only:
 - `CLAUDE.md`, `settings.json`, `skills/`, `keybindings.json`, `commands/`
 
-Credential files (`.credentials.json`) are only mounted when
-`--claude-credentials` is explicitly enabled or the config `claude.credentials`
-is true.
+Credential files (`.credentials.json`) are mounted by default. Disable with
+`--no-claude-credentials` or set `claude.credentials = false` in config.
 
 **Symlink safety:** Reject symlinks that escape `~/.claude/` to prevent
 exposing arbitrary host files.
@@ -918,7 +917,7 @@ exposing arbitrary host files.
 ### 10.2 Codex config mounting
 
 Similar to Claude. Config: `config.toml` (read-only). Credentials: `auth.json`
-(opt-in via `--codex-credentials` or config).
+(mounted by default; disable via `--no-codex-credentials` or config).
 
 ### 10.3 Editor config mounting
 
@@ -1061,10 +1060,10 @@ server_name = "bubble-cloud"
 default = false
 
 [claude]
-credentials = false
+credentials = true
 
 [codex]
-credentials = false
+credentials = true
 
 [security]
 # All settings default to "auto"
@@ -1101,10 +1100,11 @@ values: `auto`, `on`, `off`.
 | `shared-cache` | on | Writable shared mounts (mathlib cache) |
 | `user-mounts` | on | `--mount` flag support |
 | `git-manifest-trust` | on | Auto-clone Lake manifest dependencies |
-| `claude-credentials` | off | Mount Claude credentials into containers |
-| `codex-credentials` | off | Mount Codex credentials into containers |
+| `claude-credentials` | on | Mount Claude credentials into containers |
+| `codex-credentials` | on | Mount Codex credentials into containers |
 | `github-auth` | on | Repo-scoped GitHub auth via proxy (git push/pull) |
 | `github-api` | on | GitHub API access via auth proxy: REST is repo-scoped; **GraphQL queries are read-only but account-wide** (can read any repo the host token can access). Set to `off` for git-only, or `read-write` for mutations |
+| `github-token-inject` | off | Direct GitHub token injection (bypasses proxy) |
 | `relay` | on | Bubble-in-bubble relay |
 | `host-key-trust` | on | Disable SSH StrictHostKeyChecking |
 
