@@ -317,11 +317,21 @@ def _open_remote(
     # Set up GitHub auth via tunneled auth proxy
     if is_enabled(config, "github_auth"):
         from .github_token import setup_gh_token
+        from .tools import resolve_tools
 
         owner, repo = "", ""
         if org_repo and "/" in org_repo:
             owner, repo = org_repo.split("/", 1)
-        setup_gh_token(None, name, owner=owner, repo=repo, remote_host=remote_host)
+        gh_enabled = "gh" in resolve_tools(config)
+        setup_gh_token(
+            None,
+            name,
+            owner=owner,
+            repo=repo,
+            remote_host=remote_host,
+            gh_enabled=gh_enabled,
+            config=config,
+        )
 
     # Write local SSH config with chained ProxyCommand through the remote host
     host_key = is_enabled(config, "host_key_trust")

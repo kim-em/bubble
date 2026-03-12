@@ -72,7 +72,7 @@ Images are defined in `builder.py`'s `IMAGES` dict with script and parent refere
 Tools are installed in container images via the `[tools]` config section. Each tool has a self-contained install script in `bubble/images/scripts/tools/` and is registered in the `TOOLS` dict in `tools.py` with its script filename, host detection command, required network domains, and a priority for install ordering. Tools include:
 
 - **Language tools** (priority 10): `elan` — auto-detected if elan is on the host
-- **General tools** (priority 50): `claude`, `codex` — auto-detected via host commands
+- **General tools** (priority 50): `claude`, `codex`, `gh` — auto-detected via host commands
 - **Editors** (priority 90): `vscode`, `emacs`, `neovim` — driven by the `editor` config key
 
 Config values are `"yes"`, `"no"`, or `"auto"` (default). Editor tools are special: the configured editor (default: vscode) is treated as `"yes"` unless explicitly `"no"` in `[tools]`. Tools are installed into the `base` image during `build_image("base")` in priority order (language tools before editors, so vscode can detect elan and install Lean extensions). When the resolved tool set changes (detected via a content-aware hash stored in `~/.bubble/tools-hash`), the `base` image is rebuilt synchronously, and stale derived images are purged.
@@ -120,15 +120,26 @@ Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (o
 Users can place a `customize.sh` script at `~/.bubble/customize.sh` to run custom setup in all container images. The script runs as root as the final step when building any image (base, lean, lean-v4.X.Y). This lets users add tools, dotfiles, shell config, etc. without forking image scripts. The script's content hash is tracked in `~/.bubble/customize-hash`; on `bubble open`, if the hash differs from the stored value, a background rebuild of the base image is triggered (same pattern as VS Code commit hash drift). Code is in `builder.py` (`customize_hash()`, `_run_customize_script()`).
 
 ### GitHub Auth Proxy
-The auth proxy (`auth_proxy.py`) provides repo-scoped GitHub authentication without injecting the host's token into containers. It's an HTTP reverse proxy that runs on the host.
+The auth proxy (`auth_proxy.py`) provides repo-scoped GitHub authentication without injecting the host's token into containers. It's an HTTP reverse proxy that runs on the host with graduated access levels:
 
-**Flow:** Container git → `url.insteadOf` rewrites to `http://127.0.0.1:7654/git/...` → proxy validates `X-Bubble-Token` header → checks path matches allowed `owner/repo` → adds `Authorization: token <real-token>` → forwards to `https://github.com` → returns response.
+| Level | Description | Routes |
+|-------|-------------|--------|
+| 1 | Git only | `/git/{owner}/{repo}/...` (smart HTTP) |
+| 2 | Git + REST read | + `GET /repos/{owner}/{repo}/...` |
+| 3 | Git + gh read-only (default) | + `POST /graphql` (queries only, mutations blocked) |
+| 4 | Git + gh read-write | + mutations + REST POST/PATCH/DELETE |
 
-**Local bubbles:** Exposed into containers via Incus proxy device (`incus config device add ... proxy connect=tcp:host:7654 listen=tcp:127.0.0.1:7654`).
+**Git flow:** Container git → `url.insteadOf` rewrites to `http://127.0.0.1:7654/git/...` → proxy validates `X-Bubble-Token` header → checks path matches allowed `owner/repo` → adds `Authorization: token <real-token>` → forwards to `https://github.com` → returns response.
 
-**Remote/cloud bubbles:** An SSH reverse tunnel (`ssh -R 7654:127.0.0.1:7654 remote`) forwards the local proxy port to the remote host. An Incus proxy device on the remote then exposes it into the container. Tunnels are per-remote-host (shared across containers) with PID files in `~/.bubble/tunnels/`. Code is in `tunnel.py`.
+**gh CLI flow:** `gh` configured with `http_unix_socket: /bubble/gh-proxy.sock` (via `GH_CONFIG_DIR=/etc/bubble/gh`) → sends requests through Unix socket → proxy validates token from `Authorization` header → enforces access level (REST repo-scoping, GraphQL mutation filtering) → adds real token → forwards to `https://api.github.com`.
 
-**Token management:** Per-container tokens in `~/.bubble/auth-tokens.json` map to `{container, owner, repo}`. Tokens are cleaned up on `bubble pop`. The daemon is managed via launchd/systemd.
+**API security:** REST paths validated against `/repos/{owner}/{repo}/...` (repo-scoped). GraphQL scans ALL operations in a document and classifies by the most dangerous one — `query` allowed at level 3, `mutation` requires level 4. This prevents `operationName`-based bypasses where a query is listed first but a mutation is selected for execution. Batched requests, subscriptions, and malformed bodies rejected. Note: GraphQL is NOT repo-scoped — queries can access any data the host token can read (GitHub's GraphQL API doesn't support path-based scoping). API redirects (e.g. CI log downloads) followed with hardened rules: GET/HEAD only, HTTPS only, allowlisted hosts, max 2 hops, auth headers stripped. GitHub 4xx errors are passed through to clients (not collapsed to 502).
+
+**Local bubbles:** Exposed via Incus proxy devices — TCP for git, Unix socket for gh (`listen=unix:/bubble/gh-proxy.sock`).
+
+**Remote/cloud bubbles:** SSH reverse tunnel forwards the local proxy port. Incus proxy devices on the remote expose both TCP and Unix socket endpoints.
+
+**Token management:** Per-container tokens in `~/.bubble/auth-tokens.json` map to `{container, owner, repo, level}`. Tokens are cleaned up on `bubble pop`. The daemon is managed via launchd/systemd.
 
 ### Security Model
 The `user` account has no sudo and a locked password. Network allowlisting is applied on container creation. SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Each container mounts only its specific bare repo, not the entire git store.

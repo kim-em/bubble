@@ -91,6 +91,12 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         warning="containers get repo-scoped GitHub push access via auth proxy",
         category="Authentication",
     ),
+    "github_api": SecuritySettingDef(
+        description="GitHub API access via auth proxy (gh CLI, REST, GraphQL)",
+        auto_default="on",
+        warning="containers get read-only GitHub API access (account-wide reads via GraphQL)",
+        category="Authentication",
+    ),
     "relay": SecuritySettingDef(
         description="Bubble-in-bubble relay daemon",
         auto_default="on",

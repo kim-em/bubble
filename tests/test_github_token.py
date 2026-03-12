@@ -58,7 +58,13 @@ def test_setup_gh_token_local_with_owner_repo(mock_runtime):
         result = setup_gh_token(mock_runtime, "test-container", owner="kim-em", repo="bubble")
         assert result is True
         mock_proxy.assert_called_once_with(
-            mock_runtime, "test-container", "kim-em", "bubble", False
+            mock_runtime,
+            "test-container",
+            "kim-em",
+            "bubble",
+            False,
+            gh_enabled=False,
+            config=None,
         )
 
 
@@ -92,12 +98,19 @@ def test_setup_gh_token_remote_calls_proxy_remote():
         )
         assert result is True
         mock_proxy_remote.assert_called_once_with(
-            remote_host, "test-container", "kim-em", "bubble", False
+            remote_host,
+            "test-container",
+            "kim-em",
+            "bubble",
+            False,
+            gh_enabled=False,
+            config=None,
         )
 
 
 def test_setup_auth_proxy_remote_starts_tunnel():
     """setup_auth_proxy_remote starts a tunnel and configures the container."""
+    from bubble.auth_proxy import LEVEL_GIT_ONLY
     from bubble.github_token import setup_auth_proxy_remote
 
     remote_host = MagicMock()
@@ -115,8 +128,8 @@ def test_setup_auth_proxy_remote_starts_tunnel():
         # Tunnel started with local port
         mock_tunnel.assert_called_once_with(remote_host, local_port=7654)
 
-        # Token generated for the container
-        mock_gen.assert_called_once_with("my-container", "kim-em", "bubble")
+        # Token generated for the container with access level
+        mock_gen.assert_called_once_with("my-container", "kim-em", "bubble", level=LEVEL_GIT_ONLY)
 
         # Two SSH calls: incus device add + incus exec (git config)
         assert mock_ssh.call_count == 2
