@@ -603,13 +603,6 @@ def open_cmd(
 
             remote_host = RemoteHost.parse(ssh_host)
         elif cloud or config.get("cloud", {}).get("default", False):
-            if is_locked_off(config, "cloud_root"):
-                click.echo(
-                    "Error: cloud access rejected because security.cloud_root=off. "
-                    "Re-enable: bubble config set security.cloud_root on",
-                    err=True,
-                )
-                sys.exit(1)
             from .cloud import get_cloud_remote_host
 
             remote_host = get_cloud_remote_host(config)

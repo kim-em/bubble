@@ -1,11 +1,8 @@
 """The 'cloud' command group: provision, destroy, stop, start, status, ssh, default."""
 
-import sys
-
 import click
 
 from ..config import load_config, save_config
-from ..security import is_locked_off
 
 
 def register_cloud_commands(main):
@@ -48,14 +45,6 @@ def register_cloud_commands(main):
 
             list_server_types(config, location=location)
             return
-
-        if is_locked_off(config, "cloud_root"):
-            click.echo(
-                "Error: cloud provisioning rejected because security.cloud_root=off. "
-                "Re-enable: bubble config set security.cloud_root on",
-                err=True,
-            )
-            sys.exit(1)
 
         from ..cloud import provision_server
 
@@ -113,14 +102,6 @@ def register_cloud_commands(main):
     @click.argument("args", nargs=-1)
     def cloud_ssh_cmd(args):
         """SSH directly to the cloud server."""
-        config = load_config()
-        if is_locked_off(config, "cloud_root"):
-            click.echo(
-                "Error: cloud SSH rejected because security.cloud_root=off. "
-                "Re-enable: bubble config set security.cloud_root on",
-                err=True,
-            )
-            sys.exit(1)
         from ..cloud import cloud_ssh
 
         cloud_ssh(list(args) if args else None)
