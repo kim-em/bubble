@@ -87,11 +87,11 @@ def test_is_enabled_auto_on():
     assert is_enabled(config, "git_manifest_trust") is True
     assert is_enabled(config, "user_mounts") is True
     assert is_enabled(config, "github_auth") is True
+    assert is_enabled(config, "relay") is True
 
 
 def test_is_enabled_auto_off():
     config = {}
-    assert is_enabled(config, "relay") is False  # auto_default = off
     assert is_enabled(config, "claude_credentials") is False
 
 
