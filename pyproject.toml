@@ -42,6 +42,9 @@ bubble = "bubble.cli:main"
 dev = ["pytest", "ruff"]
 cloud = ["hcloud>=2.0"]
 
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
 [tool.setuptools.dynamic]
 version = {attr = "bubble.__version__"}
 
