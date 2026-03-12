@@ -472,18 +472,6 @@ def register_settings_commands(main):
             "Use `bubble security` to view and configure them."
         )
 
-    @config_group.command("security", hidden=True)
-    def config_security():
-        """Show current security posture (use `bubble security` instead)."""
-        click.echo(
-            "Warning: `bubble config security` is deprecated. Use `bubble security` instead.\n",
-            err=True,
-        )
-        from ..security import print_security_posture
-
-        config = load_config()
-        print_security_posture(config)
-
     @config_group.command("set")
     @click.argument("key")
     @click.argument("value")
@@ -515,70 +503,8 @@ def register_settings_commands(main):
             config["security"] = {}
         config["security"][name] = value
 
-        # Keep relay backwards compat in sync
-        if name == "relay":
-            config.setdefault("relay", {})["enabled"] = value == "on"
-
         save_config(config)
         click.echo(f"Set security.{display_setting_name(name)} = {value}")
-
-    @config_group.command("lockdown", hidden=True)
-    def config_lockdown():
-        """Disable off-by-default features (use `bubble security lockdown` instead)."""
-        click.echo(
-            "Warning: `bubble config lockdown` is deprecated. "
-            "Use `bubble security lockdown` instead.\n"
-            "Note: `security lockdown` sets ALL settings to off, while this command\n"
-            "only pins settings that are still on auto with auto_default=off.",
-            err=True,
-        )
-        config = load_config()
-        if "security" not in config:
-            config["security"] = {}
-
-        changed = []
-        for name, defn in SECURITY_SETTINGS.items():
-            if get_setting(config, name) == "auto" and defn.auto_default == "off":
-                config["security"][name] = "off"
-                if name == "relay":
-                    config.setdefault("relay", {})["enabled"] = False
-                changed.append(name)
-
-        if changed:
-            save_config(config)
-            for name in changed:
-                click.echo(f"  security.{display_setting_name(name)} = off")
-            click.echo(f"Locked down {len(changed)} setting(s).")
-        else:
-            click.echo("No auto-defaulting-to-off settings to lock down.")
-
-    @config_group.command("accept-risks", hidden=True)
-    def config_accept_risks():
-        """Accept on-by-default risks (use `bubble security permissive` instead)."""
-        click.echo(
-            "Warning: `bubble config accept-risks` is deprecated. "
-            "Use `bubble security permissive` instead.\n"
-            "Note: `security permissive` sets ALL settings to on, while this command\n"
-            "only pins settings that are still on auto with auto_default=on.",
-            err=True,
-        )
-        config = load_config()
-        if "security" not in config:
-            config["security"] = {}
-
-        changed = []
-        for name, defn in SECURITY_SETTINGS.items():
-            if get_setting(config, name) == "auto" and defn.auto_default == "on":
-                config["security"][name] = "on"
-                changed.append(name)
-
-        if changed:
-            save_config(config)
-            for name in changed:
-                click.echo(f"  security.{display_setting_name(name)} = on")
-            click.echo(f"Accepted {len(changed)} risk(s). On-by-default warnings silenced.")
-        else:
-            click.echo("No auto-defaulting-to-on settings to accept.")
 
     @config_group.command("symlink-claude-projects")
     def config_symlink_claude_projects():

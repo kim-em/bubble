@@ -150,9 +150,6 @@ def get_setting(config: dict, name: str) -> str:
     Returns auto/on/off (or extra values like read-write for github_api).
     Unrecognized values from hand-edited config are treated as "auto"
     (fail-closed: typos don't escalate access).
-
-    Handles backwards compatibility for the relay setting, which was
-    previously controlled by [relay] enabled = true/false.
     """
     if name not in SETTINGS:
         raise ValueError(f"Unknown security setting: {name}")
@@ -165,21 +162,6 @@ def get_setting(config: dict, name: str) -> str:
     allowed = valid_values_for(name)
     if value not in allowed:
         return "auto"
-
-    # Backwards compat: if relay is auto but [relay] enabled = true,
-    # treat as "on" (user explicitly enabled via old config).
-    if name == "relay" and value == "auto":
-        if config.get("relay", {}).get("enabled", False):
-            return "on"
-
-    # Backwards compat: if github_auth is auto but [github] token was
-    # explicitly set, respect that choice.
-    if name == "github_auth" and value == "auto":
-        gh_token = config.get("github", {}).get("token")
-        if gh_token is True:
-            return "on"
-        if gh_token is False:
-            return "off"
 
     return value
 
@@ -308,8 +290,6 @@ def apply_preset_permissive(config: dict) -> list[str]:
         if current == "on" or (defn.extra_values and current in defn.extra_values):
             continue
         config["security"][name] = "on"
-        if name == "relay":
-            config.setdefault("relay", {})["enabled"] = True
         changed.append(name)
     return changed
 
@@ -324,9 +304,6 @@ def apply_preset_default(config: dict) -> list[str]:
             changed.append(name)
     if "security" not in config:
         config["security"] = security
-    # Clear legacy relay flag so backwards compat doesn't override auto
-    if "relay" in config and "enabled" in config["relay"]:
-        del config["relay"]["enabled"]
     return changed
 
 
@@ -337,8 +314,6 @@ def apply_preset_lockdown(config: dict) -> list[str]:
     for name in SETTINGS:
         if get_setting(config, name) != "off":
             config["security"][name] = "off"
-            if name == "relay":
-                config.setdefault("relay", {})["enabled"] = False
             changed.append(name)
     return changed
 
