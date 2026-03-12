@@ -71,7 +71,10 @@ SETTINGS: dict[str, SecuritySettingDef] = {
     "shared_cache": SecuritySettingDef(
         description="Writable shared mounts (mathlib cache) across containers",
         auto_default="on",
-        warning="mathlib cache is shared read-write across containers",
+        warning=(
+            "mathlib cache is shared read-write across containers;"
+            " a compromised container could poison cached artifacts"
+        ),
         category="Filesystem",
     ),
     "user_mounts": SecuritySettingDef(
