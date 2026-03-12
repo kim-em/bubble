@@ -48,7 +48,6 @@ DEFAULT_CONFIG = {
         ],
     },
     "relay": {
-        "enabled": False,
         "port": 7653,
     },
     "remote": {
