@@ -580,15 +580,20 @@ def open_cmd(
                 raise
             if e.code:  # Only treat nonzero exits as failures
                 errors.append(target)
-        except Exception as e:
+        except TargetParseError as e:
             if not multi:
                 raise
             click.echo(
                 f"Error processing target '{target}': {e}\n"
-                f"  Check that the target is a valid GitHub URL, owner/repo, "
-                f"local path, or PR number.",
+                f"  Supported formats: GitHub URL, owner/repo, local path, "
+                f"PR/issue number, or short name.",
                 err=True,
             )
+            errors.append(target)
+        except Exception as e:
+            if not multi:
+                raise
+            click.echo(f"Error processing target '{target}': {e}", err=True)
             errors.append(target)
 
     if errors:
