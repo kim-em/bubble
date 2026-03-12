@@ -8,6 +8,52 @@ from ..config import load_config
 from ..setup import get_runtime
 
 
+def _base_still_needs_rebuild(config: dict):
+    """Return a callback that checks whether any drift marker is still stale.
+
+    Used as ``still_needed`` for ``build_image(..., force=True)`` so that a
+    concurrent rebuild that already updated the markers prevents a redundant
+    second rebuild.
+    """
+    from ..images.builder import (
+        CUSTOMIZE_HASH_FILE,
+        TOOLS_HASH_FILE,
+        VSCODE_COMMIT_FILE,
+        customize_hash,
+        get_vscode_commit,
+    )
+    from ..tools import resolve_tools, tools_hash
+
+    enabled = resolve_tools(config)
+    current_tools_hash = tools_hash(enabled)
+    current_vscode_commit = get_vscode_commit() if "vscode" in enabled else None
+    current_customize_hash = customize_hash()
+
+    def _check() -> bool:
+        # Tools hash drift?
+        if TOOLS_HASH_FILE.exists():
+            if TOOLS_HASH_FILE.read_text().strip() != current_tools_hash:
+                return True
+        else:
+            return True  # never built
+        # VS Code commit drift?
+        if current_vscode_commit:
+            if not VSCODE_COMMIT_FILE.exists():
+                return True
+            if VSCODE_COMMIT_FILE.read_text().strip() != current_vscode_commit:
+                return True
+        # Customize script drift?
+        if current_customize_hash is not None or CUSTOMIZE_HASH_FILE.exists():
+            stored = (
+                CUSTOMIZE_HASH_FILE.read_text().strip() if CUSTOMIZE_HASH_FILE.exists() else None
+            )
+            if current_customize_hash != stored:
+                return True
+        return False
+
+    return _check
+
+
 def register_images_commands(main):
     """Register the 'images' command group on the main CLI group."""
 
@@ -37,7 +83,8 @@ def register_images_commands(main):
 
     @images_group.command("build")
     @click.argument("image_name", default="base")
-    def images_build(image_name):
+    @click.option("--force", is_flag=True, help="Delete and rebuild even if image exists.")
+    def images_build(image_name, force):
         """Build an image (base, lean, or lean-v4.X.Y for a specific toolchain)."""
         config = load_config()
         runtime = get_runtime(config)
@@ -51,15 +98,19 @@ def register_images_commands(main):
 
             version = tc_match.group(1)
             try:
-                build_lean_toolchain_image(runtime, version)
+                build_lean_toolchain_image(runtime, version, force=force)
             except Exception as e:
                 click.echo(str(e), err=True)
                 sys.exit(1)
         else:
             from ..images.builder import build_image
 
+            still_needed = None
+            if force and image_name == "base":
+                still_needed = _base_still_needs_rebuild(config)
+
             try:
-                build_image(runtime, image_name)
+                build_image(runtime, image_name, force=force, still_needed=still_needed)
             except ValueError as e:
                 click.echo(str(e), err=True)
                 sys.exit(1)

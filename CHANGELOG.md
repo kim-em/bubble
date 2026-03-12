@@ -9,6 +9,11 @@
 
 ## 0.6.11 — 2026-03-12
 - Forward `--claude-credentials` and `--codex-credentials` flags to remote/cloud bubbles (#106)
+- Fix VS Code server not being pre-baked into container images
+  - `build_image()` returned early when the image already existed, so rebuild triggers (tools hash change, VS Code commit drift, customize script change) never actually rebuilt
+  - Added `--force` flag to `bubble images build` and `force` parameter to `build_image()` for rebuild paths
+  - Fixed wrong lock name (`"base-vscode"` → `"base"`) in VS Code commit drift detection
+  - Fixed `exit 0` in `elan.sh` that could terminate the entire combined tool script
 
 ## 0.6.10 — 2026-03-12
 - Support `bubble -b branch_name` without explicit target (#99)

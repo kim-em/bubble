@@ -4,10 +4,11 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Skip if elan is already installed (idempotent)
+# NOTE: Do not use `exit 0` here — this script may run as part of a
+# combined tool script where exit would terminate the entire pipeline.
 if [ -x /home/user/.elan/bin/elan ]; then
     echo "elan already installed, skipping."
-    exit 0
-fi
+else
 
 # Install dependencies for leantar download
 apt-get update -qq && apt-get install -y -qq python3 unzip < /dev/null
@@ -45,3 +46,5 @@ apt-get clean
 rm -rf /var/lib/apt/lists/*
 
 echo "elan tool setup complete."
+
+fi  # end of elan install

@@ -1,5 +1,7 @@
 """Container image construction."""
 
+from __future__ import annotations
+
 import fcntl
 import hashlib
 import re
@@ -7,6 +9,10 @@ import subprocess
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from ..config import DATA_DIR, load_config
 from ..runtime.base import ContainerRuntime
@@ -428,8 +434,23 @@ def _run_customize_script(runtime: ContainerRuntime, build_name: str):
     runtime.exec(build_name, ["bash", "-c", script])
 
 
-def build_image(runtime: ContainerRuntime, image_name: str):
-    """Build any known image by name. Builds parent images recursively if needed."""
+def build_image(
+    runtime: ContainerRuntime,
+    image_name: str,
+    *,
+    force: bool = False,
+    still_needed: "Callable[[], bool] | None" = None,
+):
+    """Build any known image by name. Builds parent images recursively if needed.
+
+    With ``force=True``, deletes the existing image first so it gets rebuilt
+    from scratch. Used by rebuild paths that detect configuration drift
+    (tools hash, VS Code commit, customize script).
+
+    ``still_needed`` is an optional callback re-checked after acquiring the
+    build lock.  If it returns False, the rebuild is skipped — a concurrent
+    process already rebuilt and updated the drift markers.
+    """
     if image_name not in IMAGES:
         available = ", ".join(IMAGES.keys())
         raise ValueError(f"Unknown image: {image_name}. Available: {available}")
@@ -455,6 +476,15 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         for ancestor in _ancestor_chain(image_name):
             stack.enter_context(_build_lock(ancestor, shared=True))
         stack.enter_context(_build_lock(image_name))
+
+        if force and runtime.image_exists(image_name):
+            # Re-check drift after acquiring the lock — a concurrent process
+            # may have already rebuilt and updated the marker files.
+            if still_needed is not None and not still_needed():
+                print(f"{image_name} image already rebuilt by concurrent process.")
+                return
+            print(f"Deleting existing {image_name} image for rebuild...")
+            runtime.image_delete(image_name)
 
         if runtime.image_exists(image_name):
             print(f"{image_name} image already built (by concurrent process).")
@@ -516,11 +546,16 @@ def build_image(runtime: ContainerRuntime, image_name: str):
 
 
 def build_lean_toolchain_image(
-    runtime: ContainerRuntime, version: str, base_lean_image: str = "lean"
+    runtime: ContainerRuntime,
+    version: str,
+    base_lean_image: str = "lean",
+    *,
+    force: bool = False,
 ):
     """Build a toolchain-specific Lean image (e.g. lean-v4.16.0).
 
     Launches from the base lean image and installs one specific toolchain.
+    With ``force=True``, deletes and rebuilds even if the image exists.
     """
     # Ensure base lean image exists
     if not runtime.image_exists(base_lean_image):
@@ -546,6 +581,10 @@ def build_lean_toolchain_image(
         # Then the base lean image itself
         stack.enter_context(_build_lock(base_lean_image, shared=True))
         stack.enter_context(_build_lock(safe_alias))
+
+        if force and runtime.image_exists(alias):
+            print(f"Deleting existing {alias} image for rebuild...")
+            runtime.image_delete(alias)
 
         if runtime.image_exists(alias):
             print(f"{alias} image already built (by concurrent process).")
