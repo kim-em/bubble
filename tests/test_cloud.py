@@ -88,7 +88,33 @@ class TestCloudInit:
 
     def test_idle_checks_ssh_connections(self):
         script = _get_cloud_init({})
-        assert "dport = :22" in script
+        # Must use sport (local port) not dport (peer port) to detect
+        # incoming SSH connections to the server.
+        assert "sport = :22" in script
+        assert "dport" not in script
+
+    def test_idle_uses_ss_no_header(self):
+        """The ss command must use -H to suppress header lines,
+        otherwise grep/wc always reports connections even when none exist."""
+        script = _get_cloud_init({})
+        assert "ss -Htnp" in script
+
+    def test_idle_uses_poweroff(self):
+        """Must use poweroff (not shutdown -h) so the hypervisor detects
+        the ACPI power-off and transitions the server to 'off' state."""
+        script = _get_cloud_init({})
+        # Extract the idle check script body (between heredoc markers)
+        marker = "IDLESCRIPT"
+        start = script.index(marker) + len(marker)
+        end = script.index(marker, start)
+        idle_section = script[start:end]
+        assert "poweroff" in idle_section
+        assert "shutdown" not in idle_section
+
+    def test_idle_logs_to_file(self):
+        """Idle check should log to a file for debugging."""
+        script = _get_cloud_init({})
+        assert "/var/log/bubble-idle.log" in script
 
     def test_idle_checks_cpu_load(self):
         script = _get_cloud_init({})
