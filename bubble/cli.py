@@ -261,6 +261,8 @@ def _open_remote(
     git_email="",
     command=None,
     claude_config=True,
+    claude_credentials=None,
+    codex_credentials=None,
     new_branch=None,
     base_ref=None,
 ):
@@ -279,6 +281,8 @@ def _open_remote(
             git_name=git_name,
             git_email=git_email,
             claude_config=claude_config,
+            claude_credentials=claude_credentials,
+            codex_credentials=codex_credentials,
             new_branch=new_branch,
             base_ref=base_ref,
             claude_prompt=claude_prompt,
@@ -729,6 +733,14 @@ def _open_single(
 
                 remote_host = RemoteHost.parse(default)
 
+    # Resolve claude_credentials: CLI flag > config > default (False)
+    if claude_credentials is None:
+        claude_credentials = config.get("claude", {}).get("credentials", False)
+
+    # Resolve codex_credentials: CLI flag > config > default (False)
+    if codex_credentials is None:
+        codex_credentials = config.get("codex", {}).get("credentials", False)
+
     if remote_host:
         if mount_specs:
             click.echo(
@@ -752,18 +764,12 @@ def _open_single(
             git_email=git_email,
             command=command_args,
             claude_config=claude_config,
+            claude_credentials=claude_credentials,
+            codex_credentials=codex_credentials,
             new_branch=new_branch,
             base_ref=base_ref,
         )
         return
-
-    # Resolve claude_credentials: CLI flag > config > default (False)
-    if claude_credentials is None:
-        claude_credentials = config.get("claude", {}).get("credentials", False)
-
-    # Resolve codex_credentials: CLI flag > config > default (False)
-    if codex_credentials is None:
-        codex_credentials = config.get("codex", {}).get("credentials", False)
 
     # Claude Code config mounts (opt-out via --no-claude-config)
     # When security.claude_credentials=on, always include credentials.
