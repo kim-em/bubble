@@ -465,7 +465,10 @@ def register_settings_commands(main):
     @config_group.command("security", hidden=True)
     def config_security():
         """Show current security posture (use `bubble security` instead)."""
-        click.echo("Hint: use `bubble security` for the full security dashboard.\n")
+        click.echo(
+            "Warning: `bubble config security` is deprecated. Use `bubble security` instead.\n",
+            err=True,
+        )
         from ..security import print_security_posture
 
         config = load_config()
@@ -477,6 +480,7 @@ def register_settings_commands(main):
     def config_set(key, value):
         """Set a security setting: bubble config set security.<name> <value>.
 
+        Alias for `bubble security set <name> <value>`.
         Setting names use hyphens (e.g. github-auth, claude-credentials).
         Underscores are also accepted as permanent aliases.
         """
@@ -502,7 +506,13 @@ def register_settings_commands(main):
     @config_group.command("lockdown", hidden=True)
     def config_lockdown():
         """Disable off-by-default features (use `bubble security lockdown` instead)."""
-        click.echo("Hint: use `bubble security lockdown` for full lockdown.\n")
+        click.echo(
+            "Warning: `bubble config lockdown` is deprecated. "
+            "Use `bubble security lockdown` instead.\n"
+            "Note: `security lockdown` sets ALL settings to off, while this command\n"
+            "only pins settings that are still on auto with auto_default=off.",
+            err=True,
+        )
         config = load_config()
         if "security" not in config:
             config["security"] = {}
@@ -526,7 +536,13 @@ def register_settings_commands(main):
     @config_group.command("accept-risks", hidden=True)
     def config_accept_risks():
         """Accept on-by-default risks (use `bubble security permissive` instead)."""
-        click.echo("Hint: use `bubble security permissive` to enable all conveniences.\n")
+        click.echo(
+            "Warning: `bubble config accept-risks` is deprecated. "
+            "Use `bubble security permissive` instead.\n"
+            "Note: `security permissive` sets ALL settings to on, while this command\n"
+            "only pins settings that are still on auto with auto_default=on.",
+            err=True,
+        )
         config = load_config()
         if "security" not in config:
             config["security"] = {}

@@ -34,7 +34,7 @@ def register_relay_commands(main):
         if is_locked_off(config, "relay"):
             click.echo(
                 "Error: relay is locked off (security.relay=off). "
-                "Re-enable: bubble config set security.relay on",
+                "Re-enable: bubble security set relay on",
                 err=True,
             )
             sys.exit(1)
@@ -64,7 +64,7 @@ def register_relay_commands(main):
         config = load_config()
         config.setdefault("relay", {})["enabled"] = False
         # Reset security.relay to auto (not off) so relay enable works as a toggle.
-        # Use 'bubble config set security.relay off' to permanently lock it off.
+        # Use 'bubble security set relay off' to permanently lock it off.
         config.setdefault("security", {}).pop("relay", None)
         save_config(config)
 
