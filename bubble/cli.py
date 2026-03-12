@@ -68,7 +68,7 @@ from .vscode import (
 # ---------------------------------------------------------------------------
 
 
-BASIC_COMMANDS = {"list", "pause", "pop"}
+BASIC_COMMANDS = {"list", "pause", "pop", "status"}
 
 
 class BubbleGroup(click.Group):
@@ -1035,6 +1035,7 @@ from .commands.relay_cmd import register_relay_commands  # noqa: E402
 from .commands.remote_cmd import register_remote_commands  # noqa: E402
 from .commands.security_cmd import register_security_commands  # noqa: E402
 from .commands.settings import register_settings_commands  # noqa: E402
+from .commands.status_cmd import register_status_command  # noqa: E402
 
 register_list_command(main)
 register_lifecycle_commands(main)
@@ -1046,6 +1047,7 @@ register_cloud_commands(main)
 register_security_commands(main)
 register_settings_commands(main)
 register_doctor_command(main)
+register_status_command(main)
 
 
 if __name__ == "__main__":
