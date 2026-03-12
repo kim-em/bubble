@@ -15,7 +15,7 @@ def register_settings_commands(main):
 
     # --- skill ---
 
-    @main.group("skill")
+    @main.group("skill", hidden=True)
     def skill_group():
         """Manage the Claude Code bubble skill."""
 
@@ -77,7 +77,7 @@ def register_settings_commands(main):
 
     # --- claude ---
 
-    @main.group("claude")
+    @main.group("claude", hidden=True)
     def claude_group():
         """Manage Claude Code settings."""
 
@@ -120,7 +120,7 @@ def register_settings_commands(main):
 
     # --- codex ---
 
-    @main.group("codex")
+    @main.group("codex", hidden=True)
     def codex_group():
         """Manage Codex/OpenAI settings."""
 
@@ -333,7 +333,7 @@ def register_settings_commands(main):
     def config_group():
         """View and manage bubble configuration."""
 
-    @config_group.command("security")
+    @config_group.command("security", hidden=True)
     def config_security():
         """Show current security posture (use `bubble security` instead)."""
         click.echo("Hint: use `bubble security` for the full security dashboard.\n")
@@ -370,7 +370,7 @@ def register_settings_commands(main):
         save_config(config)
         click.echo(f"Set security.{display_setting_name(name)} = {value}")
 
-    @config_group.command("lockdown")
+    @config_group.command("lockdown", hidden=True)
     def config_lockdown():
         """Disable off-by-default features (use `bubble security lockdown` instead)."""
         click.echo("Hint: use `bubble security lockdown` for full lockdown.\n")
@@ -394,7 +394,7 @@ def register_settings_commands(main):
         else:
             click.echo("No auto-defaulting-to-off settings to lock down.")
 
-    @config_group.command("accept-risks")
+    @config_group.command("accept-risks", hidden=True)
     def config_accept_risks():
         """Accept on-by-default risks (use `bubble security permissive` instead)."""
         click.echo("Hint: use `bubble security permissive` to enable all conveniences.\n")
