@@ -1026,6 +1026,7 @@ def _open_single(
 # ---------------------------------------------------------------------------
 
 from .commands.cloud_cmd import register_cloud_commands  # noqa: E402
+from .commands.completion import register_completion_command  # noqa: E402
 from .commands.doctor import register_doctor_command  # noqa: E402
 from .commands.images import register_images_commands  # noqa: E402
 from .commands.infrastructure import register_infrastructure_commands  # noqa: E402
@@ -1048,6 +1049,7 @@ register_security_commands(main)
 register_settings_commands(main)
 register_doctor_command(main)
 register_status_command(main)
+register_completion_command(main)
 
 
 if __name__ == "__main__":
