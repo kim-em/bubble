@@ -200,7 +200,7 @@ def _fix_dns_with_proxy(runtime: ContainerRuntime, name: str) -> bool:
         return False
 
 
-def _wait_for_container(runtime: ContainerRuntime, name: str, timeout: int = 60):
+def wait_for_container(runtime: ContainerRuntime, name: str, timeout: int = 60):
     """Wait for a container to be ready, including network (IPv4 + DNS).
 
     Handles systems where the firewall blocks bridge DHCP and/or DNS
@@ -501,7 +501,7 @@ def build_image(
         # Launch from parent
         runtime.launch(build_name, parent)
         try:
-            _wait_for_container(runtime, build_name)
+            wait_for_container(runtime, build_name)
 
             # Run setup script
             script = (SCRIPTS_DIR / spec["script"]).read_text()
@@ -600,7 +600,7 @@ def build_lean_toolchain_image(
 
         runtime.launch(build_name, base_lean_image)
         try:
-            _wait_for_container(runtime, build_name)
+            wait_for_container(runtime, build_name)
 
             script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
             script = f"export LEAN_TOOLCHAIN='{version}'\n" + script

@@ -32,7 +32,7 @@ def test_build_image_runs_customize_script(mock_runtime, monkeypatch, tmp_data_d
     """Building any image runs the customize script as the final step."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.config import load_config, save_config
 
@@ -57,7 +57,7 @@ def test_build_image_skips_customize_when_absent(mock_runtime, monkeypatch, tmp_
     """No customize exec when script doesn't exist."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.config import load_config, save_config
 
@@ -78,7 +78,7 @@ def test_customize_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
     """Hash file is written after building with a customize script."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.config import load_config, save_config
 
@@ -102,7 +102,7 @@ def test_customize_hash_file_removed_when_no_script(mock_runtime, monkeypatch, t
     """Hash file is removed when customize script doesn't exist."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     from bubble.config import load_config, save_config
 
@@ -123,7 +123,7 @@ def test_customize_hash_file_removed_when_no_script(mock_runtime, monkeypatch, t
 
 def test_build_lean_toolchain_runs_customize(mock_runtime, monkeypatch, tmp_data_dir):
     """Lean toolchain image build also runs the customize script."""
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     mock_runtime._images.add("lean")
 
@@ -141,7 +141,7 @@ def test_nonbase_image_runs_customize(mock_runtime, monkeypatch, tmp_data_dir):
     """Non-base images (e.g. lean) also run the customize script."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     mock_runtime._images.add("base")
 
@@ -163,7 +163,7 @@ def test_nonbase_image_does_not_write_hash(mock_runtime, monkeypatch, tmp_data_d
     """
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder._wait_for_container", lambda *a, **kw: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
 
     mock_runtime._images.add("base")
 
