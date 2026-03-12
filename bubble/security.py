@@ -139,7 +139,11 @@ GITHUB_DOMAINS = {
 
 
 def get_setting(config: dict, name: str) -> str:
-    """Get the raw value of a security setting (auto/on/off).
+    """Get the validated value of a security setting.
+
+    Returns auto/on/off (or extra values like read-write for github_api).
+    Unrecognized values from hand-edited config are treated as "auto"
+    (fail-closed: typos don't escalate access).
 
     Handles backwards compatibility for the relay setting, which was
     previously controlled by [relay] enabled = true/false.
@@ -148,6 +152,13 @@ def get_setting(config: dict, name: str) -> str:
         raise ValueError(f"Unknown security setting: {name}")
 
     value = config.get("security", {}).get(name, "auto")
+
+    # Validate: reject unrecognized values (typos, corruption) by
+    # falling back to "auto". This prevents e.g. github_api = "readwrtie"
+    # from being treated as enabled.
+    allowed = valid_values_for(name)
+    if value not in allowed:
+        return "auto"
 
     # Backwards compat: if relay is auto but [relay] enabled = true,
     # treat as "on" (user explicitly enabled via old config).
@@ -277,15 +288,23 @@ def print_security_posture(config: dict):
 
 
 def apply_preset_permissive(config: dict) -> list[str]:
-    """Set all settings to 'on' (enable all conveniences)."""
+    """Set all settings to 'on' (enable all conveniences).
+
+    Does not downgrade settings that have a stronger explicit value
+    (e.g. github_api = "read-write" is preserved, not reset to "on").
+    """
     config.setdefault("security", {})
     changed = []
     for name in SETTINGS:
-        if get_setting(config, name) != "on":
-            config["security"][name] = "on"
-            if name == "relay":
-                config.setdefault("relay", {})["enabled"] = True
-            changed.append(name)
+        current = get_setting(config, name)
+        # Skip if already "on" or a stronger explicit extra value
+        defn = SETTINGS[name]
+        if current == "on" or (defn.extra_values and current in defn.extra_values):
+            continue
+        config["security"][name] = "on"
+        if name == "relay":
+            config.setdefault("relay", {})["enabled"] = True
+        changed.append(name)
     return changed
 
 

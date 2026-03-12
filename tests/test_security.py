@@ -736,6 +736,44 @@ def test_security_posture_shows_read_write(tmp_data_dir, capsys):
     assert "mutations" in captured.out
 
 
+def test_invalid_raw_config_falls_back_to_auto():
+    """Typos in hand-edited config.toml are treated as auto (fail-closed)."""
+    config = {"security": {"github_api": "readwrtie"}}
+    assert get_setting(config, "github_api") == "auto"
+    # auto_default is "on", so it's enabled but at the default level (not read-write)
+    assert is_enabled(config, "github_api") is True
+
+    from bubble.auth_proxy import LEVEL_GH_READ
+    from bubble.github_token import _resolve_access_level
+
+    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READ
+
+
+def test_invalid_raw_config_other_setting():
+    """Typos in any setting fall back to auto."""
+    config = {"security": {"relay": "yse"}}
+    assert get_setting(config, "relay") == "auto"
+
+
+def test_permissive_preserves_read_write():
+    """permissive does not downgrade github_api from read-write to on."""
+    config = {"security": {"github_api": "read-write"}}
+    changed = apply_preset_permissive(config)
+    # github_api should NOT be in the changed list
+    assert "github_api" not in changed
+    # Value should still be read-write
+    assert config["security"]["github_api"] == "read-write"
+
+
+def test_permissive_still_sets_non_explicit():
+    """permissive sets auto settings to on even when github_api is read-write."""
+    config = {"security": {"github_api": "read-write"}}
+    changed = apply_preset_permissive(config)
+    # Other settings should be changed to "on"
+    assert "relay" in changed
+    assert config["security"]["relay"] == "on"
+
+
 # --- SSH config tests ---
 
 
