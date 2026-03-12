@@ -157,7 +157,7 @@ def has_auto_settings(config: dict) -> bool:
     return any(get_setting(config, name) == "auto" for name in SETTINGS)
 
 
-def print_warnings(config: dict):
+def print_warnings(config: dict, notices=None):
     """Print a single summary line when any settings are still 'auto'.
 
     Suppressed by BUBBLE_QUIET_SECURITY=1 environment variable.
@@ -169,6 +169,8 @@ def print_warnings(config: dict):
     if not has_auto_settings(config):
         return
 
+    if notices:
+        notices.begin()
     click.echo(
         "Note: bubble is using default security assumptions. Review with: bubble security",
         err=True,

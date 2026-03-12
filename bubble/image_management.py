@@ -59,7 +59,7 @@ def maybe_rebuild_base_image():
     )
 
 
-def maybe_rebuild_tools(runtime: ContainerRuntime):
+def maybe_rebuild_tools(runtime: ContainerRuntime, notices=None):
     """If the resolved tool set has changed since base was built, rebuild base now.
 
     Rebuilds synchronously so that the container launched afterwards uses a
@@ -76,11 +76,13 @@ def maybe_rebuild_tools(runtime: ContainerRuntime):
     if TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash:
         return
 
+    if notices:
+        notices.begin()
     click.echo("Tools configuration changed, rebuilding base image...")
     build_image(runtime, "base")
 
 
-def maybe_rebuild_customize():
+def maybe_rebuild_customize(notices=None):
     """If the user customization script has changed, trigger a background rebuild of all images.
 
     Compares the current hash of ~/.bubble/customize.sh against the stored
@@ -107,6 +109,8 @@ def maybe_rebuild_customize():
     if is_build_locked("base"):
         return
 
+    if notices:
+        notices.begin()
     if current is None:
         click.echo("Customization script removed, rebuilding base image in background...")
     elif stored is None:

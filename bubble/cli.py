@@ -663,8 +663,11 @@ def _open_single(
             editor = "vscode"
 
     # Print security posture warnings (for auto settings)
+    from .notices import Notices
+
+    notices = Notices()
     if not machine_readable:
-        print_warnings(config)
+        print_warnings(config, notices=notices)
 
     # Native mode: skip all container/remote logic
     if native:
@@ -683,6 +686,8 @@ def _open_single(
                 err=True,
             )
             sys.exit(1)
+        if not machine_readable:
+            notices.finish()
         open_native(target, editor, no_interactive, custom_name, command=command_args)
         return
 
@@ -713,6 +718,8 @@ def _open_single(
             sys.exit(1)
         if base_ref and not new_branch:
             click.echo("Warning: --base has no effect without -b/--new-branch", err=True)
+        if not machine_readable:
+            notices.finish()
         _open_remote(
             remote_host,
             target,
@@ -752,7 +759,7 @@ def _open_single(
         cc_mounts = [m for m in cc_mounts if not mount_overlaps(Path(m.target), user_targets)]
         # Hint about symlinking ~/.bubble/claude-projects/ to ~/.claude/projects/
         if not machine_readable:
-            maybe_symlink_claude_projects(config)
+            maybe_symlink_claude_projects(config, notices=notices)
 
     # Codex config mounts
     # When security.codex_credentials=off, never include (overrides config).
@@ -775,8 +782,8 @@ def _open_single(
 
     if not machine_readable:
         maybe_rebuild_base_image()
-        maybe_rebuild_tools(runtime)
-        maybe_rebuild_customize()
+        maybe_rebuild_tools(runtime, notices=notices)
+        maybe_rebuild_customize(notices=notices)
 
     # Check if target matches an existing container
     existing = find_existing_container(runtime, target)
@@ -785,6 +792,7 @@ def _open_single(
             project_dir = detect_project_dir(runtime, existing)
             machine_readable_output("reattached", existing, project_dir=project_dir)
             return
+        notices.finish()
         _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
 
@@ -832,10 +840,13 @@ def _open_single(
                 "reattached", existing, project_dir=project_dir, org_repo=t.org_repo
             )
             return
+        notices.finish()
         _reattach(runtime, existing, editor, no_interactive, command=command_args)
         return
 
     # Resolve git source, detect language, and build image
+    if not machine_readable:
+        notices.finish()
     ensure_dirs()
     ref_path, mount_name = _resolve_ref_source(t, no_clone)
     hook, image_name = detect_and_build_image(runtime, ref_path, t)

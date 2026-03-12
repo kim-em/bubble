@@ -155,6 +155,8 @@ Before committing, run `uv run ruff check --fix . && uv run ruff format .` to en
 
 Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest`).
 
+**NEVER run `uv pip install -e .` in a worktree.** The `VIRTUAL_ENV` environment variable may point to the main worktree's venv (`~/projects/bubble/.venv`), so `uv pip install` will corrupt it by installing an editable pointing to the wrong directory. Use `uv run` instead — it creates a per-directory `.venv` automatically and ignores mismatched `VIRTUAL_ENV`.
+
 ## How to Add a New Command
 
 1. Add a `@main.command()` function in `cli.py`

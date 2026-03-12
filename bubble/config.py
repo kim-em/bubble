@@ -485,7 +485,7 @@ def _is_inside_git_repo(path: Path) -> bool:
         return False
 
 
-def maybe_symlink_claude_projects(config: dict | None = None) -> None:
+def maybe_symlink_claude_projects(config: dict | None = None, notices=None) -> None:
     """Print an informational message if claude-projects could be symlinked.
 
     If ~/.claude/projects/ is inside a git repo and ~/.bubble/claude-projects/ is a real
@@ -518,6 +518,8 @@ def maybe_symlink_claude_projects(config: dict | None = None) -> None:
     # It's a real directory — print informational message (no prompt)
     import click
 
+    if notices:
+        notices.begin()
     click.echo(
         "~/.claude/projects is git-tracked. Claude sessions within bubbles are stored\n"
         "in ~/.bubble/claude-projects. To replace that directory with a symlink (so\n"
