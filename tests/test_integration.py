@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from bubble.network import apply_allowlist, check_allowlist_active, remove_allowlist
+from bubble.network import apply_allowlist, remove_allowlist
 from bubble.runtime.incus import IncusRuntime
 
 pytestmark = pytest.mark.integration
@@ -211,10 +211,6 @@ class TestNetworkAllowlist:
         )
         assert "BLOCKED" in result
 
-    def test_check_allowlist_active(self, runtime, container_with_allowlist):
-        """check_allowlist_active returns True when allowlist is applied."""
-        assert check_allowlist_active(runtime, container_with_allowlist)
-
     def test_allowlisted_destination_has_accept_rules(self, runtime, container_with_allowlist):
         """iptables has ACCEPT rules for allowlisted domain IPs."""
         output = runtime.exec(
@@ -229,10 +225,6 @@ class TestNetworkAllowlist:
             if "-j ACCEPT" in ln and "-d " in ln and "--dport 53" not in ln and "-o lo" not in ln
         ]
         assert len(ip_accept) > 0, f"Expected ACCEPT rules for domain IPs, got:\n{output}"
-
-    def test_check_allowlist_inactive_by_default(self, runtime, container):
-        """check_allowlist_active returns False on a fresh container."""
-        assert not check_allowlist_active(runtime, container)
 
 
 # ---------------------------------------------------------------------------
@@ -295,16 +287,9 @@ class TestContainerLifecycle:
     def test_network_allowlist_apply_remove(self, runtime, container):
         """Can apply and remove network allowlist."""
         apply_allowlist(runtime, container, ["github.com"])
-        assert check_allowlist_active(runtime, container)
+        output = runtime.exec(container, ["iptables", "-L", "OUTPUT", "-n"])
+        assert "policy DROP" in output
 
         remove_allowlist(runtime, container)
-        output = runtime.exec(
-            container,
-            [
-                "iptables",
-                "-L",
-                "OUTPUT",
-                "-n",
-            ],
-        )
+        output = runtime.exec(container, ["iptables", "-L", "OUTPUT", "-n"])
         assert "policy ACCEPT" in output
