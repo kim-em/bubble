@@ -51,57 +51,65 @@ def _install_incus_debian():
     """Install Incus on Debian/Ubuntu via the Zabbly repository."""
     click.echo("Installing Incus from the Zabbly repository...")
 
-    # Add GPG key
-    subprocess.run(
-        ["sudo", "mkdir", "-p", "/etc/apt/keyrings/"],
-        check=True,
-    )
-    key_data = subprocess.run(
-        ["curl", "-fsSL", "https://pkgs.zabbly.com/key.asc"],
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["sudo", "tee", "/etc/apt/keyrings/zabbly.asc"],
-        input=key_data.stdout,
-        capture_output=True,
-        check=True,
-    )
+    try:
+        # Add GPG key
+        subprocess.run(
+            ["sudo", "mkdir", "-p", "/etc/apt/keyrings/"],
+            check=True,
+        )
+        key_data = subprocess.run(
+            ["curl", "-fsSL", "https://pkgs.zabbly.com/key.asc"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["sudo", "tee", "/etc/apt/keyrings/zabbly.asc"],
+            input=key_data.stdout,
+            capture_output=True,
+            check=True,
+        )
 
-    # Determine codename and architecture
-    os_release = {}
-    for line in Path("/etc/os-release").read_text().splitlines():
-        if "=" in line:
-            k, v = line.split("=", 1)
-            os_release[k] = v.strip('"')
-    codename = os_release.get("VERSION_CODENAME", "jammy")
-    arch = subprocess.run(
-        ["dpkg", "--print-architecture"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+        # Determine codename and architecture
+        os_release = {}
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                os_release[k] = v.strip('"')
+        codename = os_release.get("VERSION_CODENAME", "jammy")
+        arch = subprocess.run(
+            ["dpkg", "--print-architecture"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
 
-    # Add repository
-    sources_content = (
-        f"Enabled: yes\n"
-        f"Types: deb\n"
-        f"URIs: https://pkgs.zabbly.com/incus/stable\n"
-        f"Suites: {codename}\n"
-        f"Components: main\n"
-        f"Architectures: {arch}\n"
-        f"Signed-By: /etc/apt/keyrings/zabbly.asc\n"
-    )
-    subprocess.run(
-        ["sudo", "tee", "/etc/apt/sources.list.d/zabbly-incus-stable.sources"],
-        input=sources_content.encode(),
-        capture_output=True,
-        check=True,
-    )
+        # Add repository
+        sources_content = (
+            f"Enabled: yes\n"
+            f"Types: deb\n"
+            f"URIs: https://pkgs.zabbly.com/incus/stable\n"
+            f"Suites: {codename}\n"
+            f"Components: main\n"
+            f"Architectures: {arch}\n"
+            f"Signed-By: /etc/apt/keyrings/zabbly.asc\n"
+        )
+        subprocess.run(
+            ["sudo", "tee", "/etc/apt/sources.list.d/zabbly-incus-stable.sources"],
+            input=sources_content.encode(),
+            capture_output=True,
+            check=True,
+        )
 
-    # Install
-    subprocess.run(["sudo", "apt-get", "update"], check=True)
-    subprocess.run(["sudo", "apt-get", "install", "-y", "incus"], check=True)
+        # Install
+        subprocess.run(["sudo", "apt-get", "update"], check=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "incus"], check=True)
+    except subprocess.CalledProcessError as e:
+        cmd_str = " ".join(e.cmd) if isinstance(e.cmd, list) else str(e.cmd)
+        detail = (getattr(e, "stderr", None) or b"").decode("utf-8", errors="replace").strip()
+        msg = f"Failed to install Incus: '{cmd_str}' exited with code {e.returncode}"
+        if detail:
+            msg += f"\n{detail}"
+        raise click.ClickException(msg)
 
     _post_install_incus()
 
@@ -109,7 +117,10 @@ def _install_incus_debian():
 def _install_incus_snap():
     """Install Incus via snap."""
     click.echo("Installing Incus via snap...")
-    subprocess.run(["sudo", "snap", "install", "incus", "--channel=latest/stable"], check=True)
+    try:
+        subprocess.run(["sudo", "snap", "install", "incus", "--channel=latest/stable"], check=True)
+    except subprocess.CalledProcessError as e:
+        raise click.ClickException(f"Failed to install Incus via snap (exit {e.returncode}).")
     _post_install_incus()
 
 
@@ -190,16 +201,23 @@ def _install_incus_nixos():
             new_content = content[:last_brace] + insert + content[last_brace:]
 
             click.echo(f"  Backing up to {config_path}.bak...")
-            subprocess.run(
-                ["sudo", "cp", str(config_path), str(config_path) + ".bak"],
-                check=True,
-            )
-            subprocess.run(
-                ["sudo", "tee", str(config_path)],
-                input=new_content.encode(),
-                capture_output=True,
-                check=True,
-            )
+            try:
+                subprocess.run(
+                    ["sudo", "cp", str(config_path), str(config_path) + ".bak"],
+                    check=True,
+                )
+                subprocess.run(
+                    ["sudo", "tee", str(config_path)],
+                    input=new_content.encode(),
+                    capture_output=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                cmd_str = " ".join(e.cmd) if isinstance(e.cmd, list) else str(e.cmd)
+                raise click.ClickException(
+                    f"Failed to update NixOS configuration: "
+                    f"'{cmd_str}' exited with code {e.returncode}."
+                )
 
             click.echo("  Running nixos-rebuild switch (this may take a few minutes)...")
             try:
@@ -231,7 +249,10 @@ def _install_incus_nixos():
 def _post_install_nixos():
     """Post-install steps for Incus on NixOS."""
     click.echo("Initializing Incus...")
-    subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
+    try:
+        subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
+    except subprocess.CalledProcessError as e:
+        raise click.ClickException(f"Failed to initialize Incus (exit {e.returncode}).")
 
     click.echo()
     click.echo("Incus installed successfully.")
@@ -245,14 +266,22 @@ def _post_install_incus():
     """Common post-install steps for Incus on Linux."""
     # Initialize with minimal defaults
     click.echo("Initializing Incus...")
-    subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
+    try:
+        subprocess.run(["sudo", "incus", "admin", "init", "--minimal"], check=True)
+    except subprocess.CalledProcessError as e:
+        raise click.ClickException(f"Failed to initialize Incus (exit {e.returncode}).")
 
     # Add current user to incus-admin group
     import getpass
 
     username = getpass.getuser()
     click.echo(f"Adding {username} to the incus-admin group...")
-    subprocess.run(["sudo", "usermod", "-aG", "incus-admin", username], check=True)
+    try:
+        subprocess.run(["sudo", "usermod", "-aG", "incus-admin", username], check=True)
+    except subprocess.CalledProcessError as e:
+        raise click.ClickException(
+            f"Failed to add {username} to incus-admin group (exit {e.returncode})."
+        )
 
     click.echo()
     click.echo("Incus installed successfully.")
@@ -298,7 +327,12 @@ def _ensure_dependencies():
                 f"  Install via Homebrew? ({cmd})", default=True
             ):
                 click.echo(f"  Installing: {cmd}")
-                subprocess.run(["brew", "install"] + missing, check=True)
+                try:
+                    subprocess.run(["brew", "install"] + missing, check=True)
+                except subprocess.CalledProcessError as e:
+                    raise click.ClickException(
+                        f"Failed to install {names} via Homebrew (exit {e.returncode})."
+                    )
             else:
                 click.echo(f"  To install manually: {cmd}")
                 sys.exit(1)

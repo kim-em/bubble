@@ -17,7 +17,13 @@ class ContainerInfo:
 
 
 class ContainerRuntime(ABC):
-    """Abstract interface for container operations."""
+    """Abstract interface for container operations.
+
+    Exception contract: methods that interact with the container backend
+    raise ``RuntimeError`` (or a subclass such as ``IncusError``) on
+    failure.  Callers should catch ``RuntimeError`` to handle all
+    backend errors uniformly.
+    """
 
     @abstractmethod
     def is_available(self) -> bool:
@@ -53,7 +59,10 @@ class ContainerRuntime(ABC):
 
     @abstractmethod
     def exec(self, name: str, command: list[str], **kwargs) -> str:
-        """Execute a command inside a container, return stdout."""
+        """Execute a command inside a container, return stdout.
+
+        Raises ``RuntimeError`` (or a subclass) if the command fails.
+        """
 
     @abstractmethod
     def add_device(self, name: str, device_name: str, device_type: str, **props):

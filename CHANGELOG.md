@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.16 — 2026-03-12
+- Standardize error handling across the codebase (#155)
+  - `IncusRuntime.exec()` now raises `IncusError` (a `RuntimeError` subclass) instead of bare `RuntimeError`, matching `_run()`
+  - Document `ContainerRuntime` exception contract in `base.py`
+  - Wrap bare `check=True` subprocess calls in `setup.py` with try/except for friendly error messages
+  - Narrow broad `except Exception` catches in `relay.py` to specific types (`OSError`, `subprocess.SubprocessError`, etc.)
+
 ## 0.6.15
 
 - Store `project_dir` in registry at creation time instead of guessing via `ls` at reattach (#131)

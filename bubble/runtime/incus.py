@@ -56,7 +56,7 @@ class IncusRuntime(ContainerRuntime):
         try:
             return json.loads(output)
         except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON from incus {' '.join(args)}: {e}")
+            raise RuntimeError(f"Invalid JSON from incus {' '.join(args)}: {e}") from None
 
     def is_available(self) -> bool:
         try:
@@ -148,10 +148,7 @@ class IncusRuntime(ContainerRuntime):
         cmd = ["incus"] + args
         result = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if result.returncode != 0:
-            error_detail = result.stderr.strip() or result.stdout.strip()
-            raise RuntimeError(
-                f"Command failed (exit {result.returncode}): {' '.join(command)}\n{error_detail}"
-            )
+            raise IncusError(result.returncode, cmd, result.stdout, result.stderr)
         return result.stdout.strip()
 
     def add_device(self, name: str, device_name: str, device_type: str, **props):
