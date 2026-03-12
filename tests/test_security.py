@@ -114,6 +114,17 @@ def test_is_enabled_auto_on():
     assert is_enabled(config, "relay") is True
 
 
+def test_is_enabled_auto_off():
+    """github_token_inject defaults to off (auto_default=off)."""
+    config = {}
+    assert is_enabled(config, "github_token_inject") is False
+
+
+def test_is_enabled_github_token_inject_explicit_on():
+    config = {"security": {"github_token_inject": "on"}}
+    assert is_enabled(config, "github_token_inject") is True
+
+
 def test_is_enabled_auto_on_credentials():
     config = {}
     assert is_enabled(config, "claude_credentials") is True

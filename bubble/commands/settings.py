@@ -329,10 +329,21 @@ def register_settings_commands(main):
         host_auth = has_gh_auth()
         proxy_installed = is_auth_proxy_installed()
 
+        token_inject = get_setting(config, "github_token_inject")
+        inject_enabled = sec_is_enabled(config, "github_token_inject")
+
         click.echo(f"GitHub auth:      {github_auth} (effectively {'on' if enabled else 'off'})")
+        click.echo(
+            f"Token injection:  {token_inject} (effectively {'on' if inject_enabled else 'off'})"
+        )
         click.echo(f"Host gh auth:     {'authenticated' if host_auth else 'not authenticated'}")
         click.echo(f"Auth proxy:       {'installed' if proxy_installed else 'not installed'}")
-        if not host_auth:
+        if inject_enabled:
+            click.echo(
+                "\nWarning: token injection is enabled. Containers get your full GitHub token."
+                "\nDisable: bubble security set github-token-inject off"
+            )
+        elif not host_auth:
             click.echo("\nRun 'gh auth login' to authenticate on the host first.")
         elif not enabled:
             click.echo(

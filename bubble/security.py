@@ -111,6 +111,12 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         category="Authentication",
         extra_values=("read-write",),
     ),
+    "github_token_inject": SecuritySettingDef(
+        description="Direct GitHub token injection into container (bypasses proxy)",
+        auto_default="off",
+        warning="containers get the host's full GitHub token (unrestricted access)",
+        category="Authentication",
+    ),
     "relay": SecuritySettingDef(
         description="Bubble-in-bubble relay daemon",
         auto_default="on",

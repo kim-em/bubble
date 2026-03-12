@@ -36,8 +36,17 @@ def finalize_bubble(
     if hook:
         hook.post_clone(runtime, name, project_dir)
 
-    # Set up repo-scoped GitHub auth via host proxy (security.github_auth)
-    if is_enabled(config, "github_auth"):
+    # Set up GitHub auth: token injection (level 5) or proxy (levels 1-4)
+    if is_enabled(config, "github_token_inject"):
+        from .github_token import setup_gh_token
+
+        setup_gh_token(
+            runtime,
+            name,
+            machine_readable=machine_readable,
+            token_inject=True,
+        )
+    elif is_enabled(config, "github_auth"):
         from .github_token import setup_gh_token
         from .tools import resolve_tools
 
