@@ -131,7 +131,7 @@ def apply_network(
 
             apply_allowlist(runtime, name, domains)
             click.echo("  Network allowlist applied.")
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError) as e:
             raise click.ClickException(f"Failed to apply network allowlist: {e}")
 
 

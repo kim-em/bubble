@@ -190,11 +190,11 @@ def _fix_dns_with_proxy(runtime: ContainerRuntime, name: str) -> bool:
         # Verify it works
         runtime.exec(name, ["timeout", "3", "getent", "hosts", "github.com"])
         return True
-    except Exception:
+    except (RuntimeError, OSError, subprocess.SubprocessError):
         # Clean up on failure
         try:
             runtime.exec(name, ["systemctl", "start", "systemd-resolved"])
-        except Exception:
+        except (RuntimeError, OSError, subprocess.SubprocessError):
             pass
         return False
 
@@ -210,7 +210,7 @@ def _wait_for_container(runtime: ContainerRuntime, name: str, timeout: int = 60)
         try:
             runtime.exec(name, ["true"])
             break
-        except Exception:
+        except (RuntimeError, OSError, subprocess.SubprocessError):
             time.sleep(1)
     else:
         raise RuntimeError(f"Container '{name}' not exec-able after {timeout}s")
@@ -220,7 +220,7 @@ def _wait_for_container(runtime: ContainerRuntime, name: str, timeout: int = 60)
         try:
             runtime.exec(name, ["timeout", "3", "getent", "hosts", "github.com"])
             return  # Everything works
-        except Exception:
+        except (RuntimeError, OSError, subprocess.SubprocessError):
             time.sleep(1)
 
     # Phase 3: DHCP/DNS didn't come up — apply workarounds
@@ -236,7 +236,7 @@ def _wait_for_container(runtime: ContainerRuntime, name: str, timeout: int = 60)
     try:
         runtime.exec(name, ["timeout", "3", "getent", "hosts", "github.com"])
         return
-    except Exception:
+    except (RuntimeError, OSError, subprocess.SubprocessError):
         pass
 
     raise RuntimeError(f"Container '{name}' network not ready after {timeout}s")

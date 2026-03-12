@@ -315,27 +315,27 @@ def _handle_connection(
         try:
             _open_bubble(target)
             _send_response(conn, "ok", f"Opening bubble for '{target}'...")
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as e:
             _send_response(conn, "error", f"Failed to open bubble: {e}")
             logger.info("ERROR  container=%s  target=%s  %s", log_container, log_target, e)
 
     except socket.timeout:
         try:
             _send_response(conn, "error", "Request timed out.")
-        except Exception:
+        except OSError:
             pass
         logger.info("REJECT  timeout")
-    except Exception as e:
+    except (OSError, ValueError, json.JSONDecodeError) as e:
         try:
             _send_response(conn, "error", "Request failed.")
-        except Exception:
+        except OSError:
             pass
-        logger.info("ERROR  %s", e)
+        logger.info("ERROR  %s: %s", type(e).__name__, e)
     finally:
         try:
             time.sleep(0.1)  # Allow proxy to flush response
             conn.close()
-        except Exception:
+        except OSError:
             pass
 
 
@@ -422,7 +422,7 @@ def run_daemon():
                 # All handler slots busy — drop the connection immediately
                 try:
                     conn.close()
-                except Exception:
+                except OSError:
                     pass
                 continue
             executor.submit(
