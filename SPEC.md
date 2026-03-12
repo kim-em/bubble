@@ -340,7 +340,8 @@ of the versioned image for next time.
 > containers would pick up via `lake exe cache get`. The cache is *not* shared
 > with `lake exe cache` run on the host — only bubble containers are affected.
 > Set `shared-cache` to `off` (via `bubble security set shared-cache off`) to
-> mount the cache read-only and eliminate this risk.
+> mount the cache read-only and prevent future poisoning. If you suspect the
+> cache has already been compromised, delete `~/.bubble/mathlib-cache/`.
 
 **Post-clone behavior:**
 - Pre-populate Lake dependencies from `lake-manifest.json` (see 2.4)
