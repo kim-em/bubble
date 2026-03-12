@@ -76,10 +76,15 @@ def maybe_rebuild_tools(runtime: ContainerRuntime, notices=None):
     if TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash:
         return
 
+    def _tools_still_stale():
+        return not (
+            TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash
+        )
+
     if notices:
         notices.begin()
     click.echo("Tools configuration changed, rebuilding base image...")
-    build_image(runtime, "base", force=True)
+    build_image(runtime, "base", force=True, still_needed=_tools_still_stale)
 
 
 def maybe_rebuild_customize(notices=None):
