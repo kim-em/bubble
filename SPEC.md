@@ -960,6 +960,19 @@ The host's GitHub token never enters the container.
 - `POST /git/{owner}/{repo}[.git]/git-upload-pack`
 - `POST /git/{owner}/{repo}[.git]/git-receive-pack`
 
+**Access levels (per-container):**
+| Level | Description | Scope |
+|-------|-------------|-------|
+| 1 | Git smart HTTP only (push/pull) | Repo-scoped |
+| 2 | Git + REST API read-only | Repo-scoped (REST paths validated against `/repos/{owner}/{repo}/...`) |
+| 3 (default) | Git + gh read-only (REST read + GraphQL queries) | Git and REST are repo-scoped; **GraphQL is account-wide** — queries can read any data the host token can access |
+| 4 | Git + gh read-write (REST + GraphQL + mutations) | Git and REST are repo-scoped; **GraphQL queries and mutations are account-wide** |
+
+> **Note:** GitHub's GraphQL API does not support path-based scoping.
+> At the default level 3, a container can query any repository, org membership,
+> or user data readable by the host token. To restrict containers to git-only
+> access, use `bubble security set github-api off`.
+
 **Security:**
 - Path canonicalization: reject encoded separators, dot-segments, duplicate slashes
 - No redirect following (returns redirects as-is to prevent token leakage)
@@ -1090,7 +1103,8 @@ values: `auto`, `on`, `off`.
 | `git-manifest-trust` | on | Auto-clone Lake manifest dependencies |
 | `claude-credentials` | off | Mount Claude credentials into containers |
 | `codex-credentials` | off | Mount Codex credentials into containers |
-| `github-auth` | on | Repo-scoped GitHub auth via proxy |
+| `github-auth` | on | Repo-scoped GitHub auth via proxy (git push/pull) |
+| `github-api` | on | GitHub API access via auth proxy — read-only but **account-wide** (GraphQL queries can read any repo the host token can access). Set to `off` for git-only, or `read-write` for mutations |
 | `relay` | on | Bubble-in-bubble relay |
 | `host-key-trust` | on | Disable SSH StrictHostKeyChecking |
 

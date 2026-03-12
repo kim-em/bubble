@@ -312,6 +312,7 @@ The relay only allows opening repos already cloned in `~/.bubble/git/` — it ca
 - **SSH key-only auth**: Password authentication is disabled
 - **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
 - **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
+- **GitHub auth proxy**: Host token never enters containers. Git push/pull is repo-scoped. GitHub API access (gh CLI, GraphQL) is read-only but **account-wide** — queries can read any data the host token can access. Disable with `bubble security set github-api off`
 
 ### Known Limitations
 
