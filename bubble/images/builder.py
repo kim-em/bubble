@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import re
+import shlex
 import subprocess
 import time
 from contextlib import ExitStack, contextmanager
@@ -409,7 +410,7 @@ def _install_tools_if_base(
         # Inject VS Code commit hash for the vscode tool script
         vscode_commit = get_vscode_commit()
         if vscode_commit and "vscode" in enabled:
-            script = f"export VSCODE_COMMIT='{vscode_commit}'\n" + script
+            script = f"export VSCODE_COMMIT={shlex.quote(vscode_commit)}\n" + script
         print(f"  Installing tools: {', '.join(enabled)}")
         with heartbeat("  still installing tools..."):
             runtime.exec(build_name, ["bash", "-c", script])
@@ -603,7 +604,7 @@ def build_lean_toolchain_image(
             _wait_for_container(runtime, build_name)
 
             script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
-            script = f"export LEAN_TOOLCHAIN='{version}'\n" + script
+            script = f"export LEAN_TOOLCHAIN={shlex.quote(version)}\n" + script
             with heartbeat(f"  still building {alias} image..."):
                 runtime.exec(build_name, ["bash", "-c", script])
 
