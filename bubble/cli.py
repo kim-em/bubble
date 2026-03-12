@@ -772,6 +772,9 @@ def _open_single(
         )
         return
 
+    # Pre-compute user mount targets for overlap checking below
+    user_targets = {Path(m.target) for m in mount_specs}
+
     # Claude Code config mounts (opt-out via --no-claude-config)
     # When security.claude_credentials=on, always include credentials.
     # When security.claude_credentials=off, never include (overrides config).
@@ -782,7 +785,6 @@ def _open_single(
     if claude_config:
         cc_mounts = claude_config_mounts(include_credentials=include_creds)
         # Suppress auto mounts that overlap with user mounts (exact or ancestry)
-        user_targets = {Path(m.target) for m in mount_specs}
         cc_mounts = [m for m in cc_mounts if not mount_overlaps(Path(m.target), user_targets)]
         # Hint about symlinking ~/.bubble/claude-projects/ to ~/.claude/projects/
         if not machine_readable:
@@ -795,13 +797,11 @@ def _open_single(
     )
     cx_mounts = codex_config_mounts(include_credentials=include_codex_creds)
     if cx_mounts:
-        user_targets = {Path(m.target) for m in mount_specs}
         cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
     # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
     ec_mounts = editor_config_mounts(editor)
     if ec_mounts:
-        user_targets = {Path(m.target) for m in mount_specs}
         ec_mounts = [m for m in ec_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
     # Local flow
