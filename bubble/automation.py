@@ -6,6 +6,7 @@ Supports:
 - Fallback: cron jobs
 """
 
+import os
 import platform
 import plistlib
 import subprocess
@@ -123,6 +124,8 @@ def _write_launchd_plist(label: str, job: dict) -> str:
         "ProgramArguments": [bubble] + job["args"],
         "StandardOutPath": job["log"],
         "StandardErrorPath": job["log"],
+        # Inherit the current PATH so that tools like gh are discoverable.
+        "EnvironmentVariables": {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
     }
     plist.update(job["extra"])
 

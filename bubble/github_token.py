@@ -236,8 +236,8 @@ def _setup_gh_proxy(
             connect=connect_addr,
             listen=f"unix:{_CONTAINER_GH_SOCKET}",
             bind="container",
-            uid="1000",
-            gid="1000",
+            uid="1001",
+            gid="1001",
             mode="0660",
         )
     except Exception as e:
@@ -404,8 +404,8 @@ def _setup_gh_proxy_remote(
                 f"connect={connect_addr}",
                 f"listen=unix:{_CONTAINER_GH_SOCKET}",
                 "bind=container",
-                "uid=1000",
-                "gid=1000",
+                "uid=1001",
+                "gid=1001",
                 "mode=0660",
             ],
             timeout=15,
