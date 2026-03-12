@@ -60,42 +60,6 @@ def test_get_setting_reads_security_section():
     assert get_setting(config, "relay") == "off"
 
 
-def test_get_setting_relay_backwards_compat():
-    """When relay is auto but [relay] enabled = true, treat as on."""
-    config = {"relay": {"enabled": True}}
-    assert get_setting(config, "relay") == "on"
-
-
-def test_get_setting_relay_backwards_compat_disabled():
-    """When relay is auto and [relay] enabled = false, stay auto."""
-    config = {"relay": {"enabled": False}}
-    assert get_setting(config, "relay") == "auto"
-
-
-def test_get_setting_relay_explicit_overrides_backwards_compat():
-    """Explicit security.relay takes precedence over [relay] enabled."""
-    config = {"security": {"relay": "off"}, "relay": {"enabled": True}}
-    assert get_setting(config, "relay") == "off"
-
-
-def test_get_setting_github_auth_backwards_compat_on():
-    """When github_auth is auto but [github] token = true, treat as on."""
-    config = {"github": {"token": True}}
-    assert get_setting(config, "github_auth") == "on"
-
-
-def test_get_setting_github_auth_backwards_compat_off():
-    """When github_auth is auto but [github] token = false, treat as off."""
-    config = {"github": {"token": False}}
-    assert get_setting(config, "github_auth") == "off"
-
-
-def test_get_setting_github_auth_explicit_overrides_backwards_compat():
-    """Explicit security.github_auth takes precedence over [github] token."""
-    config = {"security": {"github_auth": "on"}, "github": {"token": False}}
-    assert get_setting(config, "github_auth") == "on"
-
-
 def test_get_setting_unknown_raises():
     import pytest
 
@@ -374,64 +338,6 @@ def test_security_set_unknown(tmp_data_dir):
     assert "Unknown security setting" in result.output
 
 
-def test_security_set_relay_syncs_old_config(tmp_data_dir):
-    """Setting security.relay also updates [relay] enabled for backwards compat."""
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["security", "set", "relay", "on"])
-    assert result.exit_code == 0
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["security"]["relay"] == "on"
-    assert config["relay"]["enabled"] is True
-
-
-# --- Legacy config commands still work ---
-
-
-def test_config_help_hides_deprecated_commands(tmp_data_dir):
-    """Deprecated commands should not appear in `bubble config --help`."""
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["config", "--help"])
-    assert result.exit_code == 0
-    # 'set' and 'symlink-claude-projects' should still be visible
-    assert "set" in result.output
-    # Deprecated commands should be hidden
-    assert "lockdown" not in result.output
-    assert "accept-risks" not in result.output
-    # 'security' as a subcommand of config should also be hidden.
-    # Extract just the command names (first word of each indented line in command sections).
-    lines = result.output.splitlines()
-    command_names = []
-    in_commands = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.endswith(":") and line.startswith(" ") is False:
-            in_commands = True
-            continue
-        if in_commands and stripped:
-            command_names.append(stripped.split()[0])
-        elif in_commands and not stripped:
-            in_commands = False
-    assert "security" not in command_names
-
-
-def test_config_security_cli_deprecated(tmp_data_dir):
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["config", "security"])
-    assert result.exit_code == 0
-    assert "deprecated" in result.output
-    assert "bubble security" in result.output
-    assert "shared-cache" in result.output
-
-
 def test_config_set_cli(tmp_data_dir):
     from bubble.cli import main
 
@@ -518,55 +424,6 @@ def test_config_set_invalid_value(tmp_data_dir):
     assert result.exit_code != 0
 
 
-def test_config_lockdown(tmp_data_dir):
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["config", "lockdown"])
-    assert result.exit_code == 0
-    assert "deprecated" in result.output
-    assert "bubble security lockdown" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    # on-by-default should NOT be changed by lockdown (lockdown only targets off-by-default)
-    assert config["security"].get("claude_credentials") is None
-    assert config["security"].get("shared_cache") is None
-    assert config["security"].get("relay") is None
-
-
-def test_config_accept_risks(tmp_data_dir):
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["config", "accept-risks"])
-    assert result.exit_code == 0
-    assert "deprecated" in result.output
-    assert "bubble security permissive" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    # on-by-default should be set to on (includes credentials now)
-    assert config["security"]["shared_cache"] == "on"
-    assert config["security"]["network_github"] == "on"
-    assert config["security"]["relay"] == "on"
-    assert config["security"]["claude_credentials"] == "on"
-    assert config["security"]["codex_credentials"] == "on"
-
-
-def test_config_accept_risks_idempotent(tmp_data_dir):
-    """Running accept-risks twice doesn't fail."""
-    from bubble.cli import main
-
-    runner = CliRunner()
-    runner.invoke(main, ["config", "accept-risks"])
-    result = runner.invoke(main, ["config", "accept-risks"])
-    assert result.exit_code == 0
-    assert "No auto-defaulting-to-on" in result.output
-
-
 # --- Preset function tests ---
 
 
@@ -600,15 +457,12 @@ def test_apply_preset_default_idempotent():
     assert len(changed) == 0
 
 
-def test_apply_preset_default_clears_legacy_relay():
+def test_apply_preset_default_restores_relay():
     """permissive then default should fully restore relay to auto."""
     config = {}
     apply_preset_permissive(config)
-    # permissive sets both security.relay=on and relay.enabled=True
     assert config["security"]["relay"] == "on"
-    assert config["relay"]["enabled"] is True
     apply_preset_default(config)
-    # default should clear both, so relay is truly auto (on)
     assert get_setting(config, "relay") == "auto"
     assert is_enabled(config, "relay") is True
 

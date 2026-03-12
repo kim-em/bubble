@@ -1084,8 +1084,6 @@ get/set interface:
 - `bubble codex credentials on|off` — toggle Codex credential mounting
 - `bubble security set NAME on|off|auto` — configure security settings
 - `bubble config set KEY VALUE` — set security settings (alias)
-- `bubble config lockdown` — disable all off-by-default security features
-- `bubble config accept-risks` — enable all on-by-default risk features
 - `bubble config symlink-claude-projects` — symlink Claude projects directory
 
 ---

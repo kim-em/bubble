@@ -102,9 +102,5 @@ def register_security_commands(main):
             config["security"] = {}
         config["security"][name] = value
 
-        # Keep relay backwards compat in sync
-        if name == "relay":
-            config.setdefault("relay", {})["enabled"] = value == "on"
-
         save_config(config)
         click.echo(f"Set security.{display_setting_name(name)} = {value}")
