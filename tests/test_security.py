@@ -377,6 +377,35 @@ def test_security_set_relay_syncs_old_config(tmp_data_dir):
 # --- Legacy config commands still work ---
 
 
+def test_config_help_hides_deprecated_commands(tmp_data_dir):
+    """Deprecated commands should not appear in `bubble config --help`."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "--help"])
+    assert result.exit_code == 0
+    # 'set' and 'symlink-claude-projects' should still be visible
+    assert "set" in result.output
+    # Deprecated commands should be hidden
+    assert "lockdown" not in result.output
+    assert "accept-risks" not in result.output
+    # 'security' as a subcommand of config should also be hidden.
+    # Extract just the command names (first word of each indented line in command sections).
+    lines = result.output.splitlines()
+    command_names = []
+    in_commands = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.endswith(":") and line.startswith(" ") is False:
+            in_commands = True
+            continue
+        if in_commands and stripped:
+            command_names.append(stripped.split()[0])
+        elif in_commands and not stripped:
+            in_commands = False
+    assert "security" not in command_names
+
+
 def test_config_security_cli_deprecated(tmp_data_dir):
     from bubble.cli import main
 
