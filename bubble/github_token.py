@@ -33,8 +33,6 @@ import platform
 import shlex
 import subprocess
 
-import click
-
 from .output import detail
 from .runtime.base import ContainerRuntime
 from .runtime.colima import colima_host_ip
