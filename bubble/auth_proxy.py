@@ -23,16 +23,11 @@ On macOS (Colima): TCP listener, port saved to ~/.bubble/auth-proxy.port.
 On Linux: TCP listener on 127.0.0.1 (Incus proxy needs TCP for HTTP).
 """
 
-import fcntl
-import json
 import logging
 import os
 import re
-import secrets
 import ssl
 import threading
-import time
-from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import HTTPError
 from urllib.parse import urlparse
@@ -45,6 +40,8 @@ from urllib.request import (
 )
 
 from .config import DATA_DIR
+from .token_store import RateLimiter as _RateLimiter
+from .token_store import RateWindow, TokenStore, setup_file_logging
 
 AUTH_PROXY_PORT_FILE = DATA_DIR / "auth-proxy.port"
 AUTH_PROXY_LOG = DATA_DIR / "auth-proxy.log"
@@ -94,23 +91,8 @@ logger = logging.getLogger("bubble.auth_proxy")
 
 
 # ---------------------------------------------------------------------------
-# Token management (same pattern as relay tokens)
+# Token management (backed by shared TokenStore)
 # ---------------------------------------------------------------------------
-
-
-def _token_lock():
-    """Acquire an exclusive file lock for the token registry."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    lock_path = AUTH_PROXY_TOKENS.with_suffix(".lock")
-    fd = lock_path.open("w")
-    fcntl.flock(fd, fcntl.LOCK_EX)
-    return fd
-
-
-def _token_unlock(fd):
-    """Release the token registry file lock."""
-    fcntl.flock(fd, fcntl.LOCK_UN)
-    fd.close()
 
 
 def generate_auth_token(container_name: str, owner: str, repo: str) -> str:
@@ -120,45 +102,19 @@ def generate_auth_token(container_name: str, owner: str, repo: str) -> str:
     this to validate that requests target the correct repository.
     Uses file locking to prevent read-modify-write races.
     """
-    fd = _token_lock()
-    try:
-        token = secrets.token_hex(32)
-        tokens = _load_tokens()
-        tokens[token] = {"container": container_name, "owner": owner, "repo": repo}
-        _save_tokens(tokens)
-        return token
-    finally:
-        _token_unlock(fd)
+    return TokenStore(AUTH_PROXY_TOKENS).generate(
+        {"container": container_name, "owner": owner, "repo": repo}
+    )
 
 
 def remove_auth_tokens(container_name: str):
     """Remove all auth proxy tokens for a container (e.g. on pop)."""
-    fd = _token_lock()
-    try:
-        tokens = _load_tokens()
-        tokens = {t: v for t, v in tokens.items() if v.get("container") != container_name}
-        _save_tokens(tokens)
-    finally:
-        _token_unlock(fd)
+    TokenStore(AUTH_PROXY_TOKENS).remove(lambda v: v.get("container") == container_name)
 
 
 def _load_tokens() -> dict:
-    """Load token registry from disk. Caller must hold the lock for writes."""
-    if AUTH_PROXY_TOKENS.exists():
-        try:
-            return json.loads(AUTH_PROXY_TOKENS.read_text())
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
-
-
-def _save_tokens(tokens: dict):
-    """Save token registry to disk."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = AUTH_PROXY_TOKENS.with_suffix(".tmp")
-    tmp.write_text(json.dumps(tokens))
-    tmp.replace(AUTH_PROXY_TOKENS)
-    os.chmod(str(AUTH_PROXY_TOKENS), 0o600)
+    """Load token registry from disk."""
+    return TokenStore(AUTH_PROXY_TOKENS)._load()
 
 
 class AuthTokenRegistry:
@@ -168,59 +124,24 @@ class AuthTokenRegistry:
     """
 
     def __init__(self):
-        self._tokens: dict = {}
-        self._mtime: float = 0
-        self._lock = threading.Lock()
+        self._store = TokenStore(AUTH_PROXY_TOKENS)
 
     def lookup(self, token: str) -> dict | None:
         """Look up a token. Returns {container, owner, repo} or None."""
-        with self._lock:
-            self._maybe_reload()
-            return self._tokens.get(token)
-
-    def _maybe_reload(self):
-        try:
-            st = AUTH_PROXY_TOKENS.stat()
-            if st.st_mtime != self._mtime:
-                self._tokens = _load_tokens()
-                self._mtime = st.st_mtime
-        except FileNotFoundError:
-            self._tokens = {}
-            self._mtime = 0
+        return self._store.lookup(token)
 
 
-class ProxyRateLimiter:
+class ProxyRateLimiter(_RateLimiter):
     """Per-container rate limiter for the auth proxy.
 
     More generous than the relay (git does many requests per operation).
     """
 
     def __init__(self):
-        self._requests: dict[str, deque] = {}
-        self._lock = threading.Lock()
-
-    def check(self, container: str) -> bool:
-        """Check if a request is allowed. Records it if so."""
-        now = time.time()
-        with self._lock:
-            # Evict oldest container if too many tracked
-            if container not in self._requests and len(self._requests) >= MAX_TRACKED_CONTAINERS:
-                oldest_key = min(
-                    self._requests,
-                    key=lambda k: self._requests[k][-1] if self._requests[k] else 0,
-                )
-                del self._requests[oldest_key]
-
-            q = self._requests.setdefault(container, deque())
-            # Prune entries older than 1 hour
-            while q and q[0] < now - 3600:
-                q.popleft()
-            # Check windows
-            last_60 = sum(1 for t in q if t > now - 60)
-            if last_60 >= RATE_LIMIT_PER_MINUTE or len(q) >= RATE_LIMIT_PER_HOUR:
-                return False
-            q.append(now)
-            return True
+        super().__init__(
+            windows=[RateWindow(60, RATE_LIMIT_PER_MINUTE), RateWindow(3600, RATE_LIMIT_PER_HOUR)],
+            max_tracked=MAX_TRACKED_CONTAINERS,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -568,11 +489,7 @@ class ThreadedHTTPServer(HTTPServer):
 
 def _setup_logging():
     """Configure auth proxy logging to ~/.bubble/auth-proxy.log."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(str(AUTH_PROXY_LOG))
-    handler.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    setup_file_logging(logger, AUTH_PROXY_LOG)
 
 
 def _get_github_token() -> str:
