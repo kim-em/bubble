@@ -1,6 +1,5 @@
 """Tests for shell tab completion."""
 
-
 from click.testing import CliRunner
 
 from bubble.cli import main
