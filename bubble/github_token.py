@@ -18,7 +18,7 @@ on the remote exposes it into the container.
 Access levels:
   Level 1: git only (push/pull)
   Level 3: git + gh read-only (REST read + GraphQL queries)
-  Level 4: git + gh read-write (future)
+  Level 4: git + gh read-write (REST read-write + GraphQL mutations)
 
 When the gh tool is installed and github_api is enabled, the proxy
 is also exposed as a Unix socket at /bubble/gh-proxy.sock and gh
@@ -110,11 +110,14 @@ def _resolve_access_level(config: dict, gh_enabled: bool) -> int:
 
     Returns the access level (1-4) based on config and tool availability.
     """
-    from .auth_proxy import DEFAULT_LEVEL, LEVEL_GIT_ONLY
-    from .security import is_enabled
+    from .auth_proxy import DEFAULT_LEVEL, LEVEL_GH_READWRITE, LEVEL_GIT_ONLY
+    from .security import get_setting, is_enabled
 
     if not gh_enabled or not is_enabled(config, "github_api"):
         return LEVEL_GIT_ONLY
+
+    if get_setting(config, "github_api") == "read-write":
+        return LEVEL_GH_READWRITE
 
     return DEFAULT_LEVEL  # LEVEL_GH_READ (3)
 

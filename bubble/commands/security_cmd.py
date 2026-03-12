@@ -9,15 +9,13 @@ from ..security import (
     SETTINGS as SECURITY_SETTINGS,
 )
 from ..security import (
-    VALID_VALUES as SECURITY_VALID_VALUES,
-)
-from ..security import (
     apply_preset_default,
     apply_preset_lockdown,
     apply_preset_permissive,
     display_setting_name,
     normalize_setting_name,
     print_security_posture,
+    valid_values_for,
 )
 
 
@@ -73,18 +71,30 @@ def register_security_commands(main):
 
     @security_group.command("set")
     @click.argument("key")
-    @click.argument("value", type=click.Choice(SECURITY_VALID_VALUES))
+    @click.argument("value")
     def security_set(key, value):
         """Set a security setting: bubble security set <name> <value>.
 
         Setting names use hyphens (e.g. github-auth, claude-credentials).
         Underscores are also accepted as permanent aliases.
+
+        Most settings accept: auto, on, off.
+        github-api also accepts: read-write (enables mutations).
         """
         # Accept both "security.X" and bare "X", normalize hyphens to underscores
         name = normalize_setting_name(key.removeprefix("security."))
         if name not in SECURITY_SETTINGS:
             available = ", ".join(sorted(display_setting_name(k) for k in SECURITY_SETTINGS))
             click.echo(f"Unknown security setting: {key}. Available: {available}", err=True)
+            sys.exit(1)
+
+        allowed = valid_values_for(name)
+        if value not in allowed:
+            click.echo(
+                f"Invalid value {value!r} for {display_setting_name(name)}."
+                f" Choose from: {', '.join(allowed)}",
+                err=True,
+            )
             sys.exit(1)
 
         config = load_config()

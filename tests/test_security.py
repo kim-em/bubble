@@ -17,6 +17,7 @@ from bubble.security import (
     normalize_setting_name,
     print_warnings,
     should_include_credentials,
+    valid_values_for,
 )
 
 # --- Name normalization tests ---
@@ -605,6 +606,134 @@ def test_all_settings_have_valid_category():
     valid_cats = {name for name, _ in CATEGORIES}
     for name, defn in SETTINGS.items():
         assert defn.category in valid_cats, f"{name} has unknown category '{defn.category}'"
+
+
+# --- github_api read-write tests ---
+
+
+def test_valid_values_for_normal_setting():
+    """Normal settings accept only auto/on/off."""
+    assert valid_values_for("relay") == ("auto", "on", "off")
+    assert valid_values_for("shared_cache") == ("auto", "on", "off")
+
+
+def test_valid_values_for_github_api():
+    """github_api also accepts read-write."""
+    vals = valid_values_for("github_api")
+    assert "auto" in vals
+    assert "on" in vals
+    assert "off" in vals
+    assert "read-write" in vals
+
+
+def test_get_setting_github_api_read_write():
+    config = {"security": {"github_api": "read-write"}}
+    assert get_setting(config, "github_api") == "read-write"
+
+
+def test_is_enabled_github_api_read_write():
+    """read-write counts as enabled."""
+    config = {"security": {"github_api": "read-write"}}
+    assert is_enabled(config, "github_api") is True
+
+
+def test_is_locked_off_github_api_read_write():
+    """read-write is not locked off."""
+    config = {"security": {"github_api": "read-write"}}
+    assert is_locked_off(config, "github_api") is False
+
+
+def test_has_auto_settings_with_read_write():
+    """read-write is an explicit value, not auto."""
+    config = {"security": {name: "on" for name in SETTINGS}}
+    config["security"]["github_api"] = "read-write"
+    assert has_auto_settings(config) is False
+
+
+def test_resolve_access_level_read_write():
+    """read-write config returns LEVEL_GH_READWRITE (4)."""
+    from bubble.auth_proxy import LEVEL_GH_READWRITE
+    from bubble.github_token import _resolve_access_level
+
+    config = {"security": {"github_api": "read-write"}}
+    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
+
+
+def test_resolve_access_level_on_returns_default():
+    """on config returns LEVEL_GH_READ (3)."""
+    from bubble.auth_proxy import LEVEL_GH_READ
+    from bubble.github_token import _resolve_access_level
+
+    config = {"security": {"github_api": "on"}}
+    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READ
+
+
+def test_resolve_access_level_off_returns_git_only():
+    """off config returns LEVEL_GIT_ONLY (1)."""
+    from bubble.auth_proxy import LEVEL_GIT_ONLY
+    from bubble.github_token import _resolve_access_level
+
+    config = {"security": {"github_api": "off"}}
+    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GIT_ONLY
+
+
+def test_resolve_access_level_gh_disabled():
+    """gh not enabled returns LEVEL_GIT_ONLY regardless of config."""
+    from bubble.auth_proxy import LEVEL_GIT_ONLY
+    from bubble.github_token import _resolve_access_level
+
+    config = {"security": {"github_api": "read-write"}}
+    assert _resolve_access_level(config, gh_enabled=False) == LEVEL_GIT_ONLY
+
+
+def test_security_set_github_api_read_write(tmp_data_dir):
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "github-api", "read-write"])
+    assert result.exit_code == 0
+    assert "Set security.github-api = read-write" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["github_api"] == "read-write"
+
+
+def test_security_set_read_write_rejected_for_other_settings(tmp_data_dir):
+    """read-write is only valid for github_api, not other settings."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "relay", "read-write"])
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output
+
+
+def test_config_set_github_api_read_write(tmp_data_dir):
+    """config set also accepts read-write for github-api."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "set", "github-api", "read-write"])
+    assert result.exit_code == 0
+    assert "Set security.github-api = read-write" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["github_api"] == "read-write"
+
+
+def test_security_posture_shows_read_write(tmp_data_dir, capsys):
+    """security posture display shows read-write hint for github-api."""
+    from bubble.security import print_security_posture
+
+    config = {"security": {"github_api": "read-write"}}
+    print_security_posture(config)
+    captured = capsys.readouterr()
+    assert "read-write" in captured.out
+    assert "mutations" in captured.out
 
 
 # --- SSH config tests ---

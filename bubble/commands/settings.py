@@ -7,8 +7,7 @@ import click
 
 from ..config import DEFAULT_CONFIG, _deep_merge, load_config, load_raw_config, save_config
 from ..security import SETTINGS as SECURITY_SETTINGS
-from ..security import VALID_VALUES as SECURITY_VALID_VALUES
-from ..security import display_setting_name, get_setting, normalize_setting_name
+from ..security import display_setting_name, get_setting, normalize_setting_name, valid_values_for
 
 
 def _origin(section: str, key: str | None, config: dict, defaults: dict) -> str:
@@ -476,7 +475,7 @@ def register_settings_commands(main):
 
     @config_group.command("set")
     @click.argument("key")
-    @click.argument("value", type=click.Choice(SECURITY_VALID_VALUES))
+    @click.argument("value")
     def config_set(key, value):
         """Set a security setting: bubble config set security.<name> <value>.
 
@@ -489,6 +488,15 @@ def register_settings_commands(main):
         if name not in SECURITY_SETTINGS:
             available = ", ".join(sorted(display_setting_name(k) for k in SECURITY_SETTINGS))
             click.echo(f"Unknown security setting: {key}. Available: {available}", err=True)
+            sys.exit(1)
+
+        allowed = valid_values_for(name)
+        if value not in allowed:
+            click.echo(
+                f"Invalid value {value!r} for {display_setting_name(name)}."
+                f" Choose from: {', '.join(allowed)}",
+                err=True,
+            )
             sys.exit(1)
 
         config = load_config()
