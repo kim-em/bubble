@@ -131,6 +131,25 @@ def _check_github_number_kind(owner: str, repo: str, number: str) -> str:
     return "pr"  # Default to PR
 
 
+def _resolve_short_name(
+    registry: RepoRegistry, short: str, *, is_bare_name: bool = False
+) -> tuple[str, str]:
+    """Resolve a short repo name to (owner, repo) via the registry.
+
+    Raises TargetParseError if the name is ambiguous or unknown.
+    """
+    resolved = registry.resolve(short)
+    if resolved:
+        return resolved.split("/", 1)
+    if registry.is_ambiguous(short):
+        options = registry.get_ambiguous_options(short)
+        raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
+    msg = f"Unknown repo '{short}'. Use the full owner/repo form first."
+    if is_bare_name:
+        msg += f" If this is a local path, use ./{short} or --path."
+    raise TargetParseError(msg)
+
+
 def _parse_local_path(raw: str) -> Target:
     """Parse a local filesystem path into a Target.
 
@@ -277,63 +296,32 @@ def parse_target(raw: str, registry: RepoRegistry) -> Target:
     # Try short name resolution
     if len(parts) >= 3 and parts[1] == "issues":
         # short_name/issues/N
-        short = parts[0]
-        resolved = registry.resolve(short)
-        if resolved:
-            owner, repo = resolved.split("/", 1)
-            try:
-                issue_num = str(int(parts[2]))
-            except ValueError:
-                raise TargetParseError(f"Invalid issue number: {parts[2]!r}")
-            return Target(owner=owner, repo=repo, kind="issue", ref=issue_num, original=original)
-        if registry.is_ambiguous(short):
-            options = registry.get_ambiguous_options(short)
-            raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
-        raise TargetParseError(f"Unknown repo '{short}'. Use the full owner/repo form first.")
+        owner, repo = _resolve_short_name(registry, parts[0])
+        try:
+            issue_num = str(int(parts[2]))
+        except ValueError:
+            raise TargetParseError(f"Invalid issue number: {parts[2]!r}")
+        return Target(owner=owner, repo=repo, kind="issue", ref=issue_num, original=original)
 
     if len(parts) >= 3 and parts[1] == "pull":
         # short_name/pull/N
-        short = parts[0]
-        resolved = registry.resolve(short)
-        if resolved:
-            owner, repo = resolved.split("/", 1)
-            try:
-                pr_num = str(int(parts[2]))
-            except ValueError:
-                raise TargetParseError(f"Invalid PR number: {parts[2]!r}")
-            return Target(owner=owner, repo=repo, kind="pr", ref=pr_num, original=original)
-        if registry.is_ambiguous(short):
-            options = registry.get_ambiguous_options(short)
-            raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
-        raise TargetParseError(f"Unknown repo '{short}'. Use the full owner/repo form first.")
+        owner, repo = _resolve_short_name(registry, parts[0])
+        try:
+            pr_num = str(int(parts[2]))
+        except ValueError:
+            raise TargetParseError(f"Invalid PR number: {parts[2]!r}")
+        return Target(owner=owner, repo=repo, kind="pr", ref=pr_num, original=original)
 
     if len(parts) >= 3 and parts[1] == "tree":
         # short_name/tree/branch
-        short = parts[0]
-        resolved = registry.resolve(short)
-        if resolved:
-            owner, repo = resolved.split("/", 1)
-            branch = "/".join(parts[2:])
-            return Target(owner=owner, repo=repo, kind="branch", ref=branch, original=original)
-        if registry.is_ambiguous(short):
-            options = registry.get_ambiguous_options(short)
-            raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
-        raise TargetParseError(f"Unknown repo '{short}'. Use the full owner/repo form first.")
+        owner, repo = _resolve_short_name(registry, parts[0])
+        branch = "/".join(parts[2:])
+        return Target(owner=owner, repo=repo, kind="branch", ref=branch, original=original)
 
     if len(parts) == 1:
         # short_name — just a repo
-        short = parts[0]
-        resolved = registry.resolve(short)
-        if resolved:
-            owner, repo = resolved.split("/", 1)
-            return Target(owner=owner, repo=repo, kind="repo", ref="", original=original)
-        if registry.is_ambiguous(short):
-            options = registry.get_ambiguous_options(short)
-            raise TargetParseError(f"'{short}' is ambiguous. Did you mean: {', '.join(options)}?")
-        raise TargetParseError(
-            f"Unknown repo '{short}'. Use the full owner/repo form first. "
-            f"If this is a local path, use ./{short} or --path."
-        )
+        owner, repo = _resolve_short_name(registry, parts[0], is_bare_name=True)
+        return Target(owner=owner, repo=repo, kind="repo", ref="", original=original)
 
     raise TargetParseError(
         f"Cannot parse target: {raw!r}. Use a GitHub URL or owner/repo format. "
