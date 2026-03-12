@@ -8,13 +8,35 @@ from bubble.security import (
     apply_preset_default,
     apply_preset_lockdown,
     apply_preset_permissive,
+    display_setting_name,
     filter_github_domains,
     get_setting,
     has_auto_settings,
     is_enabled,
     is_locked_off,
+    normalize_setting_name,
     print_warnings,
 )
+
+# --- Name normalization tests ---
+
+
+def test_normalize_setting_name_hyphens():
+    assert normalize_setting_name("github-auth") == "github_auth"
+    assert normalize_setting_name("claude-credentials") == "claude_credentials"
+    assert normalize_setting_name("host-key-trust") == "host_key_trust"
+
+
+def test_normalize_setting_name_underscores_unchanged():
+    assert normalize_setting_name("github_auth") == "github_auth"
+    assert normalize_setting_name("relay") == "relay"
+
+
+def test_display_setting_name():
+    assert display_setting_name("github_auth") == "github-auth"
+    assert display_setting_name("claude_credentials") == "claude-credentials"
+    assert display_setting_name("relay") == "relay"
+
 
 # --- Core resolution tests ---
 
@@ -208,8 +230,12 @@ def test_security_cli_shows_posture(tmp_data_dir):
     assert "Quick presets" in result.output
     assert "bubble security permissive" in result.output
     assert "bubble security lockdown" in result.output
-    assert "shared_cache" in result.output
+    # Display should use hyphenated forms
+    assert "shared-cache" in result.output
     assert "relay" in result.output
+    # Underscored forms should NOT appear in display
+    assert "shared_cache" not in result.output
+    assert "github_auth" not in result.output
 
 
 def test_security_cli_shows_categories(tmp_data_dir):
@@ -274,7 +300,38 @@ def test_security_set_cli(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["security", "set", "shared_cache", "off"])
     assert result.exit_code == 0
-    assert "Set security.shared_cache = off" in result.output
+    assert "Set security.shared-cache = off" in result.output
+
+
+def test_security_set_cli_hyphenated(tmp_data_dir):
+    """Hyphenated input is accepted and normalized to underscores internally."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "shared-cache", "on"])
+    assert result.exit_code == 0
+    assert "Set security.shared-cache = on" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    # Stored internally with underscores
+    assert config["security"]["shared_cache"] == "on"
+
+
+def test_security_set_cli_hyphenated_compound(tmp_data_dir):
+    """Multi-word hyphenated names like github-auth work."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["security", "set", "github-auth", "off"])
+    assert result.exit_code == 0
+    assert "Set security.github-auth = off" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["github_auth"] == "off"
 
 
 def test_security_set_unknown(tmp_data_dir):
@@ -311,7 +368,7 @@ def test_config_security_cli_redirects(tmp_data_dir):
     result = runner.invoke(main, ["config", "security"])
     assert result.exit_code == 0
     assert "bubble security" in result.output
-    assert "shared_cache" in result.output
+    assert "shared-cache" in result.output
 
 
 def test_config_set_cli(tmp_data_dir):
@@ -320,7 +377,22 @@ def test_config_set_cli(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["config", "set", "security.shared_cache", "off"])
     assert result.exit_code == 0
-    assert "Set security.shared_cache = off" in result.output
+    assert "Set security.shared-cache = off" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["shared_cache"] == "off"
+
+
+def test_config_set_cli_hyphenated(tmp_data_dir):
+    """Accepts hyphenated names in config set."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "set", "security.shared-cache", "off"])
+    assert result.exit_code == 0
+    assert "Set security.shared-cache = off" in result.output
 
     from bubble.config import load_config
 
@@ -336,6 +408,21 @@ def test_config_set_bare_name(tmp_data_dir):
     result = runner.invoke(main, ["config", "set", "relay", "on"])
     assert result.exit_code == 0
     assert "Set security.relay = on" in result.output
+
+
+def test_config_set_bare_name_hyphenated(tmp_data_dir):
+    """Accepts bare hyphenated name without security. prefix."""
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "set", "github-auth", "on"])
+    assert result.exit_code == 0
+    assert "Set security.github-auth = on" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["security"]["github_auth"] == "on"
 
 
 def test_config_set_unknown(tmp_data_dir):

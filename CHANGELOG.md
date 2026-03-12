@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.20 — 2026-03-12
+- Normalize CLI setting names to hyphens (#143)
+  - `bubble security set` and `bubble config set` now accept hyphenated names (e.g. `github-auth`, `claude-credentials`)
+  - Underscores remain accepted as permanent aliases
+  - Display output (help text, `bubble security`, error messages) uses hyphenated forms
+  - Internal config keys remain underscored — no config file migration needed
+
 ## 0.6.19 — 2026-03-12
 - Add recovery hints to terse error messages (#147)
   - "Bubble not found" now suggests `bubble list`

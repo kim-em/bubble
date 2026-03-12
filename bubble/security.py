@@ -16,6 +16,20 @@ import click
 VALID_VALUES = ("auto", "on", "off")
 
 
+def normalize_setting_name(name: str) -> str:
+    """Normalize a setting name: hyphens → underscores for internal lookup.
+
+    Both hyphens and underscores are permanently accepted at the CLI edge.
+    Internally, canonical names always use underscores.
+    """
+    return name.replace("-", "_")
+
+
+def display_setting_name(name: str) -> str:
+    """Return the display form of a setting name (hyphens for CLI consistency)."""
+    return name.replace("_", "-")
+
+
 @dataclass
 class SecuritySettingDef:
     """Definition of a configurable security setting."""
@@ -200,6 +214,7 @@ def print_security_posture(config: dict):
 
         for name, defn in cat_settings:
             value = get_setting(config, name)
+            display = display_setting_name(name)
             if value == "auto":
                 auto_count += 1
                 effective = defn.auto_default
@@ -208,9 +223,9 @@ def print_security_posture(config: dict):
                 effective = value
                 status = value
 
-            click.echo(f"  {name}: {status}")
+            click.echo(f"  {display}: {status}")
             click.echo(f"    {defn.warning}")
-            click.echo(f"    Set: bubble security set {name} on|off|auto")
+            click.echo(f"    Set: bubble security set {display} on|off|auto")
             click.echo()
 
     if auto_count == 0:
