@@ -313,6 +313,20 @@ The relay only allows opening repos already cloned in `~/.bubble/git/` — it ca
 - **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
 - **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
 
+### Known Limitations
+
+These are inherent consequences of the architecture, not bugs. Understanding them helps you make informed trust decisions.
+
+1. **DNS exfiltration**: The network allowlist restricts IP connectivity, but DNS queries still reach the internet via the container resolver. Data can be encoded in DNS queries to exfiltrate information. This is inherent to any iptables-based approach that allows DNS.
+
+2. **/24 CIDR over-allowance**: Domain allowlisting resolves to /24 CIDR blocks (256 IPs) to handle CDN IP rotation. Other services sharing the same /24 block are also reachable.
+
+3. **iptables defense depth**: Network rules are enforced by iptables inside the container. The `user` account cannot modify them (no sudo), but a kernel exploit or other root escalation within the container could flush the rules. There is no external enforcement layer (e.g., Incus ACLs).
+
+4. **Boot-time network window**: There is a brief window between container launch and iptables rule application during which the container has unrestricted network access. No user code runs during this window with stock images.
+
+5. **Auth proxy token visibility**: The per-container auth proxy token is stored in the user's git config and in `/etc/profile.d/bubble-gh.sh` (mode 644). Any process in the container can read it. The token is scoped to one repository and access level, limiting the impact.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
