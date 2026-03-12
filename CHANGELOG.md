@@ -8,6 +8,7 @@
   - `security.codex_credentials` setting for security posture control
   - Same symlink-escape safety validation as Claude credential mounts
 - Fix security lockoff bypass: `security.{claude,codex}_credentials=off` now overrides config
+- Remove `cloud_root` security setting — redundant with cloud's explicit opt-in requirements (#103)
 
 ## 0.6.4 — 2026-03-12
 - Make GitHub auth proxy on-by-default via `security.github_auth` setting (#89)
@@ -148,7 +149,7 @@
 - `bubble config accept-risks` silences on-by-default warnings; `bubble config lockdown` disables off-by-default features
 - Security warnings printed to stderr for all `auto` settings during `bubble open`
 - `BUBBLE_QUIET_SECURITY=1` env var suppresses warnings for CI/automation
-- Settings: `shared_cache`, `user_mounts`, `network_github`, `relay`, `claude_credentials`, `host_key_trust`, `cloud_root`, `git_manifest_trust`
+- Settings: `shared_cache`, `user_mounts`, `network_github`, `relay`, `claude_credentials`, `host_key_trust`, `git_manifest_trust`
 - When `shared_cache=off`, shared mounts are read-only; when `network_github=off`, GitHub domains stripped from allowlist
 - When `user_mounts=off` or `claude_credentials=off`, corresponding CLI flags are rejected
 - Relay enable/disable migrated to `[security] relay` with backwards compatibility for `[relay] enabled`

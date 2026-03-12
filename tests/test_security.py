@@ -84,7 +84,6 @@ def test_is_enabled_auto_on():
     assert is_enabled(config, "shared_cache") is True  # auto_default = on
     assert is_enabled(config, "network_github") is True
     assert is_enabled(config, "host_key_trust") is True
-    assert is_enabled(config, "cloud_root") is True
     assert is_enabled(config, "git_manifest_trust") is True
     assert is_enabled(config, "user_mounts") is True
     assert is_enabled(config, "github_auth") is True

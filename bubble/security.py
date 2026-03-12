@@ -31,7 +31,6 @@ CATEGORIES = [
     ("Network", "Controls what containers can reach over the network"),
     ("Filesystem", "Controls what host paths containers can access"),
     ("Authentication", "Controls credential and API access from containers"),
-    ("Cloud", "Controls cloud server provisioning and access"),
     ("SSH", "Controls SSH connection security"),
 ]
 
@@ -83,12 +82,6 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         auto_default="off",
         warning="relay allows containers to create new bubbles on the host",
         category="Authentication",
-    ),
-    "cloud_root": SecuritySettingDef(
-        description="Cloud server accessed as root with unencrypted key",
-        auto_default="on",
-        warning="cloud server provisioned/accessed as root with unencrypted SSH key",
-        category="Cloud",
     ),
     "host_key_trust": SecuritySettingDef(
         description="StrictHostKeyChecking disabled for container SSH",
