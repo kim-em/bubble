@@ -184,6 +184,106 @@ print("  Registered bubble.lean-cache extension")
 
 fi  # end of Lean extensions conditional
 
+# If Claude Code CLI is installed, install the Claude Code VS Code extension
+if command -v claude &>/dev/null; then
+
+echo "Installing Claude Code VS Code extension..."
+python3 -c '
+import json, urllib.request, os, sys, subprocess, tempfile, glob, shutil
+
+EXTENSIONS_DIR = "/home/user/.vscode-server/extensions"
+EXT_ID = "anthropic.claude-code"
+
+# Query marketplace for the latest VSIX download URL
+query = json.dumps({
+    "filters": [{"criteria": [{"filterType": 7, "value": EXT_ID}]}],
+    "flags": 914,
+}).encode()
+req = urllib.request.Request(
+    "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery",
+    data=query,
+    headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json;api-version=3.0-preview.1",
+    },
+)
+try:
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read())
+except Exception as e:
+    print(f"Warning: could not query marketplace for {EXT_ID}: {e}", file=sys.stderr)
+    sys.exit(0)
+
+# Find the VSIX URL and version
+vsix_url = None
+version = None
+for ext in data["results"][0]["extensions"]:
+    for ver in ext["versions"][:1]:
+        version = ver["version"]
+        for f in ver["files"]:
+            if f["assetType"] == "Microsoft.VisualStudio.Services.VSIXPackage":
+                vsix_url = f["source"]
+                break
+
+if not vsix_url:
+    print(f"Warning: could not find VSIX download URL for {EXT_ID}", file=sys.stderr)
+    sys.exit(0)
+
+# Remove any old versions
+for old in glob.glob(os.path.join(EXTENSIONS_DIR, f"{EXT_ID}-*")):
+    shutil.rmtree(old)
+
+# Download and extract
+ext_dir = os.path.join(EXTENSIONS_DIR, f"{EXT_ID}-{version}")
+os.makedirs(ext_dir, exist_ok=True)
+
+with tempfile.NamedTemporaryFile(suffix=".vsix", delete=False) as tmp:
+    tmp_path = tmp.name
+
+try:
+    print(f"  Downloading {EXT_ID} v{version}...")
+    urllib.request.urlretrieve(vsix_url, tmp_path)
+    subprocess.run(
+        ["unzip", "-q", "-o", tmp_path, "extension/*", "-d", ext_dir],
+        check=True,
+    )
+    # Move contents from extension/ subdirectory up to ext_dir
+    nested = os.path.join(ext_dir, "extension")
+    if os.path.isdir(nested):
+        for item in os.listdir(nested):
+            os.rename(os.path.join(nested, item), os.path.join(ext_dir, item))
+        os.rmdir(nested)
+    print(f"  Installed to {ext_dir}")
+
+    # Append to extensions.json manifest (remove any stale entries first)
+    manifest_path = os.path.join(EXTENSIONS_DIR, "extensions.json")
+    entries = []
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as mf:
+            entries = json.load(mf)
+    entries = [e for e in entries if e.get("identifier", {}).get("id") != EXT_ID]
+    rel_location = f"{EXT_ID}-{version}"
+    entries.append({
+        "identifier": {"id": EXT_ID},
+        "version": version,
+        "location": {
+            "$mid": 1,
+            "path": os.path.join(EXTENSIONS_DIR, rel_location),
+            "scheme": "file",
+        },
+        "relativeLocation": rel_location,
+        "metadata": {},
+    })
+    os.makedirs(EXTENSIONS_DIR, exist_ok=True)
+    with open(manifest_path, "w") as mf:
+        json.dump(entries, mf)
+    print(f"  Registered {EXT_ID} in extensions.json")
+finally:
+    os.unlink(tmp_path)
+'
+
+fi  # end of Claude Code extension conditional
+
 # Fix ownership (script runs as root, extension dir must be owned by user)
 if [ -d /home/user/.vscode-server ]; then
     chown -R user:user /home/user/.vscode-server

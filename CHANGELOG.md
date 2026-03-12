@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.13 — 2026-03-12
+- Install Claude Code VS Code extension (`anthropic.claude-code`) when both `claude` and `vscode` tools are enabled (#116)
+
 ## 0.6.12 — 2026-03-12
 - Fix cloud idle auto-shutdown not working (#12)
   - Fix SSH detection: `dport` (peer port) → `sport` (local port) so incoming connections are detected
