@@ -33,7 +33,7 @@ import click
 
 from .output import detail
 from .runtime.base import ContainerRuntime
-from .setup import colima_host_ip
+from .runtime.colima import colima_host_ip
 
 # Port inside the container where the auth proxy is exposed (TCP, for git)
 _CONTAINER_PROXY_PORT = 7654
