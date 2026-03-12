@@ -83,7 +83,7 @@ def maybe_rebuild_tools(runtime: ContainerRuntime, notices=None):
     if notices:
         notices.begin()
     step("Tools configuration changed, rebuilding base image...")
-    build_image(runtime, "base", force=True, still_needed=_tools_still_stale)
+    build_image(runtime, "base", force=True, still_needed=_tools_still_stale, quiet=True)
 
 
 def maybe_rebuild_customize(notices=None):
@@ -162,7 +162,7 @@ def detect_and_build_image(runtime, ref_path, t):
             step(f"Building {image_name} image (one-time setup, may take a few minutes)...")
             from .images.builder import build_image
 
-            build_image(runtime, image_name)
+            build_image(runtime, image_name, quiet=True)
             detail(f"{image_name} image ready.")
     elif is_toolchain_image:
         version = image_name[len("lean-") :]
