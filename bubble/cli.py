@@ -214,8 +214,8 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
             click.echo(f"Fetching PR #{t.ref}...")
             try:
                 fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
-            except Exception:
-                pass  # May already be available from a full fetch
+            except subprocess.CalledProcessError:
+                click.echo("  Warning: could not prefetch PR ref; continuing with normal clone.")
 
     return ref_path, mount_name
 
@@ -374,7 +374,9 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
                             ["su", "-", "user", "-c", f"cd {q_dir} && git pull --ff-only"],
                         )
                     except RuntimeError:
-                        pass  # Silently continue if pull fails
+                        click.echo(
+                            "  Warning: could not pull latest; continuing with current state."
+                        )
         except RuntimeError:
             pass  # Can't check status, skip pull
 

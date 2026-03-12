@@ -171,8 +171,8 @@ def maybe_install_automation():
             installed = install_automation()
             for item in installed:
                 click.echo(f"  {item}")
-    except Exception:
-        pass
+    except (OSError, subprocess.CalledProcessError):
+        pass  # Best-effort; failures surface via `bubble doctor`
 
 
 def maybe_install_skill():
@@ -185,8 +185,8 @@ def maybe_install_skill():
         msg = install_skill()
         click.echo(f"  {msg}")
         click.echo("  To manage later: bubble skill status")
-    except Exception:
-        pass
+    except (OSError, subprocess.CalledProcessError, ImportError):
+        pass  # Best-effort; failures surface via `bubble doctor`
 
 
 def find_existing_container(
