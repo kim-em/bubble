@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.7 — 2026-03-12
+- Fix editable install finder breaking tests in worktrees (#104)
+  - Add root `conftest.py` that prepends the project root to `sys.path`
+  - Purges stale `bubble.*` modules so the local worktree's code is always used
+
 ## 0.6.6 — 2026-03-12
 - Remove `gh` from the pluggable tools system entirely (#82)
   - With the auth proxy (#71) keeping the GitHub token out of containers, `gh` inside containers is misleading
