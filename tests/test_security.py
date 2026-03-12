@@ -365,11 +365,11 @@ def test_config_lockdown(tmp_data_dir):
     from bubble.config import load_config
 
     config = load_config()
-    # relay and claude_credentials default to off, so lockdown should set them
-    assert config["security"]["relay"] == "off"
+    # lockdown should explicitly set off-by-default settings to off
     assert config["security"]["claude_credentials"] == "off"
     # on-by-default should NOT be changed
     assert config["security"].get("shared_cache") is None
+    assert config["security"].get("relay") is None
 
 
 def test_config_accept_risks(tmp_data_dir):
@@ -385,8 +385,9 @@ def test_config_accept_risks(tmp_data_dir):
     # on-by-default should be set to on
     assert config["security"]["shared_cache"] == "on"
     assert config["security"]["network_github"] == "on"
+    assert config["security"]["relay"] == "on"
     # off-by-default should NOT be changed
-    assert config["security"].get("relay") is None
+    assert config["security"].get("claude_credentials") is None
 
 
 def test_config_accept_risks_idempotent(tmp_data_dir):
@@ -441,9 +442,9 @@ def test_apply_preset_default_clears_legacy_relay():
     assert config["security"]["relay"] == "on"
     assert config["relay"]["enabled"] is True
     apply_preset_default(config)
-    # default should clear both, so relay is truly auto (off)
+    # default should clear both, so relay is truly auto (on)
     assert get_setting(config, "relay") == "auto"
-    assert is_enabled(config, "relay") is False
+    assert is_enabled(config, "relay") is True
 
 
 def test_all_settings_have_valid_category():
