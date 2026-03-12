@@ -90,9 +90,9 @@ def test_is_enabled_auto_on():
     assert is_enabled(config, "relay") is True
 
 
-def test_is_enabled_auto_off():
+def test_is_enabled_auto_on_credentials():
     config = {}
-    assert is_enabled(config, "claude_credentials") is False
+    assert is_enabled(config, "claude_credentials") is True
 
 
 def test_is_enabled_explicit_on():
@@ -112,7 +112,7 @@ def test_is_locked_off():
 
 def test_is_locked_off_auto_is_not_locked():
     config = {}
-    # auto -> off settings are NOT locked off
+    # auto-default settings are NOT locked off (regardless of on/off default)
     assert is_locked_off(config, "relay") is False
     assert is_locked_off(config, "claude_credentials") is False
 
@@ -365,9 +365,8 @@ def test_config_lockdown(tmp_data_dir):
     from bubble.config import load_config
 
     config = load_config()
-    # lockdown should explicitly set off-by-default settings to off
-    assert config["security"]["claude_credentials"] == "off"
-    # on-by-default should NOT be changed
+    # on-by-default should NOT be changed by lockdown (lockdown only targets off-by-default)
+    assert config["security"].get("claude_credentials") is None
     assert config["security"].get("shared_cache") is None
     assert config["security"].get("relay") is None
 
@@ -382,12 +381,12 @@ def test_config_accept_risks(tmp_data_dir):
     from bubble.config import load_config
 
     config = load_config()
-    # on-by-default should be set to on
+    # on-by-default should be set to on (includes credentials now)
     assert config["security"]["shared_cache"] == "on"
     assert config["security"]["network_github"] == "on"
     assert config["security"]["relay"] == "on"
-    # off-by-default should NOT be changed
-    assert config["security"].get("claude_credentials") is None
+    assert config["security"]["claude_credentials"] == "on"
+    assert config["security"]["codex_credentials"] == "on"
 
 
 def test_config_accept_risks_idempotent(tmp_data_dir):

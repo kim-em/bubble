@@ -369,7 +369,7 @@ class TestClaudeConfigMounts:
     """Test automatic ~/.claude config mounting."""
 
     def test_returns_existing_files(self, tmp_path, monkeypatch):
-        """Mounts returned for config items that exist (no credentials by default)."""
+        """Mounts returned for config items that exist (credentials included by default)."""
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / "CLAUDE.md").write_text("# test")
@@ -383,15 +383,15 @@ class TestClaudeConfigMounts:
 
         mounts = claude_config_mounts()
 
-        assert len(mounts) == 5
+        assert len(mounts) == 6
         targets = {m.target for m in mounts}
         assert "/home/user/.claude/CLAUDE.md" in targets
         assert "/home/user/.claude/settings.json" in targets
         assert "/home/user/.claude/skills" in targets
         assert "/home/user/.claude/keybindings.json" in targets
         assert "/home/user/.claude/commands" in targets
-        # Credentials NOT included by default
-        assert "/home/user/.claude/.credentials.json" not in targets
+        # Credentials included by default
+        assert "/home/user/.claude/.credentials.json" in targets
         assert all(m.readonly for m in mounts)
 
     def test_returns_all_with_credentials(self, tmp_path, monkeypatch):
@@ -434,8 +434,8 @@ class TestClaudeConfigMounts:
 
         assert mounts == []
 
-    def test_credentials_excluded_by_default(self, tmp_path, monkeypatch):
-        """Credential files are NOT mounted by default."""
+    def test_credentials_included_by_default(self, tmp_path, monkeypatch):
+        """Credential files are mounted by default."""
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
@@ -444,21 +444,21 @@ class TestClaudeConfigMounts:
 
         mounts = claude_config_mounts()
 
-        assert mounts == []
+        targets = {m.target for m in mounts}
+        assert "/home/user/.claude/.credentials.json" in targets
+        assert all(m.readonly for m in mounts)
 
-    def test_credentials_included_when_requested(self, tmp_path, monkeypatch):
-        """Credential files are mounted when include_credentials=True."""
+    def test_credentials_excluded_when_requested(self, tmp_path, monkeypatch):
+        """Credential files are NOT mounted when include_credentials=False."""
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
         (claude_dir / ".credentials.json").write_text("{}")
 
         monkeypatch.setattr("bubble.config.CLAUDE_CONFIG_DIR", claude_dir)
 
-        mounts = claude_config_mounts(include_credentials=True)
+        mounts = claude_config_mounts(include_credentials=False)
 
-        targets = {m.target for m in mounts}
-        assert "/home/user/.claude/.credentials.json" in targets
-        assert all(m.readonly for m in mounts)
+        assert mounts == []
 
     def test_has_claude_credentials(self, tmp_path, monkeypatch):
         """has_claude_credentials() detects credential files."""
@@ -715,7 +715,7 @@ class TestCodexConfigMounts:
     """Test automatic ~/.codex config mounting."""
 
     def test_returns_existing_config(self, tmp_path, monkeypatch):
-        """Mounts returned for config items that exist (no credentials by default)."""
+        """Mounts returned for config items that exist (credentials included by default)."""
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
         (codex_dir / "config.toml").write_text("[settings]")
@@ -725,11 +725,11 @@ class TestCodexConfigMounts:
 
         mounts = codex_config_mounts()
 
-        assert len(mounts) == 1
+        assert len(mounts) == 2
         targets = {m.target for m in mounts}
         assert "/home/user/.codex/config.toml" in targets
-        # Credentials NOT included by default
-        assert "/home/user/.codex/auth.json" not in targets
+        # Credentials included by default
+        assert "/home/user/.codex/auth.json" in targets
         assert all(m.readonly for m in mounts)
 
     def test_returns_all_with_credentials(self, tmp_path, monkeypatch):
@@ -769,8 +769,8 @@ class TestCodexConfigMounts:
 
         assert mounts == []
 
-    def test_credentials_excluded_by_default(self, tmp_path, monkeypatch):
-        """Credential files are NOT mounted by default."""
+    def test_credentials_included_by_default(self, tmp_path, monkeypatch):
+        """Credential files are mounted by default."""
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
         (codex_dir / "auth.json").write_text("{}")
@@ -779,21 +779,21 @@ class TestCodexConfigMounts:
 
         mounts = codex_config_mounts()
 
-        assert mounts == []
+        targets = {m.target for m in mounts}
+        assert "/home/user/.codex/auth.json" in targets
+        assert all(m.readonly for m in mounts)
 
-    def test_credentials_included_when_requested(self, tmp_path, monkeypatch):
-        """Credential files are mounted when include_credentials=True."""
+    def test_credentials_excluded_when_requested(self, tmp_path, monkeypatch):
+        """Credential files are NOT mounted when include_credentials=False."""
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
         (codex_dir / "auth.json").write_text("{}")
 
         monkeypatch.setattr("bubble.config.CODEX_CONFIG_DIR", codex_dir)
 
-        mounts = codex_config_mounts(include_credentials=True)
+        mounts = codex_config_mounts(include_credentials=False)
 
-        targets = {m.target for m in mounts}
-        assert "/home/user/.codex/auth.json" in targets
-        assert all(m.readonly for m in mounts)
+        assert mounts == []
 
     def test_has_codex_credentials(self, tmp_path, monkeypatch):
         """has_codex_credentials() detects credential files."""

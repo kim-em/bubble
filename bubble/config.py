@@ -62,10 +62,10 @@ DEFAULT_CONFIG = {
         "default": False,
     },
     "claude": {
-        "credentials": False,
+        "credentials": True,
     },
     "codex": {
-        "credentials": False,
+        "credentials": True,
     },
     "security": {},
     "tools": {},
@@ -242,7 +242,7 @@ def _safe_claude_path(item: str) -> Path | None:
     return resolved
 
 
-def claude_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
+def claude_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
     """Return read-only mounts for Claude Code config files that exist on the host.
 
     Mounts specific files/directories from ~/.claude into /home/user/.claude/
@@ -438,7 +438,7 @@ def _safe_codex_path(item: str) -> Path | None:
     return resolved
 
 
-def codex_config_mounts(include_credentials: bool = False) -> list[MountSpec]:
+def codex_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
     """Return read-only mounts for Codex config files that exist on the host.
 
     Mounts specific files from ~/.codex into /home/user/.codex/
