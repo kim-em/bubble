@@ -522,8 +522,8 @@ def maybe_symlink_claude_projects(config: dict | None = None, notices=None) -> N
         notices.begin()
     click.echo(
         "~/.claude/projects is git-tracked. Claude sessions within bubbles are stored\n"
-        "in ~/.bubble/claude-projects. To replace that directory with a symlink (so\n"
-        "session state is tracked in git), run:\n"
+        "in ~/.bubble/claude-projects. To link that directory into the git-tracked\n"
+        "location (existing data is merged, not overwritten), run:\n"
         "\n"
         "  bubble config symlink-claude-projects\n"
         "\n"
@@ -534,10 +534,11 @@ def maybe_symlink_claude_projects(config: dict | None = None, notices=None) -> N
 
 
 def do_symlink_claude_projects() -> bool:
-    """Replace ~/.bubble/claude-projects/ with a symlink to ~/.claude/projects/.
+    """Link ~/.bubble/claude-projects/ to ~/.claude/projects/ via symlink.
 
     Merges existing contents from bubble-projects into claude-projects before
-    replacing. Returns True if the symlink was created, False otherwise.
+    creating the symlink. Aborts if any files conflict (exist in both locations).
+    Returns True if the symlink was created, False otherwise.
     """
     import click
 
@@ -570,32 +571,46 @@ def do_symlink_claude_projects() -> bool:
         click.echo(f"{bubble_projects} exists but is not a directory.", err=True)
         return False
 
-    # Merge existing contents into ~/.claude/projects/
-    for child in bubble_projects.iterdir():
-        dest = claude_projects / child.name
-        if not dest.exists():
-            shutil.move(str(child), str(dest))
-        elif child.is_dir() and dest.is_dir():
-            _merge_dir(child, dest)
-        else:
-            click.echo(f"  Skipping {child.name} (already exists in {claude_projects})")
+    # Pass 1: check for conflicts before moving anything
+    conflicts = _find_conflicts(bubble_projects, claude_projects)
+    if conflicts:
+        for c in conflicts:
+            click.echo(f"  Conflict: {c.relative_to(bubble_projects)}")
+        click.echo(
+            f"\nAborted: {len(conflicts)} file(s) in {bubble_projects} conflict "
+            f"with existing files in {claude_projects}.\n"
+            "Resolve these conflicts manually, then re-run this command.",
+            err=True,
+        )
+        return False
 
-    # Replace with symlink — use rmtree since conflicts may leave remnants
+    # Pass 2: no conflicts, safe to merge
+    _merge_dir(bubble_projects, claude_projects)
     shutil.rmtree(str(bubble_projects))
     bubble_projects.symlink_to(claude_projects)
     click.echo(f"Created symlink: {bubble_projects} -> {claude_projects}")
     return True
 
 
-def _merge_dir(src: Path, dest: Path) -> None:
-    """Recursively move items from src into dest, skipping existing names."""
-    import click
+def _find_conflicts(src: Path, dest: Path) -> list[Path]:
+    """Recursively find files in src that conflict with existing files in dest."""
+    conflicts: list[Path] = []
+    for item in src.iterdir():
+        target = dest / item.name
+        if not target.exists():
+            pass
+        elif item.is_dir() and target.is_dir():
+            conflicts.extend(_find_conflicts(item, target))
+        else:
+            conflicts.append(item)
+    return conflicts
 
+
+def _merge_dir(src: Path, dest: Path) -> None:
+    """Recursively move items from src into dest. Caller must ensure no conflicts."""
     for item in src.iterdir():
         target = dest / item.name
         if not target.exists():
             shutil.move(str(item), str(target))
         elif item.is_dir() and target.is_dir():
             _merge_dir(item, target)
-        else:
-            click.echo(f"  Skipping {item.name} (already exists in {dest})")
