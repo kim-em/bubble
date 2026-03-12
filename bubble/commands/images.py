@@ -37,7 +37,8 @@ def register_images_commands(main):
 
     @images_group.command("build")
     @click.argument("image_name", default="base")
-    def images_build(image_name):
+    @click.option("--force", is_flag=True, help="Delete and rebuild even if image exists.")
+    def images_build(image_name, force):
         """Build an image (base, lean, or lean-v4.X.Y for a specific toolchain)."""
         config = load_config()
         runtime = get_runtime(config)
@@ -59,7 +60,7 @@ def register_images_commands(main):
             from ..images.builder import build_image
 
             try:
-                build_image(runtime, image_name)
+                build_image(runtime, image_name, force=force)
             except ValueError as e:
                 click.echo(str(e), err=True)
                 sys.exit(1)

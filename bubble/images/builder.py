@@ -428,8 +428,13 @@ def _run_customize_script(runtime: ContainerRuntime, build_name: str):
     runtime.exec(build_name, ["bash", "-c", script])
 
 
-def build_image(runtime: ContainerRuntime, image_name: str):
-    """Build any known image by name. Builds parent images recursively if needed."""
+def build_image(runtime: ContainerRuntime, image_name: str, *, force: bool = False):
+    """Build any known image by name. Builds parent images recursively if needed.
+
+    With ``force=True``, deletes the existing image first so it gets rebuilt
+    from scratch. Used by rebuild paths that detect configuration drift
+    (tools hash, VS Code commit, customize script).
+    """
     if image_name not in IMAGES:
         available = ", ".join(IMAGES.keys())
         raise ValueError(f"Unknown image: {image_name}. Available: {available}")
@@ -455,6 +460,10 @@ def build_image(runtime: ContainerRuntime, image_name: str):
         for ancestor in _ancestor_chain(image_name):
             stack.enter_context(_build_lock(ancestor, shared=True))
         stack.enter_context(_build_lock(image_name))
+
+        if force and runtime.image_exists(image_name):
+            print(f"Deleting existing {image_name} image for rebuild...")
+            runtime.image_delete(image_name)
 
         if runtime.image_exists(image_name):
             print(f"{image_name} image already built (by concurrent process).")

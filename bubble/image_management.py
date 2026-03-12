@@ -51,10 +51,10 @@ def maybe_rebuild_base_image():
         return
     if VSCODE_COMMIT_FILE.exists() and VSCODE_COMMIT_FILE.read_text().strip() == commit:
         return
-    if is_build_locked("base-vscode"):
+    if is_build_locked("base"):
         return
     _spawn_background_bubble(
-        ["images", "build", "base"],
+        ["images", "build", "base", "--force"],
         "/tmp/bubble-vscode-rebuild.log",
     )
 
@@ -79,7 +79,7 @@ def maybe_rebuild_tools(runtime: ContainerRuntime, notices=None):
     if notices:
         notices.begin()
     click.echo("Tools configuration changed, rebuilding base image...")
-    build_image(runtime, "base")
+    build_image(runtime, "base", force=True)
 
 
 def maybe_rebuild_customize(notices=None):
@@ -119,7 +119,7 @@ def maybe_rebuild_customize(notices=None):
         click.echo("Customization script changed, rebuilding base image in background...")
 
     _spawn_background_bubble(
-        ["images", "build", "base"],
+        ["images", "build", "base", "--force"],
         "/tmp/bubble-customize-rebuild.log",
     )
 
