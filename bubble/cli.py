@@ -98,6 +98,20 @@ class BubbleGroup(click.Group):
             with formatter.section("Advanced"):
                 formatter.write_dl(advanced)
 
+        with formatter.section("Common target options"):
+            formatter.write_dl(
+                [
+                    ("--shell", "Drop into SSH session instead of VSCode"),
+                    ("--ssh HOST", "Run on a remote host"),
+                    ("--cloud", "Run on auto-provisioned Hetzner Cloud server"),
+                    ("-b NAME", "Create a new branch"),
+                    ("--mount PATH", "Mount a host directory into the container"),
+                    ("--native", "Non-containerized workspace (local clone)"),
+                ]
+            )
+        formatter.write_paragraph()
+        formatter.write("  For all target options run: bubble open --help\n")
+
     def parse_args(self, ctx, args):
         """If no known command is found as the first positional arg, prepend 'open'.
 
