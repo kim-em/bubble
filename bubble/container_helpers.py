@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from .lifecycle import load_registry
+from .output import detail, step
 from .runtime.base import ContainerRuntime
 from .security import filter_github_domains, is_enabled
 from .vscode import add_ssh_config
@@ -27,10 +28,10 @@ def ensure_running(runtime: ContainerRuntime, name: str):
     """Ensure a container is running (unpause/start if needed)."""
     info = find_container(runtime, name)
     if info.state == "frozen":
-        click.echo(f"Unpausing '{name}'...")
+        step(f"Unpausing '{name}'...")
         runtime.unfreeze(name)
     elif info.state == "stopped":
-        click.echo(f"Starting '{name}'...")
+        step(f"Starting '{name}'...")
         runtime.start(name)
     return info
 
@@ -130,7 +131,7 @@ def apply_network(
             from .network import apply_allowlist
 
             apply_allowlist(runtime, name, domains)
-            click.echo("  Network allowlist applied.")
+            detail("Network allowlist applied.")
         except (RuntimeError, OSError, ValueError) as e:
             raise click.ClickException(f"Failed to apply network allowlist: {e}")
 
@@ -166,11 +167,11 @@ def maybe_install_automation():
     try:
         status = is_automation_installed()
         if status and not any(status.values()):
-            click.echo("Installing automation (hourly git update, weekly image refresh)...")
-            click.echo("  To remove later: bubble automation remove")
+            step("Installing automation (hourly git update, weekly image refresh)...")
+            detail("To remove later: bubble automation remove")
             installed = install_automation()
             for item in installed:
-                click.echo(f"  {item}")
+                detail(item)
     except (OSError, subprocess.CalledProcessError):
         pass  # Best-effort; failures surface via `bubble doctor`
 
@@ -183,8 +184,8 @@ def maybe_install_skill():
         if not claude_code_detected() or is_installed():
             return
         msg = install_skill()
-        click.echo(f"  {msg}")
-        click.echo("  To manage later: bubble skill status")
+        detail(msg)
+        detail("To manage later: bubble skill status")
     except (OSError, subprocess.CalledProcessError, ImportError):
         pass  # Best-effort; failures surface via `bubble doctor`
 

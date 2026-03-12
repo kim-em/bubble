@@ -49,7 +49,9 @@ def finalize_bubble(
         inject_claude_task(runtime, name, project_dir, claude_prompt, quiet=machine_readable)
 
     if not machine_readable:
-        click.echo("Setting up SSH access...")
+        from .output import step
+
+        step("Setting up SSH access...")
     setup_ssh(runtime, name, host_key_trust=is_enabled(config, "host_key_trust"))
     setup_git_config(runtime, name, git_name, git_email)
 
@@ -91,10 +93,12 @@ def finalize_bubble(
     maybe_install_automation()
     maybe_install_skill()
 
-    click.echo(f"Bubble '{name}' created successfully.")
-    click.echo(f"  SSH:  ssh bubble-{name}")
-    click.echo("  List: bubble list")
-    click.echo(f"  Pop:  bubble pop {name}")
+    from .output import detail, step
+
+    step(f"Bubble '{name}' created successfully.")
+    detail(f"SSH:  ssh bubble-{name}")
+    detail("List: bubble list")
+    detail(f"Pop:  bubble pop {name}")
 
     if not no_interactive:
         echo_editor_opening(editor)
@@ -103,13 +107,15 @@ def finalize_bubble(
 
 def echo_editor_opening(editor: str):
     """Print a status message for the editor being opened."""
+    from .output import step
+
     labels = {
         "vscode": "Opening VSCode...",
         "emacs": "Opening Emacs...",
         "neovim": "Opening Neovim...",
         "shell": "Connecting via SSH...",
     }
-    click.echo(labels.get(editor, f"Opening {editor}..."))
+    step(labels.get(editor, f"Opening {editor}..."))
 
 
 def machine_readable_output(status: str, name: str, **kwargs):

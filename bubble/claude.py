@@ -266,4 +266,6 @@ def inject_claude_task(
     runtime.exec(container, ["su", "-", "user", "-c", trust_script])
 
     if not quiet:
-        click.echo("  Claude Code task injected (will start on VS Code folder open).")
+        from .output import detail
+
+        detail("Claude Code task injected (will start on VS Code folder open).")

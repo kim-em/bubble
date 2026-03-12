@@ -45,11 +45,13 @@ def provision_container(
     editor_mounts=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
-    click.echo("  Launching container...", nl=False)
+    from .output import detail
+
+    detail("Launching container...", nl=False)
     runtime.launch(name, image_name)
     click.echo(" done.")
 
-    click.echo("  Waiting for network...", nl=False)
+    detail("Waiting for network...", nl=False)
     from .images.builder import _wait_for_container
 
     try:

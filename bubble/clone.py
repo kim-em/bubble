@@ -3,9 +3,8 @@
 import shlex
 import subprocess
 
-import click
-
 from .git_store import github_url
+from .output import step
 
 
 def _get_pr_metadata(owner: str, repo: str, pr_number: str) -> tuple[str, str, str] | None:
@@ -39,7 +38,7 @@ def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
     """Clone the repo and checkout the appropriate ref. Returns the checkout branch name."""
     url = github_url(t.org_repo)
     q_short = shlex.quote(short)
-    click.echo(f"Cloning {t.org_repo} (using shared objects)...")
+    step(f"Cloning {t.org_repo} (using shared objects)...")
     runtime.exec(
         name,
         [
@@ -54,7 +53,7 @@ def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
     checkout_branch = ""
     if t.kind == "issue":
         branch_name = f"issue-{t.ref}"
-        click.echo(f"Creating branch '{branch_name}' for issue #{t.ref}...")
+        step(f"Creating branch '{branch_name}' for issue #{t.ref}...")
         q_branch = shlex.quote(branch_name)
         runtime.exec(
             name,
@@ -68,7 +67,7 @@ def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
         )
         checkout_branch = branch_name
     elif t.kind == "pr":
-        click.echo(f"Checking out PR #{t.ref}...")
+        step(f"Checking out PR #{t.ref}...")
         pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
         pr_checkout_ok = False
         if pr_meta:
@@ -138,7 +137,7 @@ def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
         q_base = shlex.quote(base)
         q_branch = shlex.quote(t.ref)
         if t.base_ref:
-            click.echo(f"Creating branch '{t.ref}' off '{t.base_ref}'...")
+            step(f"Creating branch '{t.ref}' off '{t.base_ref}'...")
             # Fetch the base ref first if it's not HEAD
             runtime.exec(
                 name,
@@ -152,7 +151,7 @@ def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
                 ],
             )
         else:
-            click.echo(f"Creating branch '{t.ref}' off default branch...")
+            step(f"Creating branch '{t.ref}' off default branch...")
             runtime.exec(
                 name,
                 [
@@ -165,7 +164,7 @@ def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
             )
         checkout_branch = t.ref
     elif t.kind == "branch":
-        click.echo(f"Checking out branch '{t.ref}'...")
+        step(f"Checking out branch '{t.ref}'...")
         checkout_branch = t.ref
         q_branch = shlex.quote(t.ref)
         try:
@@ -189,7 +188,7 @@ def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
             else:
                 raise
     elif t.kind == "commit":
-        click.echo(f"Checking out commit {t.ref[:12]}...")
+        step(f"Checking out commit {t.ref[:12]}...")
         q_commit = shlex.quote(t.ref)
         runtime.exec(
             name,

@@ -12,6 +12,7 @@ from .config import NATIVE_DIR, ensure_dirs
 from .git_store import fetch_ref, github_url, init_bare_repo
 from .lifecycle import get_bubble_info, load_registry, register_bubble
 from .naming import deduplicate_name, generate_name
+from .output import step
 from .repo_registry import RepoRegistry
 from .target import TargetParseError, parse_target
 from .vscode import open_editor_native
@@ -101,16 +102,16 @@ def open_native(
     try:
         if t.local_path:
             ref_path = t.local_path
-            click.echo("Cloning from local path (using shared objects)...")
+            step("Cloning from local path (using shared objects)...")
         else:
             ref_path = str(init_bare_repo(t.org_repo))
             if t.kind == "pr":
-                click.echo(f"Fetching PR #{t.ref}...")
+                step(f"Fetching PR #{t.ref}...")
                 try:
                     fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
                 except Exception:
                     pass
-            click.echo(f"Cloning {t.org_repo} (using shared objects)...")
+            step(f"Cloning {t.org_repo} (using shared objects)...")
 
         subprocess.run(
             ["git", "clone", "--reference", ref_path, url, str(workspace_path)],
@@ -120,7 +121,7 @@ def open_native(
         # Checkout appropriate ref
         checkout_branch = ""
         if t.kind == "pr":
-            click.echo(f"Checking out PR #{t.ref}...")
+            step(f"Checking out PR #{t.ref}...")
             pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
             pr_checkout_ok = False
             if pr_meta:
@@ -213,7 +214,7 @@ def open_native(
                     check=True,
                 )
         elif t.kind == "branch":
-            click.echo(f"Checking out branch '{t.ref}'...")
+            step(f"Checking out branch '{t.ref}'...")
             checkout_branch = t.ref
             if t.local_path:
                 # Always fetch from local repo to pick up potentially unpushed commits.
@@ -256,7 +257,7 @@ def open_native(
                 else:
                     raise
         elif t.kind == "commit":
-            click.echo(f"Checking out commit {t.ref[:12]}...")
+            step(f"Checking out commit {t.ref[:12]}...")
             subprocess.run(
                 ["git", "-C", str(workspace_path), "checkout", t.ref],
                 check=True,
@@ -289,11 +290,11 @@ def open_native(
         click.echo(f"Failed to create native workspace: {e}", err=True)
         sys.exit(1)
 
-    click.echo(f"Native workspace '{name}' created at {workspace_path}")
+    step(f"Native workspace '{name}' created at {workspace_path}")
 
     if not no_interactive:
         if editor == "shell":
-            click.echo("Opening shell...")
+            step("Opening shell...")
         else:
-            click.echo("Opening VSCode...")
+            step("Opening VSCode...")
         open_editor_native(editor, str(workspace_path), command=command)

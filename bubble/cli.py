@@ -215,7 +215,9 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
         mount_name = ref_path.name
 
         if t.kind == "pr":
-            click.echo(f"Fetching PR #{t.ref}...")
+            from .output import step
+
+            step(f"Fetching PR #{t.ref}...")
             try:
                 fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
             except subprocess.CalledProcessError:
@@ -244,13 +246,17 @@ def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -
             from .claude import generate_issue_prompt
 
             branch = new_branch or f"issue-{t.ref}"
-            click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
+            from .output import detail
+
+            detail(f"Fetching issue #{t.ref} for Claude prompt...")
             prompt = generate_issue_prompt(t.owner, t.repo, t.ref, branch) or ""
         elif t.kind == "pr":
             from .claude import generate_pr_prompt
 
             branch = new_branch or f"pr-{t.ref}"
-            click.echo(f"Fetching PR #{t.ref} for Claude prompt...")
+            from .output import detail
+
+            detail(f"Fetching PR #{t.ref} for Claude prompt...")
             prompt = generate_pr_prompt(t.owner, t.repo, t.ref, branch) or ""
     except Exception:
         pass
@@ -331,8 +337,10 @@ def _open_remote(
         project_dir=project_dir,
     )
 
-    click.echo(f"Bubble '{name}' ready on {remote_host.ssh_destination}.")
-    click.echo(f"  SSH: ssh bubble-{name}")
+    from .output import detail, step
+
+    step(f"Bubble '{name}' ready on {remote_host.ssh_destination}.")
+    detail(f"SSH: ssh bubble-{name}")
 
     if not no_interactive:
         echo_editor_opening(editor)
@@ -371,7 +379,9 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
                     ],
                 ).strip()
                 if has_upstream:
-                    click.echo("Working tree is clean, pulling latest...")
+                    from .output import step
+
+                    step("Working tree is clean, pulling latest...")
                     try:
                         runtime.exec(
                             name,
@@ -908,27 +918,31 @@ def _open_single(
         deps = hook.git_dependencies()
         if deps:
             if not machine_readable:
-                click.echo("  Preparing Lake dependency mirrors...")
+                from .output import detail
+
+                detail("Preparing Lake dependency mirrors...")
             for dep in deps:
                 try:
                     dep_path = init_bare_repo(dep.org_repo)
                     if not ensure_rev_available(dep.org_repo, dep.rev):
                         if not machine_readable:
-                            click.echo(
-                                f"  Warning: rev {dep.rev[:12]} not found for {dep.name}, skipping"
+                            detail(
+                                f"Warning: rev {dep.rev[:12]} not found for {dep.name}, skipping"
                             )
                         continue
                     repo_name = dep.org_repo.split("/")[-1]
                     dep_mounts[repo_name] = dep_path
                 except Exception as e:
                     if not machine_readable:
-                        click.echo(f"  Warning: could not prepare {dep.name}: {e}")
+                        detail(f"Warning: could not prepare {dep.name}: {e}")
 
     # Deduplicate and create
     existing_names = {c.name for c in runtime.list_containers()}
     name = deduplicate_name(name, existing_names)
     if not machine_readable:
-        click.echo(f"Creating bubble '{name}'...")
+        from .output import step
+
+        step(f"Creating bubble '{name}'...")
 
     # Provision, clone, and finalize
     short = repo_short_name(t.org_repo)
@@ -959,13 +973,15 @@ def _open_single(
             claude_prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
         if not claude_prompt and t.kind == "issue" and not machine_readable:
             from .claude import generate_issue_prompt
+            from .output import detail
 
-            click.echo(f"Fetching issue #{t.ref} for Claude prompt...")
+            detail(f"Fetching issue #{t.ref} for Claude prompt...")
             claude_prompt = generate_issue_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
         elif not claude_prompt and t.kind == "pr" and not machine_readable:
             from .claude import generate_pr_prompt
+            from .output import detail
 
-            click.echo(f"Fetching PR #{t.ref} for Claude prompt...")
+            detail(f"Fetching PR #{t.ref} for Claude prompt...")
             claude_prompt = generate_pr_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
 
         finalize_bubble(
@@ -989,7 +1005,9 @@ def _open_single(
     except Exception:
         # Clean up partially-provisioned container on failure
         if not machine_readable:
-            click.echo(f"  Cleaning up failed container '{name}'...")
+            from .output import detail
+
+            detail(f"Cleaning up failed container '{name}'...")
         try:
             runtime.delete(name, force=True)
         except Exception:
