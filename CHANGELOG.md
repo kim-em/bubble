@@ -6,8 +6,11 @@
   - `gh` CLI installed as a tool (`auto` mode, detected from host) and configured to route through auth proxy
   - REST API requests validated against `/repos/{owner}/{repo}/...` (repo-scoped)
   - GraphQL requests parsed and classified: `query` operations allowed at level 3, `mutation` operations blocked
+  - GraphQL security: scans ALL operations in multi-operation documents to prevent `operationName`-based mutation bypass
   - GraphQL validation: rejects malformed JSON, batched requests, and subscriptions
+  - GraphQL is NOT repo-scoped (queries can access any data the host token can read)
   - Redirect following for API responses (CI log downloads): GET/HEAD only, HTTPS only, allowlisted hosts, max 2 hops, auth headers stripped
+  - GitHub 4xx errors (401, 403, 404, 422) passed through to clients instead of being collapsed to 502
   - Auth proxy accepts tokens from `Authorization` header (gh traffic) in addition to `X-Bubble-Token` (git traffic)
   - Unix socket proxy device exposes auth proxy to `gh` at `/bubble/gh-proxy.sock` inside containers
   - `GH_CONFIG_DIR` and `GH_TOKEN` configured via `/etc/profile.d/bubble-gh.sh`

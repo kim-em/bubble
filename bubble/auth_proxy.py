@@ -19,6 +19,7 @@ Security model:
 - Git: strict 4-pattern allowlist (git smart HTTP protocol only)
 - REST API: path-validated against /repos/{owner}/{repo}/...
 - GraphQL: parsed operation type, mutations rejected at level 3
+  (NOT repo-scoped — queries can access any data the host token can read)
 - Path canonicalization rejects encoded separators, dot-segments,
   duplicate slashes
 - Redirect following for API responses (CI logs) with hardened rules:
@@ -33,6 +34,7 @@ On macOS (Colima): TCP listener, port saved to ~/.bubble/auth-proxy.port.
 On Linux: TCP listener on 127.0.0.1 (Incus proxy needs TCP for HTTP).
 """
 
+import json
 import logging
 import os
 import re
@@ -309,11 +311,30 @@ def validate_api_path(
 # ---------------------------------------------------------------------------
 
 
-def _parse_graphql_op_type(query: str) -> str | None:
-    """Extract the operation type from a GraphQL query string.
+def _skip_braced_block(text: str, start: int) -> int:
+    """Skip a balanced { ... } block starting at position start.
 
-    Returns 'query', 'mutation', 'subscription', or None.
+    Returns the position after the closing brace, or -1 on error.
+    """
+    if start >= len(text) or text[start] != "{":
+        return -1
+    depth = 1
+    i = start + 1
+    while i < len(text) and depth > 0:
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+        i += 1
+    return i if depth == 0 else -1
+
+
+def _collect_graphql_op_types(query: str) -> list[str]:
+    """Extract ALL operation types from a GraphQL document.
+
+    Returns a list of operation types found (e.g. ['query', 'mutation']).
     Handles line comments, fragment definitions, and anonymous queries.
+    Multiple operations in a single document are all reported.
     """
     # Strip line comments
     lines = []
@@ -325,49 +346,76 @@ def _parse_graphql_op_type(query: str) -> str | None:
     cleaned = " ".join(lines).strip()
 
     if not cleaned:
-        return None
+        return []
 
-    # Skip leading whitespace and find start position
+    ops = []
     pos = 0
-    while pos < len(cleaned) and cleaned[pos] in " \t\r\n":
-        pos += 1
 
-    if pos >= len(cleaned):
-        return None
-
-    # Anonymous query starts with {
-    if cleaned[pos] == "{":
-        return "query"
-
-    # Skip fragment definitions: fragment Name on Type { ... }
-    while pos < len(cleaned) and cleaned[pos:].startswith("fragment"):
-        brace_start = cleaned.find("{", pos)
-        if brace_start == -1:
-            return None
-        depth = 1
-        i = brace_start + 1
-        while i < len(cleaned) and depth > 0:
-            if cleaned[i] == "{":
-                depth += 1
-            elif cleaned[i] == "}":
-                depth -= 1
-            i += 1
-        pos = i
+    while pos < len(cleaned):
+        # Skip whitespace
         while pos < len(cleaned) and cleaned[pos] in " \t\r\n":
             pos += 1
         if pos >= len(cleaned):
-            return None
+            break
 
-    # Now we should be at an operation keyword or anonymous query
-    if pos < len(cleaned) and cleaned[pos] == "{":
-        return "query"
+        # Anonymous query starts with {
+        if cleaned[pos] == "{":
+            ops.append("query")
+            end = _skip_braced_block(cleaned, pos)
+            if end == -1:
+                break
+            pos = end
+            continue
 
-    remaining = cleaned[pos:]
-    match = re.match(r"(query|mutation|subscription)\b", remaining, re.IGNORECASE)
-    if match:
-        return match.group(1).lower()
+        # Skip fragment definitions: fragment Name on Type { ... }
+        if cleaned[pos:].startswith("fragment"):
+            brace_start = cleaned.find("{", pos)
+            if brace_start == -1:
+                break
+            end = _skip_braced_block(cleaned, brace_start)
+            if end == -1:
+                break
+            pos = end
+            continue
 
-    return None
+        # Check for operation keyword
+        match = re.match(r"(query|mutation|subscription)\b", cleaned[pos:], re.IGNORECASE)
+        if match:
+            ops.append(match.group(1).lower())
+            # Skip past the operation body
+            brace_start = cleaned.find("{", pos)
+            if brace_start == -1:
+                break
+            end = _skip_braced_block(cleaned, brace_start)
+            if end == -1:
+                break
+            pos = end
+            continue
+
+        # Unrecognized content — stop parsing
+        break
+
+    return ops
+
+
+def _parse_graphql_op_type(query: str) -> str | None:
+    """Extract the highest-privilege operation type from a GraphQL document.
+
+    Returns 'mutation' if any mutation is present, 'subscription' if any
+    subscription is present, 'query' if only queries, or None if empty.
+
+    This is the safe classifier: if a document contains both a query and
+    a mutation, it returns 'mutation' regardless of operationName.
+    """
+    ops = _collect_graphql_op_types(query)
+    if not ops:
+        return None
+    # Return the most dangerous operation type present
+    if "subscription" in ops:
+        return "subscription"
+    if "mutation" in ops:
+        return "mutation"
+    return "query"
 
 
 def classify_graphql(body: bytes) -> tuple[str | None, str | None]:
@@ -376,6 +424,11 @@ def classify_graphql(body: bytes) -> tuple[str | None, str | None]:
     Returns (operation_type, error_message).
     operation_type is 'query' or 'mutation' if valid, None on error.
     error_message is set on validation failure.
+
+    Security: scans ALL operations in the document and returns the
+    most dangerous one. This prevents operationName-based bypasses
+    where a query is listed first but a mutation is selected for
+    execution.
     """
     try:
         data = json.loads(body)
@@ -415,7 +468,9 @@ def _is_redirect_host_allowed(host: str) -> bool:
     return any(fnmatch.fnmatch(host, pat) for pat in _REDIRECT_ALLOWED_HOSTS)
 
 
-def _follow_redirect(location: str, hops_remaining: int) -> tuple[int, dict, bytes]:
+def _follow_redirect(
+    location: str, hops_remaining: int, method: str = "GET"
+) -> tuple[int, dict, bytes]:
     """Follow a redirect URL with hardened rules.
 
     Returns (status_code, headers_dict, body).
@@ -438,7 +493,7 @@ def _follow_redirect(location: str, hops_remaining: int) -> tuple[int, dict, byt
         _NoRedirectHandler(),
     )
 
-    req = Request(location, method="GET")
+    req = Request(location, method=method)
     # Do NOT send Authorization or other sensitive headers to redirect target
     try:
         resp = opener.open(req, timeout=REDIRECT_TIMEOUT)
@@ -446,7 +501,7 @@ def _follow_redirect(location: str, hops_remaining: int) -> tuple[int, dict, byt
         if 300 <= e.code < 400:
             next_location = e.headers.get("Location")
             if next_location:
-                return _follow_redirect(next_location, hops_remaining - 1)
+                return _follow_redirect(next_location, hops_remaining - 1, method=method)
         raise
 
     # Read body with size cap
@@ -572,8 +627,8 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         body = None
         if method in ("POST", "PUT", "PATCH"):
             body = self._read_body()
-            if body is None and method == "POST":
-                return  # Error already sent (only mandatory for POST)
+            if body is None:
+                return  # Error already sent by _read_body()
 
         # Route: git smart HTTP (/git/...)
         if path.startswith("/git/"):
@@ -708,7 +763,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                 # (e.g. CI log downloads return 302 to blob storage)
                 location = e.headers.get("Location")
                 if follow_redirects and location and method in ("GET", "HEAD"):
-                    self._handle_redirect(location, container, log_path)
+                    self._handle_redirect(location, container, log_path, method)
                     return
                 # For git or non-followable redirects, return as-is
                 self.send_response(e.code)
@@ -723,6 +778,29 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                     self.wfile.write(body_data)
                 logger.info(
                     "REDIRECT %s %s container=%s -> %d",
+                    method,
+                    log_path,
+                    container,
+                    e.code,
+                )
+                return
+            # Pass through 4xx errors from GitHub (auth failures, not found, etc.)
+            if 400 <= e.code < 500:
+                self.send_response(e.code)
+                for header, value in e.headers.items():
+                    lower = header.lower()
+                    if lower in ("transfer-encoding", "connection", "keep-alive"):
+                        continue
+                    # Strip GitHub's auth-related headers
+                    if lower == "authorization":
+                        continue
+                    self.send_header(header, value)
+                self.end_headers()
+                body_data = e.read()
+                if body_data:
+                    self.wfile.write(body_data)
+                logger.info(
+                    "UPSTREAM_ERROR %s %s container=%s -> %d",
                     method,
                     log_path,
                     container,
@@ -773,10 +851,10 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         logger.info("PROXY %s %s container=%s -> %d", method, log_path, container, resp.status)
 
-    def _handle_redirect(self, location, container, log_path):
+    def _handle_redirect(self, location, container, log_path, method="GET"):
         """Follow a redirect from a GitHub API response with hardened rules."""
         try:
-            status, headers, body = _follow_redirect(location, MAX_REDIRECT_HOPS)
+            status, headers, body = _follow_redirect(location, MAX_REDIRECT_HOPS, method=method)
         except (ValueError, HTTPError) as e:
             error_msg = str(e)
             if self.github_token in error_msg:

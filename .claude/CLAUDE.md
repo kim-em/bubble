@@ -133,7 +133,7 @@ The auth proxy (`auth_proxy.py`) provides repo-scoped GitHub authentication with
 
 **gh CLI flow:** `gh` configured with `http_unix_socket: /bubble/gh-proxy.sock` (via `GH_CONFIG_DIR=/etc/bubble/gh`) → sends requests through Unix socket → proxy validates token from `Authorization` header → enforces access level (REST repo-scoping, GraphQL mutation filtering) → adds real token → forwards to `https://api.github.com`.
 
-**API security:** REST paths validated against `/repos/{owner}/{repo}/...` (repo-scoped). GraphQL parsed to extract operation type — `query` allowed at level 3, `mutation` requires level 4. Batched requests, subscriptions, and malformed bodies rejected. API redirects (e.g. CI log downloads) followed with hardened rules: GET/HEAD only, HTTPS only, allowlisted hosts, max 2 hops, auth headers stripped.
+**API security:** REST paths validated against `/repos/{owner}/{repo}/...` (repo-scoped). GraphQL scans ALL operations in a document and classifies by the most dangerous one — `query` allowed at level 3, `mutation` requires level 4. This prevents `operationName`-based bypasses where a query is listed first but a mutation is selected for execution. Batched requests, subscriptions, and malformed bodies rejected. Note: GraphQL is NOT repo-scoped — queries can access any data the host token can read (GitHub's GraphQL API doesn't support path-based scoping). API redirects (e.g. CI log downloads) followed with hardened rules: GET/HEAD only, HTTPS only, allowlisted hosts, max 2 hops, auth headers stripped. GitHub 4xx errors are passed through to clients (not collapsed to 502).
 
 **Local bubbles:** Exposed via Incus proxy devices — TCP for git, Unix socket for gh (`listen=unix:/bubble/gh-proxy.sock`).
 

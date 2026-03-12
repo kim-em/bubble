@@ -19,10 +19,10 @@ def test_available_tools():
     assert "claude" in tools
     assert "codex" in tools
     assert "elan" in tools
+    assert "gh" in tools
     assert "vscode" in tools
     assert "emacs" in tools
     assert "neovim" in tools
-    assert "gh" not in tools
     assert tools == sorted(tools)
 
 
@@ -35,7 +35,7 @@ def test_resolve_tools_yes():
 
 def test_resolve_tools_no():
     config = {
-        "tools": {"claude": "no", "codex": "no", "elan": "no"},
+        "tools": {"claude": "no", "codex": "no", "elan": "no", "gh": "no"},
         "editor": "shell",
     }
     enabled = resolve_tools(config)

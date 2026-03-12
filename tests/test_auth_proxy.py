@@ -20,6 +20,7 @@ from bubble.auth_proxy import (
     ThreadedHTTPServer,
     _build_api_url,
     _build_github_url,
+    _collect_graphql_op_types,
     _parse_graphql_op_type,
     classify_graphql,
     validate_api_path,
@@ -443,9 +444,10 @@ class TestProxyIntegration:
             # If GitHub is reachable, we get a response (possibly 404 for fake repo)
             # The important thing is we got past validation
         except urllib.error.HTTPError as e:
-            # 502 means the proxy tried to reach GitHub (validation passed)
-            # 404 means GitHub returned not found for the fake repo
-            assert e.code in (404, 502)
+            # 401 = GitHub rejected our fake token (4xx passed through)
+            # 404 = GitHub returned not found for the fake repo
+            # 502 = proxy couldn't reach GitHub (network error)
+            assert e.code in (401, 404, 502)
         except urllib.error.URLError:
             # Network timeout / connection refused is fine — validation passed
             pass
@@ -687,6 +689,49 @@ class TestParseGraphqlOpType:
         assert _parse_graphql_op_type("QUERY { repo { name } }") == "query"
         assert _parse_graphql_op_type("Mutation { addComment { id } }") == "mutation"
 
+    def test_multi_operation_mutation_detected(self):
+        """A document with query + mutation returns 'mutation' (most dangerous)."""
+        query = "query Safe { viewer { login } } mutation Evil { __typename }"
+        assert _parse_graphql_op_type(query) == "mutation"
+
+    def test_multi_operation_all_queries(self):
+        query = "query A { viewer { login } } query B { repository { name } }"
+        assert _parse_graphql_op_type(query) == "query"
+
+    def test_operationName_bypass_blocked(self):
+        """operationName selecting a mutation in a multi-op doc is caught."""
+        query = "query Safe { viewer { login } } mutation Evil { __typename }"
+        # Even though operationName would select Evil, the parser
+        # scans ALL operations and finds the mutation
+        assert _parse_graphql_op_type(query) == "mutation"
+
+
+class TestCollectGraphqlOpTypes:
+    def test_single_query(self):
+        assert _collect_graphql_op_types("query { viewer { login } }") == ["query"]
+
+    def test_single_mutation(self):
+        assert _collect_graphql_op_types("mutation { addComment { id } }") == ["mutation"]
+
+    def test_anonymous_query(self):
+        assert _collect_graphql_op_types("{ viewer { login } }") == ["query"]
+
+    def test_multi_ops(self):
+        ops = _collect_graphql_op_types("query A { viewer { login } } mutation B { __typename }")
+        assert ops == ["query", "mutation"]
+
+    def test_fragment_then_ops(self):
+        ops = _collect_graphql_op_types(
+            "fragment F on User { name } query A { viewer { ...F } } mutation B { __typename }"
+        )
+        assert ops == ["query", "mutation"]
+
+    def test_empty(self):
+        assert _collect_graphql_op_types("") == []
+
+    def test_only_comments(self):
+        assert _collect_graphql_op_types("# just a comment") == []
+
 
 class TestClassifyGraphql:
     def test_valid_query(self):
@@ -760,6 +805,18 @@ class TestClassifyGraphql:
             }
         }"""
         body = json.dumps({"query": query}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type == "mutation"
+        assert err is None
+
+    def test_operationName_bypass_blocked(self):
+        """Multi-op document with operationName selecting mutation is classified as mutation."""
+        body = json.dumps(
+            {
+                "query": "query Safe { viewer { login } } mutation Evil { __typename }",
+                "operationName": "Evil",
+            }
+        ).encode()
         op_type, err = classify_graphql(body)
         assert op_type == "mutation"
         assert err is None
@@ -1007,9 +1064,10 @@ class TestApiProxyIntegration:
         try:
             urllib.request.urlopen(req, timeout=5)
         except urllib.error.HTTPError as e:
-            # 502 = proxy tried to reach GitHub (validation passed)
+            # 401 = GitHub rejected fake token (4xx passed through)
             # 404 = GitHub returned not found for fake repo
-            assert e.code in (404, 502)
+            # 502 = proxy couldn't reach GitHub
+            assert e.code in (401, 404, 502)
         except urllib.error.URLError:
             pass  # Network timeout is fine
 
@@ -1063,7 +1121,8 @@ class TestApiProxyIntegration:
         try:
             urllib.request.urlopen(req, timeout=5)
         except urllib.error.HTTPError as e:
-            # 502 or 401 (fake token) = validation passed
+            # 401 = GitHub rejected fake token (4xx passed through)
+            # 502 = proxy couldn't reach GitHub
             assert e.code in (401, 502)
         except urllib.error.URLError:
             pass
@@ -1113,9 +1172,36 @@ class TestApiProxyIntegration:
         try:
             urllib.request.urlopen(req, timeout=5)
         except urllib.error.HTTPError as e:
-            assert e.code in (404, 502)  # Passed validation
+            # 401 = GitHub rejected fake token (4xx passed through)
+            # 404/502 = other upstream responses
+            assert e.code in (401, 404, 502)  # Passed validation
         except urllib.error.URLError:
             pass
+
+    def test_graphql_operationname_bypass_blocked(self, api_proxy_server):
+        """Multi-op document selecting a mutation via operationName is blocked at level 3."""
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        data = json.dumps(
+            {
+                "query": "query Safe { viewer { login } } mutation Evil { __typename }",
+                "operationName": "Evil",
+            }
+        ).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/graphql",
+            data=data,
+            method="POST",
+        )
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            urllib.request.urlopen(req)
+            pytest.fail("Expected HTTP error")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
 
     def test_batched_graphql_blocked(self, api_proxy_server):
         import urllib.request
