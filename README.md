@@ -87,7 +87,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 **Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the container includes elan, pre-installed VS Code extensions, and auto-downloads the mathlib cache when needed.
 
-**Network allowlisting**: Containers can only reach allowed domains (GitHub by default, plus language-specific domains like `releases.lean-lang.org` for Lean). IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked. Configurable in `~/.bubble/config.toml`.
+**Network allowlisting**: Containers can only reach allowed domains (language-specific domains like `releases.lean-lang.org` for Lean, plus any configured in `~/.bubble/config.toml`). Direct GitHub access is blocked by iptables — all GitHub traffic is forced through the auth proxy, which enforces repo-scoping and rate limits. IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked.
 
 ## Requirements
 

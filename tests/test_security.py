@@ -190,6 +190,16 @@ def test_github_domains_for_allowlist():
     assert "example.com" not in gh
 
 
+def test_github_domains_for_allowlist_case_insensitive():
+    """Mixed-case domains should still be detected as GitHub domains."""
+    domains = ["GitHub.com", "API.GITHUB.COM", "Raw.GitHubusercontent.com", "example.com"]
+    gh = github_domains_for_allowlist(domains)
+    assert "GitHub.com" in gh
+    assert "API.GITHUB.COM" in gh
+    assert "Raw.GitHubusercontent.com" in gh
+    assert "example.com" not in gh
+
+
 def test_github_domains_for_allowlist_empty():
     assert github_domains_for_allowlist([]) == []
 

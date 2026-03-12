@@ -307,13 +307,16 @@ def github_domains_for_allowlist(domains: list[str]) -> list[str]:
     """GitHub-related domains that appear in a domain list.
 
     Used to strip direct GitHub network access when traffic should go
-    through the auth proxy instead.
+    through the auth proxy instead.  Case-insensitive to prevent bypass
+    via mixed-case domains.
     """
     github_suffixes = (".github.com", ".githubusercontent.com")
     return [
         d
         for d in domains
-        if d == "github.com" or d == "cli.github.com" or any(d.endswith(s) for s in github_suffixes)
+        if d.lower() == "github.com"
+        or d.lower() == "cli.github.com"
+        or any(d.lower().endswith(s) for s in github_suffixes)
     ]
 
 
