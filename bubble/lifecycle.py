@@ -84,3 +84,29 @@ def unregister_bubble(name: str):
         registry = load_registry()
         registry["bubbles"].pop(name, None)
         _save_registry(registry)
+
+
+def prune_stale_entries(live_containers: set[str]) -> list[str]:
+    """Remove registry entries for local containers that no longer exist.
+
+    Only prunes entries that are local (not remote, not native).
+    Returns the list of pruned names.
+    """
+    with _registry_lock():
+        registry = load_registry()
+        stale = []
+        for name, info in registry.get("bubbles", {}).items():
+            if info.get("remote_host") or info.get("native"):
+                continue
+            if name not in live_containers:
+                stale.append(name)
+        if stale:
+            for name in stale:
+                registry["bubbles"].pop(name, None)
+            _save_registry(registry)
+
+            from .vscode import remove_ssh_config
+
+            for name in stale:
+                remove_ssh_config(name)
+    return stale
