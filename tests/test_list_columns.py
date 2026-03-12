@@ -17,6 +17,18 @@ class TestDisplayWidth:
     def test_mixed(self):
         assert _display_width("hi\u4e16") == 4  # 2 + 2
 
+    def test_combining_marks(self):
+        # e + combining acute accent renders as 1 cell
+        assert _display_width("e\u0301") == 1
+
+    def test_zwj_sequence(self):
+        # ZWJ characters should be zero-width
+        assert _display_width("\u200d") == 0
+
+    def test_variation_selectors(self):
+        # Variation selectors (U+FE0E, U+FE0F) are zero-width
+        assert _display_width("\u2603\ufe0f") == 1  # snowman + VS16
+
 
 class TestTruncate:
     def test_short_string_unchanged(self):
@@ -36,10 +48,23 @@ class TestTruncate:
         assert _display_width(result) <= 5
         assert result.endswith("...")
 
-    def test_max_width_less_than_four(self):
-        # With max_width=3, can only fit "..."
+    def test_max_width_3(self):
         result = _truncate("abcdef", 3)
         assert result == "..."
+        assert _display_width(result) == 3
+
+    def test_max_width_2(self):
+        result = _truncate("abcdef", 2)
+        assert result == ".."
+        assert _display_width(result) == 2
+
+    def test_max_width_1(self):
+        result = _truncate("abcdef", 1)
+        assert result == "."
+
+    def test_max_width_0(self):
+        result = _truncate("abcdef", 0)
+        assert result == ""
 
 
 class TestPad:

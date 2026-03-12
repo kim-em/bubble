@@ -45,23 +45,29 @@ def _format_age(dt: "datetime | None") -> str:  # noqa: F821
     return f"{months}mo ago"
 
 
+def _char_width(ch: str) -> int:
+    """Return the display width of a single character."""
+    if unicodedata.combining(ch) or ch in ("\u200b", "\u200c", "\u200d", "\ufe0f", "\ufe0e"):
+        return 0
+    cat = unicodedata.east_asian_width(ch)
+    return 2 if cat in ("W", "F") else 1
+
+
 def _display_width(s: str) -> int:
     """Return the display width of *s*, counting wide Unicode chars as 2."""
-    w = 0
-    for ch in s:
-        cat = unicodedata.east_asian_width(ch)
-        w += 2 if cat in ("W", "F") else 1
-    return w
+    return sum(_char_width(ch) for ch in s)
 
 
 def _truncate(s: str, max_width: int) -> str:
     """Truncate *s* to *max_width* display columns, adding ``...`` if needed."""
     if _display_width(s) <= max_width:
         return s
+    if max_width <= 3:
+        return "." * max_width
     result: list[str] = []
     w = 0
     for ch in s:
-        cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        cw = _char_width(ch)
         if w + cw + 3 > max_width:  # leave room for "..."
             break
         result.append(ch)
@@ -386,17 +392,21 @@ def register_list_command(main):
         DISK_W = 10
         IPV4_W = 16
 
-        # Clamp name column if total exceeds terminal width
+        # Clamp dynamic columns if total exceeds terminal width
         term_w = shutil.get_terminal_size((80, 24)).columns
         fixed = STATE_W + 2 * TIME_W + 3  # separating spaces
         if show_location:
-            fixed += loc_w + 1
+            fixed += 1  # space before LOCATION (loc_w added separately)
         if verbose:
             fixed += DISK_W + IPV4_W + 2
         if show_clean:
             fixed += 8  # rough allowance for STATUS
-        if name_w + fixed > term_w:
-            name_w = max(len("NAME"), term_w - fixed)
+        avail = term_w - fixed
+        if name_w + loc_w > avail:
+            # Shrink name first, then location if needed
+            name_w = max(len("NAME"), avail - loc_w)
+            if name_w + loc_w > avail:
+                loc_w = max(len("LOCATION") if show_location else 0, avail - name_w)
 
         # Truncate values to their column widths
         names = [_truncate(e["name"], name_w) for e in entries]
