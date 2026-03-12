@@ -206,8 +206,8 @@ class TestDoSymlinkClaudeProjects:
         # Unique content was moved
         assert (claude_projects / "unique" / "data.txt").read_text() == "unique-data"
 
-    def test_aborts_on_file_conflicts(self, setup_dirs, capsys):
-        """Aborts and preserves skipped files when conflicts exist."""
+    def test_aborts_on_file_conflicts_nothing_moved(self, setup_dirs, capsys):
+        """Aborts without moving anything when conflicts exist."""
         claude_projects, bubble_projects = setup_dirs
         bubble_projects.mkdir()
 
@@ -215,7 +215,7 @@ class TestDoSymlinkClaudeProjects:
         (claude_projects / "conflict.txt").write_text("claude-version")
         (bubble_projects / "conflict.txt").write_text("bubble-version")
 
-        # Also a non-conflicting file
+        # Also a non-conflicting file — must NOT be moved on abort
         (bubble_projects / "safe.txt").write_text("safe-data")
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
@@ -229,13 +229,16 @@ class TestDoSymlinkClaudeProjects:
         assert (bubble_projects / "conflict.txt").read_text() == "bubble-version"
         # Claude version was not overwritten
         assert (claude_projects / "conflict.txt").read_text() == "claude-version"
+        # Non-conflicting file was NOT moved (atomic: nothing moves on conflict)
+        assert (bubble_projects / "safe.txt").read_text() == "safe-data"
+        assert not (claude_projects / "safe.txt").exists()
         # Error message was printed
         captured = capsys.readouterr()
         assert "Aborted" in captured.err
         assert "1 file(s)" in captured.err
 
-    def test_aborts_on_nested_file_conflicts(self, setup_dirs, capsys):
-        """Aborts when conflicts exist inside nested directories."""
+    def test_aborts_on_nested_file_conflicts_nothing_moved(self, setup_dirs, capsys):
+        """Aborts without moving anything when nested conflicts exist."""
         claude_projects, bubble_projects = setup_dirs
         bubble_projects.mkdir()
 
@@ -245,11 +248,17 @@ class TestDoSymlinkClaudeProjects:
         (bubble_projects / "shared").mkdir()
         (bubble_projects / "shared" / "same.txt").write_text("bubble")
 
+        # Non-conflicting sibling — must NOT be moved
+        (bubble_projects / "other.txt").write_text("other-data")
+
         with patch("bubble.config._is_inside_git_repo", return_value=True):
             result = do_symlink_claude_projects()
 
         assert result is False
         assert not bubble_projects.is_symlink()
+        # Nothing was moved
+        assert (bubble_projects / "other.txt").read_text() == "other-data"
+        assert not (claude_projects / "other.txt").exists()
         captured = capsys.readouterr()
         assert "Aborted" in captured.err
 
