@@ -73,7 +73,7 @@ class BubbleGroup(click.Group):
     """Custom group that routes unknown first args to the implicit 'open' command."""
 
     def format_usage(self, ctx, formatter):
-        formatter.write("Usage: bubble TARGET [OPTIONS]\n")
+        formatter.write("Usage: bubble TARGET [TARGET...] [OPTIONS]\n")
         formatter.write("       bubble COMMAND [ARGS]...\n")
 
     def format_commands(self, ctx, formatter):
@@ -115,6 +115,7 @@ def main():
 
     Run bubble TARGET to create (or reattach to) an isolated container and
     open it in VSCode via Remote SSH. Use --shell for a plain SSH session.
+    Multiple targets can be specified to open several bubbles at once.
 
     \b
     Examples:
@@ -123,6 +124,7 @@ def main():
       bubble https://github.com/owner/repo/pull/42  Pull request
       bubble mathlib4/pull/123                      PR shorthand
       bubble 456                                    PR in current repo
+      bubble 12 13 14                               Multiple targets
     """
 
 
@@ -368,7 +370,7 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
 # `bubble TARGET`. It exists as an explicit subcommand because remote.py calls
 # `bubble open --no-interactive --machine-readable` on remote hosts.
 @main.command("open", hidden=True)
-@click.argument("target")
+@click.argument("targets", nargs=-1, required=True)
 @click.option(
     "--editor",
     "editor_choice",
@@ -468,7 +470,7 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     help="Read Claude prompt from stdin (used internally by remote open).",
 )
 def open_cmd(
-    target,
+    targets,
     editor_choice,
     shell,
     emacs,
@@ -494,7 +496,92 @@ def open_cmd(
     codex_credentials,
     claude_prompt_stdin,
 ):
-    """Open a bubble for a target (GitHub URL, repo, local path, or PR number)."""
+    """Open a bubble for one or more targets (GitHub URL, repo, local path, or PR number)."""
+    # Reject --name with multiple targets (ambiguous)
+    if custom_name and len(targets) > 1:
+        click.echo("Error: --name cannot be used with multiple targets", err=True)
+        sys.exit(1)
+
+    # Reject -b/--new-branch with multiple targets (ambiguous)
+    if new_branch and len(targets) > 1:
+        click.echo("Error: -b/--new-branch cannot be used with multiple targets", err=True)
+        sys.exit(1)
+
+    multi = len(targets) > 1
+    errors = []
+    for target in targets:
+        try:
+            _open_single(
+                target,
+                editor_choice=editor_choice,
+                shell=shell,
+                emacs=emacs,
+                neovim=neovim,
+                ssh_host=ssh_host,
+                cloud=cloud,
+                force_local=force_local,
+                no_interactive=no_interactive,
+                machine_readable=machine_readable,
+                network=network,
+                custom_name=custom_name,
+                command=command,
+                native=native,
+                force_path=force_path,
+                new_branch=new_branch,
+                base_ref=base_ref,
+                no_clone=no_clone,
+                git_name=git_name,
+                git_email=git_email,
+                mounts=mounts,
+                claude_config=claude_config,
+                claude_credentials=claude_credentials,
+                codex_credentials=codex_credentials,
+                claude_prompt_stdin=claude_prompt_stdin,
+            )
+        except SystemExit:
+            if not multi:
+                raise
+            errors.append(target)
+        except Exception as e:
+            if not multi:
+                raise
+            click.echo(f"Error processing target '{target}': {e}", err=True)
+            errors.append(target)
+
+    if errors:
+        click.echo(f"\nFailed targets: {', '.join(errors)}", err=True)
+        sys.exit(1)
+
+
+def _open_single(
+    target,
+    *,
+    editor_choice,
+    shell,
+    emacs,
+    neovim,
+    ssh_host,
+    cloud,
+    force_local,
+    no_interactive,
+    machine_readable,
+    network,
+    custom_name,
+    command,
+    native,
+    force_path,
+    new_branch,
+    base_ref,
+    no_clone,
+    git_name,
+    git_email,
+    mounts,
+    claude_config,
+    claude_credentials,
+    codex_credentials,
+    claude_prompt_stdin,
+):
+    """Open a single bubble target."""
     if force_path and not target.startswith(("/", ".", "..")):
         target = "./" + target
 
