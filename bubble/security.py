@@ -172,6 +172,17 @@ def is_locked_off(config: dict, name: str) -> bool:
     return get_setting(config, name) == "off"
 
 
+def should_include_credentials(flag: bool, config: dict, setting_name: str) -> bool:
+    """Resolve whether credentials should be included.
+
+    Locked-off always wins.  Otherwise, include if the resolved flag is
+    True or the security setting enables them.
+    """
+    if is_locked_off(config, setting_name):
+        return False
+    return flag or is_enabled(config, setting_name)
+
+
 def has_auto_settings(config: dict) -> bool:
     """Check if any security settings are still on 'auto'."""
     return any(get_setting(config, name) == "auto" for name in SETTINGS)

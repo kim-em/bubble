@@ -54,6 +54,7 @@ from .security import (
     is_enabled,
     is_locked_off,
     print_warnings,
+    should_include_credentials,
 )
 from .setup import get_runtime
 from .target import Target, TargetParseError, parse_target
@@ -822,11 +823,7 @@ def _open_single(
     user_targets = {Path(m.target) for m in mount_specs}
 
     # Claude Code config mounts (opt-out via --no-claude-config)
-    # When security.claude_credentials=on, always include credentials.
-    # When security.claude_credentials=off, never include (overrides config).
-    include_creds = (claude_credentials or is_enabled(config, "claude_credentials")) and not (
-        is_locked_off(config, "claude_credentials")
-    )
+    include_creds = should_include_credentials(claude_credentials, config, "claude_credentials")
     cc_mounts = []
     if claude_config:
         cc_mounts = claude_config_mounts(include_credentials=include_creds)
@@ -837,10 +834,7 @@ def _open_single(
             maybe_symlink_claude_projects(config, notices=notices)
 
     # Codex config mounts
-    # When security.codex_credentials=off, never include (overrides config).
-    include_codex_creds = (codex_credentials or is_enabled(config, "codex_credentials")) and not (
-        is_locked_off(config, "codex_credentials")
-    )
+    include_codex_creds = should_include_credentials(codex_credentials, config, "codex_credentials")
     cx_mounts = codex_config_mounts(include_credentials=include_codex_creds)
     if cx_mounts:
         cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
