@@ -92,7 +92,9 @@ def finalize_bubble(
     maybe_install_skill()
 
     click.echo(f"Bubble '{name}' created successfully.")
-    click.echo(f"  SSH: ssh bubble-{name}")
+    click.echo(f"  SSH:  ssh bubble-{name}")
+    click.echo("  List: bubble list")
+    click.echo(f"  Pop:  bubble pop {name}")
 
     if not no_interactive:
         echo_editor_opening(editor)
