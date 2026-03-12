@@ -413,7 +413,6 @@ def _ensure_incus_initialized():
         sys.exit(1)
 
 
-
 def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
     """Get the configured container runtime. Ensures platform is ready by default."""
     if ensure_ready:
