@@ -41,6 +41,7 @@ set -euo pipefail
 
 CONF_FILE="/etc/bubble-idle.conf"
 ACTIVITY_FILE="/var/lib/bubble/last-activity"
+LOG_FILE="/var/log/bubble-idle.log"
 BOOT_GRACE=900  # 15 minutes after boot
 
 # Read config
@@ -51,18 +52,27 @@ fi
 
 NOW=$(date +%s)
 
+log() {
+    echo "$(date -Iseconds) $*" >> "$LOG_FILE"
+}
+
 # Grace period after boot
 BOOT_TIME=$(date -d "$(uptime -s)" +%s 2>/dev/null || echo 0)
 if [ $((NOW - BOOT_TIME)) -lt $BOOT_GRACE ]; then
     echo "$NOW" > "$ACTIVITY_FILE"
+    log "boot grace period ($(( NOW - BOOT_TIME ))s since boot)"
     exit 0
 fi
 
 ACTIVE=false
+REASON=""
 
-# Check for established SSH connections from outside
-if ss -tnp state established dport = :22 2>/dev/null | grep -q .; then
+# Check for established SSH connections (sport = local port = 22).
+# Use -H to suppress the header line so grep only matches real connections.
+SSH_CONNS=$(ss -Htnp state established 'sport = :22' 2>/dev/null | wc -l)
+if [ "$SSH_CONNS" -gt 0 ]; then
     ACTIVE=true
+    REASON="ssh=${SSH_CONNS}"
 fi
 
 # Check normalized CPU load (load1 / nproc > 0.5 means busy)
@@ -71,11 +81,13 @@ if [ "$ACTIVE" = false ]; then
     NPROC=$(nproc)
     if awk "BEGIN{exit !(${LOAD1}/${NPROC} > 0.5)}"; then
         ACTIVE=true
+        REASON="cpu=${LOAD1}/${NPROC}"
     fi
 fi
 
 if [ "$ACTIVE" = true ]; then
     echo "$NOW" > "$ACTIVITY_FILE"
+    log "active: ${REASON}"
     exit 0
 fi
 
@@ -85,13 +97,17 @@ if [ -f "$ACTIVITY_FILE" ]; then
 else
     # First check — start the idle timer now
     echo "$NOW" > "$ACTIVITY_FILE"
+    log "idle timer started"
     exit 0
 fi
 
 IDLE_SECONDS=$((NOW - LAST_ACTIVE))
+log "idle ${IDLE_SECONDS}s / ${IDLE_TIMEOUT}s"
+
 if [ "$IDLE_SECONDS" -ge "$IDLE_TIMEOUT" ]; then
+    log "shutting down after ${IDLE_SECONDS}s idle"
     logger -t bubble-idle "Shutting down after ${IDLE_SECONDS}s idle"
-    shutdown -h now
+    poweroff
 fi
 IDLESCRIPT
 chmod +x /usr/local/bin/bubble-idle-check

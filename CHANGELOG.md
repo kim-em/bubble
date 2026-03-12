@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.12 — 2026-03-12
+- Fix cloud idle auto-shutdown not working (#12)
+  - Fix SSH detection: `dport` (peer port) → `sport` (local port) so incoming connections are detected
+  - Fix `ss` header line causing `grep` to always match even with zero connections (add `-H` flag)
+  - Use `poweroff` instead of `shutdown -h` for reliable ACPI power-off signal to Hetzner hypervisor
+  - Add `/var/log/bubble-idle.log` for debugging idle check behavior
+
 ## 0.6.11 — 2026-03-12
 - Forward `--claude-credentials` and `--codex-credentials` flags to remote/cloud bubbles (#106)
 
