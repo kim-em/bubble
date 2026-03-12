@@ -33,6 +33,7 @@ import click
 
 from .output import detail
 from .runtime.base import ContainerRuntime
+from .runtime.colima import colima_host_ip
 
 # Port inside the container where the auth proxy is exposed (TCP, for git)
 _CONTAINER_PROXY_PORT = 7654
@@ -103,21 +104,6 @@ def _ensure_auth_proxy_running() -> int | None:
     return None
 
 
-def _colima_host_ip() -> str:
-    """Get the host IP as seen from inside the Colima VM."""
-    try:
-        result = subprocess.run(
-            ["colima", "ssh", "--", "getent", "hosts", "host.lima.internal"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split()[0]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return "192.168.5.2"  # Default Colima host IP
-
 
 def _resolve_access_level(config: dict, gh_enabled: bool) -> int:
     """Determine the auth proxy access level for a container.
@@ -169,7 +155,7 @@ def setup_auth_proxy(
     # Add Incus proxy device: expose host TCP port into container
     # On macOS (Colima), need to use the host IP from the VM's perspective
     if platform.system() == "Darwin":
-        host_ip = _colima_host_ip()
+        host_ip = colima_host_ip()
     else:
         host_ip = "127.0.0.1"
 

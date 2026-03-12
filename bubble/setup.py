@@ -413,26 +413,6 @@ def _ensure_incus_initialized():
         sys.exit(1)
 
 
-def colima_host_ip() -> str:
-    """Get the host IP as seen from the Colima VM.
-
-    Resolves host.lima.internal from the VM's /etc/hosts.
-    Falls back to 192.168.5.2 (the default vz networking address).
-    """
-    try:
-        result = subprocess.run(
-            ["colima", "ssh", "--", "getent", "hosts", "host.lima.internal"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split()[0]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return "192.168.5.2"
-
 
 def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
     """Get the configured container runtime. Ensures platform is ready by default."""
