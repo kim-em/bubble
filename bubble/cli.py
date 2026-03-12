@@ -97,13 +97,14 @@ class BubbleGroup(click.Group):
                 formatter.write_dl(advanced)
 
     def parse_args(self, ctx, args):
-        """If no known command is found among args, prepend 'open'.
+        """If no known command is found as the first positional arg, prepend 'open'.
 
         This supports both `bubble TARGET` and `bubble --ssh HOST TARGET`.
+        Only the first non-option token is checked, so that targets like
+        `list` or `pause` in later positions don't hijack routing.
         """
-        has_command = any(not a.startswith("-") and a in self.commands for a in args)
-        has_non_option = any(not a.startswith("-") for a in args)
-        if args and has_non_option and not has_command:
+        first_positional = next((a for a in args if not a.startswith("-")), None)
+        if args and first_positional is not None and first_positional not in self.commands:
             args = ["open"] + args
         return super().parse_args(ctx, args)
 
@@ -497,15 +498,17 @@ def open_cmd(
     claude_prompt_stdin,
 ):
     """Open a bubble for one or more targets (GitHub URL, repo, local path, or PR number)."""
-    # Reject --name with multiple targets (ambiguous)
-    if custom_name and len(targets) > 1:
-        click.echo("Error: --name cannot be used with multiple targets", err=True)
-        sys.exit(1)
-
-    # Reject -b/--new-branch with multiple targets (ambiguous)
-    if new_branch and len(targets) > 1:
-        click.echo("Error: -b/--new-branch cannot be used with multiple targets", err=True)
-        sys.exit(1)
+    # Reject options that are ambiguous with multiple targets
+    if len(targets) > 1:
+        if custom_name:
+            click.echo("Error: --name cannot be used with multiple targets", err=True)
+            sys.exit(1)
+        if new_branch:
+            click.echo("Error: -b/--new-branch cannot be used with multiple targets", err=True)
+            sys.exit(1)
+        if machine_readable:
+            click.echo("Error: --machine-readable cannot be used with multiple targets", err=True)
+            sys.exit(1)
 
     multi = len(targets) > 1
     errors = []
@@ -538,10 +541,11 @@ def open_cmd(
                 codex_credentials=codex_credentials,
                 claude_prompt_stdin=claude_prompt_stdin,
             )
-        except SystemExit:
+        except SystemExit as e:
             if not multi:
                 raise
-            errors.append(target)
+            if e.code:  # Only treat nonzero exits as failures
+                errors.append(target)
         except Exception as e:
             if not multi:
                 raise
