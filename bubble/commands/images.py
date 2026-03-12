@@ -90,7 +90,7 @@ def register_images_commands(main):
         runtime = get_runtime(config)
 
         # Parse toolchain images: lean-v4.X.Y
-        from ..hooks.lean import LEAN_VERSION_RE
+        from ..lean import LEAN_VERSION_RE
 
         version_str = image_name.removeprefix("lean-") if image_name.startswith("lean-") else None
         tc_match = LEAN_VERSION_RE.fullmatch(version_str) if version_str else None

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 from ..config import DATA_DIR, load_config
-from ..hooks.lean import LEAN_VERSION_RE
+from ..lean import LEAN_VERSION_RE
 from ..runtime.base import ContainerRuntime
 from ..spinner import heartbeat
 from ..tools import combined_tool_script, resolve_tools, tools_hash
