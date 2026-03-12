@@ -444,6 +444,7 @@ def build_image(
     *,
     force: bool = False,
     still_needed: "Callable[[], bool] | None" = None,
+    quiet: bool = False,
 ):
     """Build any known image by name. Builds parent images recursively if needed.
 
@@ -454,6 +455,9 @@ def build_image(
     ``still_needed`` is an optional callback re-checked after acquiring the
     build lock.  If it returns False, the rebuild is skipped — a concurrent
     process already rebuilt and updated the drift markers.
+
+    ``quiet`` suppresses the initial "Building X image..." announcement.
+    Use when the caller already printed its own progress message.
     """
     if image_name not in IMAGES:
         available = ", ".join(IMAGES.keys())
@@ -495,7 +499,8 @@ def build_image(
             return
 
         build_name = f"{image_name}-builder"
-        print(f"Building {image_name} image...")
+        if not quiet:
+            print(f"Building {image_name} image...")
 
         # Clean up any leftover builder from a previous failed attempt
         _cleanup_builder(runtime, build_name)
@@ -507,7 +512,7 @@ def build_image(
 
             # Run setup script
             script = (SCRIPTS_DIR / spec["script"]).read_text()
-            with heartbeat(f"  still building {image_name} image..."):
+            with heartbeat(f"  still building {image_name} image...", delay=15.0):
                 runtime.exec(build_name, ["bash", "-c", script])
 
             # Install configured tools (only on base image — derived images inherit them)
@@ -609,7 +614,7 @@ def build_lean_toolchain_image(
 
             script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
             script = f"export LEAN_TOOLCHAIN={shlex.quote(version)}\n" + script
-            with heartbeat(f"  still building {alias} image..."):
+            with heartbeat(f"  still building {alias} image...", delay=15.0):
                 runtime.exec(build_name, ["bash", "-c", script])
 
             # Run user customization script as the final build step
