@@ -90,13 +90,14 @@ def register_images_commands(main):
         runtime = get_runtime(config)
 
         # Parse toolchain images: lean-v4.X.Y
-        import re
+        from ..hooks.lean import LEAN_VERSION_RE
 
-        tc_match = re.fullmatch(r"lean-(v\d+\.\d+\.\d+(?:-rc\d+)?)", image_name)
+        version_str = image_name.removeprefix("lean-") if image_name.startswith("lean-") else None
+        tc_match = LEAN_VERSION_RE.fullmatch(version_str) if version_str else None
         if tc_match:
             from ..images.builder import build_lean_toolchain_image
 
-            version = tc_match.group(1)
+            version = tc_match.group(0)
             try:
                 build_lean_toolchain_image(runtime, version, force=force)
             except Exception as e:

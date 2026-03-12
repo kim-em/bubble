@@ -12,8 +12,9 @@ from ..git_store import parse_github_url
 from ..runtime.base import ContainerRuntime
 from . import GitDependency, Hook
 
-# Matches stable releases (v4.16.0) and release candidates (v4.16.0-rc2)
-_STABLE_OR_RC_RE = re.compile(r"^v\d+\.\d+\.\d+(-rc\d+)?$")
+# Matches stable releases (v4.16.0) and release candidates (v4.16.0-rc2).
+# Shared across hooks, image builder, and CLI commands — update once here.
+LEAN_VERSION_RE = re.compile(r"^v\d+\.\d+\.\d+(-rc\d+)?$")
 
 # Allowlist for Lake package names and repo names (prevents path traversal)
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -49,7 +50,7 @@ def _parse_lean_version(toolchain_str: str) -> str | None:
     else:
         version = toolchain_str
 
-    if _STABLE_OR_RC_RE.match(version):
+    if LEAN_VERSION_RE.match(version):
         return version
     return None
 
