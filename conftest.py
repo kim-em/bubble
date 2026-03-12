@@ -20,3 +20,10 @@ if _project_root not in sys.path:
 _to_remove = [key for key in sys.modules if key == "bubble" or key.startswith("bubble.")]
 for key in _to_remove:
     del sys.modules[key]
+
+# Sanity check: verify bubble resolves under this worktree.
+import bubble as _bubble_check  # noqa: E402
+
+assert _bubble_check.__file__ and _bubble_check.__file__.startswith(_project_root), (
+    f"bubble imported from {_bubble_check.__file__}, expected under {_project_root}"
+)
