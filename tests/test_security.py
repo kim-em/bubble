@@ -16,6 +16,7 @@ from bubble.security import (
     is_locked_off,
     normalize_setting_name,
     print_warnings,
+    should_include_credentials,
 )
 
 # --- Name normalization tests ---
@@ -627,3 +628,38 @@ def test_ssh_config_without_host_key_trust(tmp_ssh_dir):
     assert "Host bubble-test-bubble" in content
     assert "ProxyCommand" in content
     assert "LogLevel ERROR" in content
+
+
+# --- should_include_credentials tests ---
+
+
+def test_should_include_credentials_locked_off_overrides_true():
+    config = {"security": {"claude_credentials": "off"}}
+    assert should_include_credentials(True, config, "claude_credentials") is False
+
+
+def test_should_include_credentials_locked_off_overrides_false():
+    config = {"security": {"claude_credentials": "off"}}
+    assert should_include_credentials(False, config, "claude_credentials") is False
+
+
+def test_should_include_credentials_requested_true():
+    config = {"security": {"claude_credentials": "on"}}
+    assert should_include_credentials(True, config, "claude_credentials") is True
+
+
+def test_should_include_credentials_requested_false_security_on():
+    """Security 'on' enables credentials even when the resolved flag is False."""
+    config = {"security": {"claude_credentials": "on"}}
+    assert should_include_credentials(False, config, "claude_credentials") is True
+
+
+def test_should_include_credentials_requested_false_security_auto():
+    """Auto with auto_default=on behaves like 'on'."""
+    config = {}  # auto (default)
+    assert should_include_credentials(False, config, "claude_credentials") is True
+
+
+def test_should_include_credentials_requested_true_security_auto():
+    config = {}
+    assert should_include_credentials(True, config, "claude_credentials") is True
