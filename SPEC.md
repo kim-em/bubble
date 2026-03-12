@@ -336,7 +336,7 @@ of the versioned image for next time.
 - Environment variable `MATHLIB_CACHE_DIR=/shared/mathlib-cache`
 
 **Post-clone behavior:**
-- Pre-populate Lake dependencies from `lake-manifest.json` (see 2.3)
+- Pre-populate Lake dependencies from `lake-manifest.json` (see 2.4)
 - Write auto-build command to `~/.bubble-fetch-cache` marker file
 - For Mathlib-using projects: `cd <dir> && lake exe cache get && lake build`
 - For the lean4 repo itself: cmake + make build
