@@ -261,6 +261,8 @@ def _open_remote(
     git_email="",
     command=None,
     claude_config=True,
+    claude_credentials=None,
+    codex_credentials=None,
     new_branch=None,
     base_ref=None,
 ):
@@ -279,6 +281,8 @@ def _open_remote(
             git_name=git_name,
             git_email=git_email,
             claude_config=claude_config,
+            claude_credentials=claude_credentials,
+            codex_credentials=codex_credentials,
             new_branch=new_branch,
             base_ref=base_ref,
             claude_prompt=claude_prompt,
@@ -752,6 +756,8 @@ def _open_single(
             git_email=git_email,
             command=command_args,
             claude_config=claude_config,
+            claude_credentials=claude_credentials,
+            codex_credentials=codex_credentials,
             new_branch=new_branch,
             base_ref=base_ref,
         )

@@ -407,6 +407,8 @@ def remote_open(
     git_name: str = "",
     git_email: str = "",
     claude_config: bool = True,
+    claude_credentials: bool | None = None,
+    codex_credentials: bool | None = None,
     new_branch: str | None = None,
     base_ref: str | None = None,
     claude_prompt: str = "",
@@ -426,6 +428,14 @@ def remote_open(
         args.append("--no-network")
     if not claude_config:
         args.append("--no-claude-config")
+    if claude_credentials is True:
+        args.append("--claude-credentials")
+    elif claude_credentials is False:
+        args.append("--no-claude-credentials")
+    if codex_credentials is True:
+        args.append("--codex-credentials")
+    elif codex_credentials is False:
+        args.append("--no-codex-credentials")
     if custom_name:
         args += ["--name", custom_name]
     if git_name:

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.11 — 2026-03-12
+- Forward `--claude-credentials` and `--codex-credentials` flags to remote/cloud bubbles (#106)
+
 ## 0.6.10 — 2026-03-12
 - Support `bubble -b branch_name` without explicit target (#99)
   - Infers owner/repo from current directory's git remote when `-b` is used without a target

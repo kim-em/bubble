@@ -259,6 +259,32 @@ class TestRemoteOpenFlagForwarding:
         cmd_str = self._run_remote_open()
         assert "--claude-prompt-stdin" not in cmd_str
 
+    def test_claude_credentials_forwarded(self):
+        cmd_str = self._run_remote_open(claude_credentials=True)
+        assert "--claude-credentials" in cmd_str
+
+    def test_no_claude_credentials_forwarded(self):
+        cmd_str = self._run_remote_open(claude_credentials=False)
+        assert "--no-claude-credentials" in cmd_str
+
+    def test_claude_credentials_none_not_forwarded(self):
+        cmd_str = self._run_remote_open(claude_credentials=None)
+        assert "--claude-credentials" not in cmd_str
+        assert "--no-claude-credentials" not in cmd_str
+
+    def test_codex_credentials_forwarded(self):
+        cmd_str = self._run_remote_open(codex_credentials=True)
+        assert "--codex-credentials" in cmd_str
+
+    def test_no_codex_credentials_forwarded(self):
+        cmd_str = self._run_remote_open(codex_credentials=False)
+        assert "--no-codex-credentials" in cmd_str
+
+    def test_codex_credentials_none_not_forwarded(self):
+        cmd_str = self._run_remote_open(codex_credentials=None)
+        assert "--codex-credentials" not in cmd_str
+        assert "--no-codex-credentials" not in cmd_str
+
 
 class TestCreateBundle:
     def test_creates_tarball(self):
