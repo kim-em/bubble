@@ -325,7 +325,7 @@ These are inherent consequences of the architecture, not bugs. Understanding the
 
 4. **Boot-time network window**: There is a brief window between container launch and iptables rule application during which the container has unrestricted network access. No user code runs during this window with stock images.
 
-5. **Auth proxy token visibility**: The per-container auth proxy token is stored in the user's git config and in `/etc/profile.d/bubble-gh.sh` (mode 644). Any process in the container can read it. The token is scoped to one repository and access level, limiting the impact.
+5. **Auth proxy token visibility**: The per-container auth proxy token is stored in the user's git config and in `/etc/profile.d/bubble-gh.sh` (mode 644). Any process in the container can read it. The token is scoped to one repository and access level for git and REST API requests, but GraphQL queries (level 3+) are not repo-scoped and can read any data the host token can access.
 
 ## License
 
