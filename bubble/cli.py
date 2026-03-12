@@ -466,12 +466,12 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
 @click.option(
     "--claude-credentials/--no-claude-credentials",
     default=None,
-    help="Mount ~/.claude credentials into container (default: from config or disabled)",
+    help="Mount ~/.claude credentials into container (default: from config or enabled)",
 )
 @click.option(
     "--codex-credentials/--no-codex-credentials",
     default=None,
-    help="Mount ~/.codex credentials into container (default: from config or disabled)",
+    help="Mount ~/.codex credentials into container (default: from config or enabled)",
 )
 @click.option(
     "--claude-prompt-stdin",

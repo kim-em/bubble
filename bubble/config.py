@@ -217,7 +217,7 @@ _CLAUDE_CONFIG_ITEMS = [
     "commands",
 ]
 
-# Credential files — opt-in only (--claude-credentials).
+# Credential files — included by default, opt-out with --no-claude-credentials.
 _CLAUDE_CREDENTIAL_ITEMS = [
     ".credentials.json",
 ]
@@ -250,7 +250,7 @@ def claude_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
 
     Args:
         include_credentials: If True, also mount .credentials.json.
-            Off by default for security.
+            On by default; opt out with --no-claude-credentials.
     """
     mounts = []
     if not CLAUDE_CONFIG_DIR.is_dir():
@@ -413,7 +413,7 @@ _CODEX_CONFIG_ITEMS = [
     "config.toml",
 ]
 
-# Credential files — opt-in only (--codex-credentials).
+# Credential files — included by default, opt-out with --no-codex-credentials.
 _CODEX_CREDENTIAL_ITEMS = [
     "auth.json",
 ]
@@ -446,7 +446,7 @@ def codex_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
 
     Args:
         include_credentials: If True, also mount auth.json.
-            Off by default for security.
+            On by default; opt out with --no-codex-credentials.
     """
     mounts = []
     if not CODEX_CONFIG_DIR.is_dir():
