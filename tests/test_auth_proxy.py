@@ -1,5 +1,6 @@
 """Tests for the GitHub auth proxy module."""
 
+import json
 import threading
 import time
 from collections import deque
@@ -9,11 +10,19 @@ from unittest.mock import MagicMock
 import pytest
 
 from bubble.auth_proxy import (
+    LEVEL_GH_READ,
+    LEVEL_GH_READWRITE,
+    LEVEL_GIT_ONLY,
+    LEVEL_REST_READ,
     AuthProxyHandler,
     AuthTokenRegistry,
     ProxyRateLimiter,
     ThreadedHTTPServer,
+    _build_api_url,
     _build_github_url,
+    _parse_graphql_op_type,
+    classify_graphql,
+    validate_api_path,
     validate_path,
 )
 
@@ -32,6 +41,14 @@ class TestAuthTokenManagement:
         assert tokens[token]["container"] == "my-container"
         assert tokens[token]["owner"] == "owner"
         assert tokens[token]["repo"] == "repo"
+        assert tokens[token]["level"] == LEVEL_GH_READ  # default
+
+    def test_generate_token_with_level(self, auth_proxy_env):
+        import bubble.auth_proxy
+
+        token = bubble.auth_proxy.generate_auth_token("c1", "o", "r", level=LEVEL_GIT_ONLY)
+        tokens = bubble.auth_proxy._load_tokens()
+        assert tokens[token]["level"] == LEVEL_GIT_ONLY
 
     def test_generate_multiple_tokens(self, auth_proxy_env):
         import bubble.auth_proxy
@@ -477,6 +494,647 @@ class TestProxyIntegration:
             urllib.request.urlopen(req, timeout=5)
         except Exception:
             pass  # We just care that it doesn't error on the header
+
+
+# ---------------------------------------------------------------------------
+# API path validation
+# ---------------------------------------------------------------------------
+
+
+class TestValidateApiPath:
+    # --- Allowed patterns ---
+
+    def test_get_pulls(self):
+        err = validate_api_path(
+            "/repos/owner/repo/pulls/123", "", "GET", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is None
+
+    def test_get_actions_runs(self):
+        err = validate_api_path(
+            "/repos/owner/repo/actions/runs", "", "GET", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is None
+
+    def test_get_issues(self):
+        err = validate_api_path(
+            "/repos/owner/repo/issues", "state=open", "GET", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is None
+
+    def test_head_allowed(self):
+        err = validate_api_path(
+            "/repos/owner/repo/pulls", "", "HEAD", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is None
+
+    def test_get_repo_root(self):
+        err = validate_api_path("/repos/owner/repo", "", "GET", "owner", "repo", LEVEL_REST_READ)
+        assert err is None
+
+    def test_case_insensitive(self):
+        err = validate_api_path(
+            "/repos/Owner/Repo/pulls", "", "GET", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is None
+
+    # --- Write methods ---
+
+    def test_post_blocked_at_level_2(self):
+        err = validate_api_path(
+            "/repos/owner/repo/issues/1/comments", "", "POST", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is not None
+        assert "not allowed" in err.lower()
+
+    def test_post_blocked_at_level_3(self):
+        err = validate_api_path(
+            "/repos/owner/repo/issues/1/comments", "", "POST", "owner", "repo", LEVEL_GH_READ
+        )
+        assert err is not None
+
+    def test_post_allowed_at_level_4(self):
+        err = validate_api_path(
+            "/repos/owner/repo/issues/1/comments", "", "POST", "owner", "repo", LEVEL_GH_READWRITE
+        )
+        assert err is None
+
+    def test_patch_allowed_at_level_4(self):
+        err = validate_api_path(
+            "/repos/owner/repo/pulls/1", "", "PATCH", "owner", "repo", LEVEL_GH_READWRITE
+        )
+        assert err is None
+
+    def test_delete_allowed_at_level_4(self):
+        err = validate_api_path(
+            "/repos/owner/repo/comments/1", "", "DELETE", "owner", "repo", LEVEL_GH_READWRITE
+        )
+        assert err is None
+
+    # --- Blocked patterns ---
+
+    def test_wrong_repo(self):
+        err = validate_api_path(
+            "/repos/owner/other/pulls", "", "GET", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is not None
+        assert "mismatch" in err.lower()
+
+    def test_wrong_owner(self):
+        err = validate_api_path(
+            "/repos/hacker/repo/pulls", "", "GET", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is not None
+
+    def test_non_repo_path(self):
+        err = validate_api_path("/user", "", "GET", "owner", "repo", LEVEL_REST_READ)
+        assert err is not None
+        assert "pattern" in err.lower()
+
+    def test_encoded_slash(self):
+        err = validate_api_path(
+            "/repos/owner%2frepo/pulls", "", "GET", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is not None
+
+    def test_dot_segment(self):
+        err = validate_api_path(
+            "/repos/owner/repo/../../etc/passwd", "", "GET", "owner", "repo", LEVEL_REST_READ
+        )
+        assert err is not None
+
+
+# ---------------------------------------------------------------------------
+# API URL building
+# ---------------------------------------------------------------------------
+
+
+class TestBuildApiUrl:
+    def test_basic(self):
+        url = _build_api_url("/repos/owner/repo/pulls", "state=open")
+        assert url == "https://api.github.com/repos/owner/repo/pulls?state=open"
+
+    def test_no_query(self):
+        url = _build_api_url("/repos/owner/repo/pulls/123", "")
+        assert url == "https://api.github.com/repos/owner/repo/pulls/123"
+
+    def test_graphql(self):
+        url = _build_api_url("/graphql", "")
+        assert url == "https://api.github.com/graphql"
+
+
+# ---------------------------------------------------------------------------
+# GraphQL parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseGraphqlOpType:
+    def test_anonymous_query(self):
+        assert _parse_graphql_op_type("{ repository { name } }") == "query"
+
+    def test_named_query(self):
+        assert _parse_graphql_op_type("query MyQuery { repository { name } }") == "query"
+
+    def test_mutation(self):
+        assert _parse_graphql_op_type("mutation { addComment(input: {}) { id } }") == "mutation"
+
+    def test_named_mutation(self):
+        assert _parse_graphql_op_type("mutation AddComment { addComment { id } }") == "mutation"
+
+    def test_subscription(self):
+        assert _parse_graphql_op_type("subscription { onIssue { id } }") == "subscription"
+
+    def test_with_comments(self):
+        query = """
+        # This is a comment
+        query {
+            repository { name }
+        }
+        """
+        assert _parse_graphql_op_type(query) == "query"
+
+    def test_fragment_then_query(self):
+        query = """
+        fragment RepoFields on Repository {
+            name
+            description
+        }
+        query {
+            repository(owner: "foo", name: "bar") {
+                ...RepoFields
+            }
+        }
+        """
+        assert _parse_graphql_op_type(query) == "query"
+
+    def test_fragment_then_mutation(self):
+        query = """
+        fragment F on Issue { title }
+        mutation { addComment(input: {}) { id } }
+        """
+        assert _parse_graphql_op_type(query) == "mutation"
+
+    def test_empty(self):
+        assert _parse_graphql_op_type("") is None
+
+    def test_only_comments(self):
+        assert _parse_graphql_op_type("# just a comment") is None
+
+    def test_whitespace_before_query(self):
+        assert _parse_graphql_op_type("   \n  query { repo { name } }") == "query"
+
+    def test_case_insensitive(self):
+        assert _parse_graphql_op_type("QUERY { repo { name } }") == "query"
+        assert _parse_graphql_op_type("Mutation { addComment { id } }") == "mutation"
+
+
+class TestClassifyGraphql:
+    def test_valid_query(self):
+        body = json.dumps({"query": "query { repository { name } }"}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type == "query"
+        assert err is None
+
+    def test_valid_mutation(self):
+        body = json.dumps({"query": "mutation { addComment { id } }"}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type == "mutation"
+        assert err is None
+
+    def test_malformed_json(self):
+        op_type, err = classify_graphql(b"not json")
+        assert op_type is None
+        assert "malformed" in err.lower()
+
+    def test_batched_request(self):
+        body = json.dumps([{"query": "query { x }"}, {"query": "query { y }"}]).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type is None
+        assert "batched" in err.lower()
+
+    def test_missing_query_field(self):
+        body = json.dumps({"variables": {}}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type is None
+        assert "query" in err.lower()
+
+    def test_non_string_query(self):
+        body = json.dumps({"query": 123}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type is None
+
+    def test_subscription_rejected(self):
+        body = json.dumps({"query": "subscription { onEvent { id } }"}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type is None
+        assert "subscription" in err.lower()
+
+    def test_anonymous_query(self):
+        body = json.dumps({"query": "{ repository { name } }"}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type == "query"
+        assert err is None
+
+    def test_gh_pr_view_query(self):
+        """Real-world gh pr view GraphQL query."""
+        query = """query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {
+            repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr_number) {
+                    title
+                    body
+                    state
+                }
+            }
+        }"""
+        variables = {"owner": "o", "repo": "r", "pr_number": 1}
+        body = json.dumps({"query": query, "variables": variables}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type == "query"
+        assert err is None
+
+    def test_gh_pr_comment_mutation(self):
+        """Real-world gh pr comment GraphQL mutation."""
+        query = """mutation AddComment($subjectId: ID!, $body: String!) {
+            addComment(input: {subjectId: $subjectId, body: $body}) {
+                commentEdge { node { id } }
+            }
+        }"""
+        body = json.dumps({"query": query}).encode()
+        op_type, err = classify_graphql(body)
+        assert op_type == "mutation"
+        assert err is None
+
+
+# ---------------------------------------------------------------------------
+# Handler: Authorization header token extraction
+# ---------------------------------------------------------------------------
+
+
+class TestAuthorizationHeaderAuth:
+    def _make_handler(self, headers=None, token_info=None):
+        handler = AuthProxyHandler.__new__(AuthProxyHandler)
+        mock_headers = MagicMock()
+        header_dict = dict(headers or {})
+        mock_headers.get = lambda k, d=None: header_dict.get(k, d)
+        handler.headers = mock_headers
+
+        handler.token_registry = AuthTokenRegistry()
+        if token_info:
+            handler.token_registry.lookup = lambda t: token_info if t == "valid-token" else None
+
+        return handler
+
+    def test_x_bubble_token_preferred(self):
+        handler = self._make_handler(
+            headers={"X-Bubble-Token": "valid-token", "Authorization": "token other-token"},
+        )
+        assert handler._get_container_token() == "valid-token"
+
+    def test_authorization_token_fallback(self):
+        handler = self._make_handler(
+            headers={"Authorization": "token valid-token"},
+        )
+        assert handler._get_container_token() == "valid-token"
+
+    def test_authorization_bearer_fallback(self):
+        handler = self._make_handler(
+            headers={"Authorization": "Bearer valid-token"},
+        )
+        assert handler._get_container_token() == "valid-token"
+
+    def test_no_auth(self):
+        handler = self._make_handler()
+        assert handler._get_container_token() is None
+
+    def test_invalid_authorization_format(self):
+        handler = self._make_handler(
+            headers={"Authorization": "Basic dXNlcjpwYXNz"},
+        )
+        assert handler._get_container_token() is None
+
+
+# ---------------------------------------------------------------------------
+# Handler: routing by access level
+# ---------------------------------------------------------------------------
+
+
+class TestAccessLevelRouting:
+    @staticmethod
+    def _tinfo(level):
+        return {
+            "container": "c1",
+            "owner": "owner",
+            "repo": "repo",
+            "level": level,
+        }
+
+    def _make_handler(self, method, path, headers=None, body=None, token_info=None):
+        """Create a mock handler with the given request parameters."""
+        handler = AuthProxyHandler.__new__(AuthProxyHandler)
+        handler.command = method
+        handler.path = path
+        handler.rfile = BytesIO(body or b"")
+        handler.wfile = BytesIO()
+        handler.requestline = f"{method} {path} HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+
+        mock_headers = MagicMock()
+        header_dict = dict(headers or {})
+        mock_headers.get = lambda k, d=None: header_dict.get(k, d)
+        mock_headers.__iter__ = lambda s: iter(header_dict.items())
+        mock_headers.items = lambda: header_dict.items()
+        handler.headers = mock_headers
+
+        handler.token_registry = AuthTokenRegistry()
+        handler.rate_limiter = ProxyRateLimiter()
+        handler.github_token = "ghp_test_token"
+
+        if token_info:
+            handler.token_registry.lookup = lambda t: token_info if t == "valid-token" else None
+
+        handler._responses = []
+
+        def mock_send_response(code, message=None):
+            handler._responses.append(code)
+
+        handler.send_response = mock_send_response
+        handler.send_header = lambda k, v: None
+        handler.end_headers = lambda: None
+
+        return handler
+
+    def test_git_request_allowed_at_level_1(self):
+        handler = self._make_handler(
+            "GET",
+            "/git/owner/repo/info/refs?service=git-upload-pack",
+            headers={"X-Bubble-Token": "valid-token"},
+            token_info=self._tinfo(LEVEL_GIT_ONLY),
+        )
+        handler._proxy_request("GET")
+        assert 403 not in handler._responses
+
+    def test_api_request_blocked_at_level_1(self):
+        handler = self._make_handler(
+            "GET",
+            "/repos/owner/repo/pulls",
+            headers={"X-Bubble-Token": "valid-token"},
+            token_info=self._tinfo(LEVEL_GIT_ONLY),
+        )
+        handler._proxy_request("GET")
+        assert 403 in handler._responses
+
+    def test_api_request_allowed_at_level_2(self):
+        handler = self._make_handler(
+            "GET",
+            "/repos/owner/repo/pulls",
+            headers={"X-Bubble-Token": "valid-token"},
+            token_info=self._tinfo(LEVEL_REST_READ),
+        )
+        handler._proxy_request("GET")
+        assert 403 not in handler._responses
+
+    def test_graphql_blocked_at_level_2(self):
+        body = json.dumps({"query": "{ repository { name } }"}).encode()
+        handler = self._make_handler(
+            "POST",
+            "/graphql",
+            headers={
+                "X-Bubble-Token": "valid-token",
+                "Content-Length": str(len(body)),
+            },
+            body=body,
+            token_info=self._tinfo(LEVEL_REST_READ),
+        )
+        handler._proxy_request("POST")
+        assert 403 in handler._responses
+
+    def test_graphql_query_allowed_at_level_3(self):
+        body = json.dumps({"query": "query { repository { name } }"}).encode()
+        handler = self._make_handler(
+            "POST",
+            "/graphql",
+            headers={
+                "X-Bubble-Token": "valid-token",
+                "Content-Length": str(len(body)),
+            },
+            body=body,
+            token_info=self._tinfo(LEVEL_GH_READ),
+        )
+        handler._proxy_request("POST")
+        assert 403 not in handler._responses
+
+    def test_graphql_mutation_blocked_at_level_3(self):
+        body = json.dumps({"query": "mutation { addComment { id } }"}).encode()
+        handler = self._make_handler(
+            "POST",
+            "/graphql",
+            headers={
+                "X-Bubble-Token": "valid-token",
+                "Content-Length": str(len(body)),
+            },
+            body=body,
+            token_info=self._tinfo(LEVEL_GH_READ),
+        )
+        handler._proxy_request("POST")
+        assert 403 in handler._responses
+
+    def test_graphql_mutation_allowed_at_level_4(self):
+        body = json.dumps({"query": "mutation { addComment { id } }"}).encode()
+        handler = self._make_handler(
+            "POST",
+            "/graphql",
+            headers={
+                "X-Bubble-Token": "valid-token",
+                "Content-Length": str(len(body)),
+            },
+            body=body,
+            token_info=self._tinfo(LEVEL_GH_READWRITE),
+        )
+        handler._proxy_request("POST")
+        assert 403 not in handler._responses
+
+    def test_unknown_route_blocked(self):
+        handler = self._make_handler(
+            "GET",
+            "/user",
+            headers={"X-Bubble-Token": "valid-token"},
+            token_info=self._tinfo(LEVEL_GH_READ),
+        )
+        handler._proxy_request("GET")
+        assert 403 in handler._responses
+
+
+# ---------------------------------------------------------------------------
+# Integration: API proxy round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestApiProxyIntegration:
+    @pytest.fixture
+    def api_proxy_server(self, auth_proxy_env):
+        """Start a real auth proxy server with level 3 token."""
+        import bubble.auth_proxy
+
+        token = bubble.auth_proxy.generate_auth_token(
+            "test-container", "owner", "repo", level=LEVEL_GH_READ
+        )
+        registry = bubble.auth_proxy.AuthTokenRegistry()
+        rate_limiter = bubble.auth_proxy.ProxyRateLimiter()
+
+        AuthProxyHandler.token_registry = registry
+        AuthProxyHandler.rate_limiter = rate_limiter
+        AuthProxyHandler.github_token = "ghp_test_token"
+
+        server = ThreadedHTTPServer(("127.0.0.1", 0), AuthProxyHandler)
+        port = server.server_address[1]
+
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        yield {"server": server, "port": port, "token": token}
+
+        server.shutdown()
+
+    def test_api_get_proxied(self, api_proxy_server):
+        """REST API GET request passes validation and reaches upstream."""
+        import urllib.error
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/repos/owner/repo/pulls")
+        req.add_header("Authorization", f"token {token}")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            # 502 = proxy tried to reach GitHub (validation passed)
+            # 404 = GitHub returned not found for fake repo
+            assert e.code in (404, 502)
+        except urllib.error.URLError:
+            pass  # Network timeout is fine
+
+    def test_api_wrong_repo_blocked(self, api_proxy_server):
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/repos/hacker/evil/pulls")
+        req.add_header("Authorization", f"token {token}")
+        try:
+            urllib.request.urlopen(req)
+            pytest.fail("Expected HTTP error")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+
+    def test_api_post_blocked_at_level_3(self, api_proxy_server):
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        data = b'{"body": "test comment"}'
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/repos/owner/repo/issues/1/comments",
+            data=data,
+            method="POST",
+        )
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            urllib.request.urlopen(req)
+            pytest.fail("Expected HTTP error")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+
+    def test_graphql_query_proxied(self, api_proxy_server):
+        """GraphQL query passes validation and reaches upstream."""
+        import urllib.error
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        data = json.dumps({"query": "{ viewer { login } }"}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/graphql",
+            data=data,
+            method="POST",
+        )
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            # 502 or 401 (fake token) = validation passed
+            assert e.code in (401, 502)
+        except urllib.error.URLError:
+            pass
+
+    def test_graphql_mutation_blocked(self, api_proxy_server):
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        data = json.dumps({"query": "mutation { addComment(input: {}) { id } }"}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/graphql",
+            data=data,
+            method="POST",
+        )
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            urllib.request.urlopen(req)
+            pytest.fail("Expected HTTP error")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+
+    def test_non_repo_path_blocked(self, api_proxy_server):
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/user")
+        req.add_header("Authorization", f"token {token}")
+        try:
+            urllib.request.urlopen(req)
+            pytest.fail("Expected HTTP error")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+
+    def test_authorization_header_auth(self, api_proxy_server):
+        """Authorization header works as auth mechanism (for gh CLI)."""
+        import urllib.error
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        # Use Authorization: token (what gh sends) instead of X-Bubble-Token
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/repos/owner/repo/pulls")
+        req.add_header("Authorization", f"token {token}")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            assert e.code in (404, 502)  # Passed validation
+        except urllib.error.URLError:
+            pass
+
+    def test_batched_graphql_blocked(self, api_proxy_server):
+        import urllib.request
+
+        port = api_proxy_server["port"]
+        token = api_proxy_server["token"]
+        data = json.dumps([{"query": "{ viewer { login } }"}]).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/graphql",
+            data=data,
+            method="POST",
+        )
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            urllib.request.urlopen(req)
+            pytest.fail("Expected HTTP error")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
 
 
 # ---------------------------------------------------------------------------

@@ -9,14 +9,24 @@ The host GitHub token never enters the container. Each container
 gets a per-container bearer token that only works against this
 proxy and is scoped to a single repository.
 
+Access levels (per-container):
+  1 = git smart HTTP only (push/pull)
+  2 = git + REST API read-only (GET /repos/{owner}/{repo}/...)
+  3 = git + gh read-only (REST read + GraphQL queries, no mutations)
+  4 = git + gh read-write (REST read-write + GraphQL queries + mutations)
+
 Security model:
-- Strict 4-pattern allowlist (git smart HTTP protocol only)
+- Git: strict 4-pattern allowlist (git smart HTTP protocol only)
+- REST API: path-validated against /repos/{owner}/{repo}/...
+- GraphQL: parsed operation type, mutations rejected at level 3
 - Path canonicalization rejects encoded separators, dot-segments,
   duplicate slashes
-- No redirect following (returns redirects as-is)
-- Pinned outbound to github.com:443 with TLS verification
+- Redirect following for API responses (CI logs) with hardened rules:
+  GET/HEAD only, HTTPS only, allowlisted hosts, max 2 hops,
+  auth headers stripped, response size capped
+- Pinned outbound to github.com/api.github.com with TLS verification
 - Ignores ambient HTTPS_PROXY/ALL_PROXY to prevent token leakage
-- Per-container token isolation via X-Bubble-Token header
+- Per-container token isolation via X-Bubble-Token or Authorization header
 - Rate limited + logged (reuses relay patterns)
 
 On macOS (Colima): TCP listener, port saved to ~/.bubble/auth-proxy.port.
@@ -63,6 +73,21 @@ RATE_LIMIT_PER_HOUR = 600
 # Maximum tracked containers
 MAX_TRACKED_CONTAINERS = 100
 
+# ---------------------------------------------------------------------------
+# Access levels
+# ---------------------------------------------------------------------------
+
+LEVEL_GIT_ONLY = 1
+LEVEL_REST_READ = 2
+LEVEL_GH_READ = 3
+LEVEL_GH_READWRITE = 4
+
+DEFAULT_LEVEL = LEVEL_GH_READ
+
+# ---------------------------------------------------------------------------
+# Path patterns
+# ---------------------------------------------------------------------------
+
 # Allowed git smart HTTP path patterns (the only 4 patterns git uses)
 # Matches: /{owner}/{repo}[.git]/info/refs?service=git-{upload,receive}-pack
 #          /{owner}/{repo}[.git]/git-{upload,receive}-pack
@@ -76,16 +101,32 @@ _GIT_PATH_RE = re.compile(
     + r"/(info/refs|git-upload-pack|git-receive-pack)$"
 )
 
-# Allowed query strings
+# Allowed query strings for git endpoints
 _ALLOWED_QUERIES = {
     "info/refs": {"service=git-upload-pack", "service=git-receive-pack"},
     "git-upload-pack": set(),
     "git-receive-pack": set(),
 }
 
-# GitHub API host
+# REST API path pattern: /repos/{owner}/{repo}/...
+_API_PATH_RE = re.compile(r"^/repos/" + _VALID_OWNER_REPO + r"/" + _VALID_OWNER_REPO + r"(/.*)?$")
+
+# GitHub hosts
 GITHUB_HOST = "github.com"
 GITHUB_URL = f"https://{GITHUB_HOST}"
+GITHUB_API_HOST = "api.github.com"
+GITHUB_API_URL = f"https://{GITHUB_API_HOST}"
+
+# Redirect following for API responses (e.g. CI log downloads)
+MAX_REDIRECT_HOPS = 2
+MAX_REDIRECT_RESPONSE_SIZE = 256 * 1024 * 1024  # 256 MB
+REDIRECT_TIMEOUT = 60  # seconds
+
+# Hosts allowed as redirect targets (fnmatch patterns)
+_REDIRECT_ALLOWED_HOSTS = [
+    "*.blob.core.windows.net",
+    "*.githubusercontent.com",
+]
 
 logger = logging.getLogger("bubble.auth_proxy")
 
@@ -95,15 +136,17 @@ logger = logging.getLogger("bubble.auth_proxy")
 # ---------------------------------------------------------------------------
 
 
-def generate_auth_token(container_name: str, owner: str, repo: str) -> str:
+def generate_auth_token(
+    container_name: str, owner: str, repo: str, level: int = DEFAULT_LEVEL
+) -> str:
     """Generate an auth proxy token for a container.
 
-    The token maps to (container_name, owner, repo) — the proxy uses
-    this to validate that requests target the correct repository.
+    The token maps to (container_name, owner, repo, level) — the proxy
+    uses this to validate requests and enforce the access level.
     Uses file locking to prevent read-modify-write races.
     """
     return TokenStore(AUTH_PROXY_TOKENS).generate(
-        {"container": container_name, "owner": owner, "repo": repo}
+        {"container": container_name, "owner": owner, "repo": repo, "level": level}
     )
 
 
@@ -197,7 +240,7 @@ def validate_path(path: str, query: str, owner: str, repo: str) -> str | None:
 
 
 def _build_github_url(path: str, query: str) -> str:
-    """Build the upstream GitHub URL from a validated request path.
+    """Build the upstream GitHub URL from a validated git request path.
 
     Strips the /git/ prefix and constructs the full GitHub URL.
     """
@@ -207,6 +250,219 @@ def _build_github_url(path: str, query: str) -> str:
     if query:
         url += f"?{query}"
     return url
+
+
+def _build_api_url(path: str, query: str) -> str:
+    """Build the upstream GitHub API URL from a validated API path."""
+    url = f"{GITHUB_API_URL}{path}"
+    if query:
+        url += f"?{query}"
+    return url
+
+
+# ---------------------------------------------------------------------------
+# API path validation (levels 2+)
+# ---------------------------------------------------------------------------
+
+
+def validate_api_path(
+    path: str, query: str, method: str, owner: str, repo: str, level: int
+) -> str | None:
+    """Validate a REST API request path against the access level.
+
+    Returns an error message string, or None if the path is valid.
+    """
+    # Same encoding/traversal checks as git paths
+    if "%2f" in path.lower() or "%2F" in path:
+        return "Encoded path separators not allowed"
+    if "%2e" in path.lower() or "%2E" in path:
+        return "Encoded dots not allowed"
+    if "//" in path:
+        return "Duplicate slashes not allowed"
+    if "/.." in path or "../" in path:
+        return "Dot-segments not allowed"
+
+    # Match against repo-scoped API path pattern
+    m = _API_PATH_RE.match(path)
+    if not m:
+        return "Path does not match /repos/{owner}/{repo}/... pattern"
+
+    # Extract owner/repo from path
+    parts = path.split("/")
+    # parts[0] = '', parts[1] = 'repos', parts[2] = owner, parts[3] = repo, ...
+    path_owner = parts[2]
+    path_repo = parts[3]
+
+    if path_owner.lower() != owner.lower() or path_repo.lower() != repo.lower():
+        return f"Repository mismatch: {path_owner}/{path_repo} != {owner}/{repo}"
+
+    # Method checks: levels 1-3 are read-only REST, level 4 allows writes
+    if level < LEVEL_GH_READWRITE:
+        if method not in ("GET", "HEAD"):
+            return f"Method {method} not allowed at access level {level}"
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# GraphQL validation (level 3+)
+# ---------------------------------------------------------------------------
+
+
+def _parse_graphql_op_type(query: str) -> str | None:
+    """Extract the operation type from a GraphQL query string.
+
+    Returns 'query', 'mutation', 'subscription', or None.
+    Handles line comments, fragment definitions, and anonymous queries.
+    """
+    # Strip line comments
+    lines = []
+    for line in query.split("\n"):
+        idx = line.find("#")
+        if idx >= 0:
+            line = line[:idx]
+        lines.append(line)
+    cleaned = " ".join(lines).strip()
+
+    if not cleaned:
+        return None
+
+    # Skip leading whitespace and find start position
+    pos = 0
+    while pos < len(cleaned) and cleaned[pos] in " \t\r\n":
+        pos += 1
+
+    if pos >= len(cleaned):
+        return None
+
+    # Anonymous query starts with {
+    if cleaned[pos] == "{":
+        return "query"
+
+    # Skip fragment definitions: fragment Name on Type { ... }
+    while pos < len(cleaned) and cleaned[pos:].startswith("fragment"):
+        brace_start = cleaned.find("{", pos)
+        if brace_start == -1:
+            return None
+        depth = 1
+        i = brace_start + 1
+        while i < len(cleaned) and depth > 0:
+            if cleaned[i] == "{":
+                depth += 1
+            elif cleaned[i] == "}":
+                depth -= 1
+            i += 1
+        pos = i
+        while pos < len(cleaned) and cleaned[pos] in " \t\r\n":
+            pos += 1
+        if pos >= len(cleaned):
+            return None
+
+    # Now we should be at an operation keyword or anonymous query
+    if pos < len(cleaned) and cleaned[pos] == "{":
+        return "query"
+
+    remaining = cleaned[pos:]
+    match = re.match(r"(query|mutation|subscription)\b", remaining, re.IGNORECASE)
+    if match:
+        return match.group(1).lower()
+
+    return None
+
+
+def classify_graphql(body: bytes) -> tuple[str | None, str | None]:
+    """Classify a GraphQL request body.
+
+    Returns (operation_type, error_message).
+    operation_type is 'query' or 'mutation' if valid, None on error.
+    error_message is set on validation failure.
+    """
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, "Malformed JSON body"
+
+    if isinstance(data, list):
+        return None, "Batched requests not allowed"
+
+    if not isinstance(data, dict):
+        return None, "Invalid request format"
+
+    query_str = data.get("query")
+    if not query_str or not isinstance(query_str, str):
+        return None, "Missing or invalid 'query' field"
+
+    op_type = _parse_graphql_op_type(query_str)
+    if op_type is None:
+        return None, "Could not determine operation type"
+
+    if op_type == "subscription":
+        return None, "Subscriptions not supported"
+
+    return op_type, None
+
+
+# ---------------------------------------------------------------------------
+# Redirect following for API responses
+# ---------------------------------------------------------------------------
+
+
+def _is_redirect_host_allowed(host: str) -> bool:
+    """Check if a redirect target host is in the allowlist."""
+    import fnmatch
+
+    host = host.lower()
+    return any(fnmatch.fnmatch(host, pat) for pat in _REDIRECT_ALLOWED_HOSTS)
+
+
+def _follow_redirect(location: str, hops_remaining: int) -> tuple[int, dict, bytes]:
+    """Follow a redirect URL with hardened rules.
+
+    Returns (status_code, headers_dict, body).
+    Raises ValueError on policy violations.
+    """
+    parsed = urlparse(location)
+    if parsed.scheme != "https":
+        raise ValueError(f"Redirect to non-HTTPS URL: {location}")
+
+    if not _is_redirect_host_allowed(parsed.hostname or ""):
+        raise ValueError(f"Redirect to disallowed host: {parsed.hostname}")
+
+    if hops_remaining <= 0:
+        raise ValueError("Too many redirects")
+
+    ctx = ssl.create_default_context()
+    opener = build_opener(
+        ProxyHandler({}),
+        HTTPSHandler(context=ctx),
+        _NoRedirectHandler(),
+    )
+
+    req = Request(location, method="GET")
+    # Do NOT send Authorization or other sensitive headers to redirect target
+    try:
+        resp = opener.open(req, timeout=REDIRECT_TIMEOUT)
+    except HTTPError as e:
+        if 300 <= e.code < 400:
+            next_location = e.headers.get("Location")
+            if next_location:
+                return _follow_redirect(next_location, hops_remaining - 1)
+        raise
+
+    # Read body with size cap
+    body_parts = []
+    total = 0
+    while True:
+        chunk = resp.read(65536)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_REDIRECT_RESPONSE_SIZE:
+            raise ValueError("Redirect response too large")
+        body_parts.append(chunk)
+
+    headers = {k: v for k, v in resp.getheaders()}
+    return resp.status, headers, b"".join(body_parts)
 
 
 # ---------------------------------------------------------------------------
@@ -247,8 +503,21 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         logger.info(format, *args)
 
     def _get_container_token(self) -> str | None:
-        """Extract the X-Bubble-Token header value."""
-        return self.headers.get("X-Bubble-Token")
+        """Extract the container auth token.
+
+        Checks X-Bubble-Token first (git traffic via url.insteadOf),
+        then Authorization header (gh traffic via http_unix_socket).
+        """
+        token = self.headers.get("X-Bubble-Token")
+        if token:
+            return token
+        # gh sends Authorization: token <bubble-proxy-token>
+        auth = self.headers.get("Authorization") or ""
+        if auth.startswith("token "):
+            return auth[6:].strip()
+        if auth.startswith("Bearer "):
+            return auth[7:].strip()
+        return None
 
     def _authenticate(self) -> dict | None:
         """Authenticate the request via X-Bubble-Token.
@@ -277,7 +546,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _proxy_request(self, method: str):
-        """Core proxy logic shared by GET and POST."""
+        """Core proxy logic shared by all HTTP methods."""
         # Authenticate
         info = self._authenticate()
         if not info:
@@ -286,6 +555,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         container = info["container"]
         owner = info["owner"]
         repo = info["repo"]
+        level = info.get("level", LEVEL_GIT_ONLY)
 
         # Rate limit
         if not self.rate_limiter.check(container):
@@ -293,43 +563,126 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             logger.info("RATE_LIMITED container=%s", container)
             return
 
-        # Parse and validate path
+        # Parse path
         parsed = urlparse(self.path)
         path = parsed.path
         query = parsed.query
 
+        # Read request body for methods that have one
+        body = None
+        if method in ("POST", "PUT", "PATCH"):
+            body = self._read_body()
+            if body is None and method == "POST":
+                return  # Error already sent (only mandatory for POST)
+
+        # Route: git smart HTTP (/git/...)
+        if path.startswith("/git/"):
+            self._handle_git_request(method, path, query, body, container, owner, repo, level)
+            return
+
+        # Route: GraphQL (/graphql)
+        if path == "/graphql" and method == "POST":
+            self._handle_graphql_request(body, container, owner, repo, level)
+            return
+
+        # Route: REST API (/repos/{owner}/{repo}/...)
+        if path.startswith("/repos/"):
+            self._handle_api_request(method, path, query, body, container, owner, repo, level)
+            return
+
+        self._send_error(403, "Path not recognized")
+        logger.info("BLOCKED %s %s container=%s reason=unknown_route", method, path, container)
+
+    def _read_body(self) -> bytes | None:
+        """Read request body (Content-Length or chunked). Returns None on error."""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            self._send_error(400, "Invalid Content-Length")
+            return None
+        if content_length > MAX_BODY_SIZE:
+            self._send_error(413, "Request body too large")
+            return None
+        if content_length > 0:
+            return self.rfile.read(content_length)
+        if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+            return self._read_chunked()
+        return b""
+
+    def _handle_git_request(self, method, path, query, body, container, owner, repo, level):
+        """Handle git smart HTTP requests (level 1+)."""
         error = validate_path(path, query, owner, repo)
         if error:
             self._send_error(403, error)
             logger.info("BLOCKED %s %s container=%s reason=%s", method, path, container, error)
             return
 
-        # Build upstream URL
         upstream_url = _build_github_url(path, query)
+        self._forward_to_github(
+            method, upstream_url, body, container, path, host=GITHUB_HOST, follow_redirects=False
+        )
 
-        # Read request body for POST
-        body = None
-        if method == "POST":
-            try:
-                content_length = int(self.headers.get("Content-Length", 0))
-            except (ValueError, TypeError):
-                self._send_error(400, "Invalid Content-Length")
-                return
-            if content_length > MAX_BODY_SIZE:
-                self._send_error(413, "Request body too large")
-                return
-            if content_length > 0:
-                body = self.rfile.read(content_length)
-            elif self.headers.get("Transfer-Encoding", "").lower() == "chunked":
-                # Read chunked body
-                body = self._read_chunked()
-                if body is None:
-                    return  # Error already sent
+    def _handle_api_request(self, method, path, query, body, container, owner, repo, level):
+        """Handle REST API requests (level 2+)."""
+        if level < LEVEL_REST_READ:
+            self._send_error(403, "REST API access not enabled at this access level")
+            logger.info(
+                "BLOCKED %s %s container=%s reason=level_%d", method, path, container, level
+            )
+            return
 
-        # Build upstream request
+        error = validate_api_path(path, query, method, owner, repo, level)
+        if error:
+            self._send_error(403, error)
+            logger.info("BLOCKED %s %s container=%s reason=%s", method, path, container, error)
+            return
+
+        upstream_url = _build_api_url(path, query)
+        # Follow redirects for GET (e.g. CI log downloads return 302)
+        self._forward_to_github(
+            method,
+            upstream_url,
+            body,
+            container,
+            path,
+            host=GITHUB_API_HOST,
+            follow_redirects=(method in ("GET", "HEAD")),
+        )
+
+    def _handle_graphql_request(self, body, container, owner, repo, level):
+        """Handle GraphQL requests (level 3+)."""
+        if level < LEVEL_GH_READ:
+            self._send_error(403, "GraphQL access not enabled at this access level")
+            logger.info("BLOCKED POST /graphql container=%s reason=level_%d", container, level)
+            return
+
+        if not body:
+            self._send_error(400, "Missing request body for GraphQL")
+            return
+
+        op_type, error = classify_graphql(body)
+        if error:
+            self._send_error(400, f"GraphQL validation failed: {error}")
+            logger.info("BLOCKED POST /graphql container=%s reason=%s", container, error)
+            return
+
+        if op_type == "mutation" and level < LEVEL_GH_READWRITE:
+            self._send_error(403, "Mutations not allowed at this access level")
+            logger.info("BLOCKED POST /graphql container=%s reason=mutation_rejected", container)
+            return
+
+        upstream_url = f"{GITHUB_API_URL}/graphql"
+        self._forward_to_github(
+            "POST", upstream_url, body, container, "/graphql", host=GITHUB_API_HOST
+        )
+
+    def _forward_to_github(
+        self, method, upstream_url, body, container, log_path, host, follow_redirects=False
+    ):
+        """Forward a validated request to GitHub and return the response."""
         req = Request(upstream_url, data=body, method=method)
 
-        # Copy relevant headers, strip X-Bubble-Token
+        # Copy relevant headers, strip auth/proxy headers
         for header, value in self.headers.items():
             lower = header.lower()
             if lower in ("host", "x-bubble-token", "authorization", "connection"):
@@ -338,12 +691,9 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         # Add real authorization
         req.add_header("Authorization", f"token {self.github_token}")
-        req.add_header("Host", GITHUB_HOST)
+        req.add_header("Host", host)
 
         # Forward to GitHub — pinned TLS, no proxy, no redirects
-        # ProxyHandler({}) disables ambient HTTPS_PROXY/ALL_PROXY env vars.
-        # _NoRedirectHandler prevents redirect-following that could leak
-        # the Authorization header to non-GitHub hosts.
         ctx = ssl.create_default_context()
         opener = build_opener(
             ProxyHandler({}),
@@ -353,8 +703,14 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         try:
             resp = opener.open(req, timeout=300)
         except HTTPError as e:
-            # 3xx redirects arrive here as HTTPError — return them as-is
             if 300 <= e.code < 400:
+                # For API GET requests, follow redirects through the proxy
+                # (e.g. CI log downloads return 302 to blob storage)
+                location = e.headers.get("Location")
+                if follow_redirects and location and method in ("GET", "HEAD"):
+                    self._handle_redirect(location, container, log_path)
+                    return
+                # For git or non-followable redirects, return as-is
                 self.send_response(e.code)
                 for header, value in e.headers.items():
                     lower = header.lower()
@@ -368,7 +724,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                 logger.info(
                     "REDIRECT %s %s container=%s -> %d",
                     method,
-                    path,
+                    log_path,
                     container,
                     e.code,
                 )
@@ -380,25 +736,29 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             logger.info(
                 "UPSTREAM_ERROR %s %s container=%s error=%s",
                 method,
-                path,
+                log_path,
                 container,
                 e,
             )
             return
         except Exception as e:
             error_msg = str(e)
-            # Don't leak the token in error messages
             if self.github_token in error_msg:
                 error_msg = error_msg.replace(self.github_token, "[REDACTED]")
             self._send_error(502, f"Upstream error: {error_msg}")
-            logger.info("UPSTREAM_ERROR %s %s container=%s error=%s", method, path, container, e)
+            logger.info(
+                "UPSTREAM_ERROR %s %s container=%s error=%s",
+                method,
+                log_path,
+                container,
+                e,
+            )
             return
 
         # Send response back to client
         self.send_response(resp.status)
         for header, value in resp.getheaders():
             lower = header.lower()
-            # Skip hop-by-hop headers
             if lower in ("transfer-encoding", "connection", "keep-alive"):
                 continue
             self.send_header(header, value)
@@ -411,7 +771,41 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                 break
             self.wfile.write(chunk)
 
-        logger.info("PROXY %s %s container=%s -> %d", method, path, container, resp.status)
+        logger.info("PROXY %s %s container=%s -> %d", method, log_path, container, resp.status)
+
+    def _handle_redirect(self, location, container, log_path):
+        """Follow a redirect from a GitHub API response with hardened rules."""
+        try:
+            status, headers, body = _follow_redirect(location, MAX_REDIRECT_HOPS)
+        except (ValueError, HTTPError) as e:
+            error_msg = str(e)
+            if self.github_token in error_msg:
+                error_msg = error_msg.replace(self.github_token, "[REDACTED]")
+            self._send_error(502, f"Redirect error: {error_msg}")
+            logger.info("REDIRECT_ERROR %s container=%s error=%s", log_path, container, error_msg)
+            return
+        except Exception as e:
+            self._send_error(502, f"Redirect error: {e}")
+            logger.info("REDIRECT_ERROR %s container=%s error=%s", log_path, container, e)
+            return
+
+        self.send_response(status)
+        for header, value in headers.items():
+            lower = header.lower()
+            if lower in ("transfer-encoding", "connection", "keep-alive"):
+                continue
+            self.send_header(header, value)
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+        logger.info(
+            "REDIRECT_FOLLOWED %s container=%s -> %d (%d bytes)",
+            log_path,
+            container,
+            status,
+            len(body),
+        )
 
     def _read_chunked(self) -> bytes | None:
         """Read a chunked transfer-encoded body."""
@@ -440,8 +834,20 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self._proxy_request("GET")
 
+    def do_HEAD(self):
+        self._proxy_request("HEAD")
+
     def do_POST(self):
         self._proxy_request("POST")
+
+    def do_PUT(self):
+        self._proxy_request("PUT")
+
+    def do_PATCH(self):
+        self._proxy_request("PATCH")
+
+    def do_DELETE(self):
+        self._proxy_request("DELETE")
 
 
 class ThreadedHTTPServer(HTTPServer):

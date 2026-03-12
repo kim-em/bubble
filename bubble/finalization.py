@@ -39,8 +39,18 @@ def finalize_bubble(
     # Set up repo-scoped GitHub auth via host proxy (security.github_auth)
     if is_enabled(config, "github_auth"):
         from .github_token import setup_gh_token
+        from .tools import resolve_tools
 
-        setup_gh_token(runtime, name, owner=t.owner, repo=t.repo, machine_readable=machine_readable)
+        gh_enabled = "gh" in resolve_tools(config)
+        setup_gh_token(
+            runtime,
+            name,
+            owner=t.owner,
+            repo=t.repo,
+            machine_readable=machine_readable,
+            gh_enabled=gh_enabled,
+            config=config,
+        )
 
     # Inject Claude Code task if prompt is provided
     if claude_prompt:

@@ -47,6 +47,13 @@ TOOLS = {
         "runtime_domains": [],
         "priority": 10,
     },
+    "gh": {
+        "script": "gh.sh",
+        "host_cmd": "gh",
+        "network_domains": ["cli.github.com"],
+        "runtime_domains": [],
+        "priority": 50,
+    },
     "emacs": {
         "script": "emacs.sh",
         "host_cmd": "emacs",
