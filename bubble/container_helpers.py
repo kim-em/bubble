@@ -19,7 +19,7 @@ def find_container(runtime: ContainerRuntime, name: str):
     for c in runtime.list_containers():
         if c.name == name:
             return c
-    click.echo(f"Bubble '{name}' not found.", err=True)
+    click.echo(f"Bubble '{name}' not found. Run 'bubble list' to see your bubbles.", err=True)
     sys.exit(1)
 
 

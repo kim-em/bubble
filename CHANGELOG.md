@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.19 — 2026-03-12
+- Add recovery hints to terse error messages (#147)
+  - "Bubble not found" now suggests `bubble list`
+  - Replace "git store" jargon with actionable guidance
+  - Generic target errors now hint at valid target formats
+
 ## 0.6.18 — 2026-03-12
 - Extract shared `TokenStore` class to deduplicate token/rate-limit/logging infrastructure between relay and auth proxy (#127)
   - Fix relay token generation race: `generate_relay_token` now uses `fcntl` file locking (was missing, unlike auth proxy)
