@@ -204,73 +204,86 @@ def _validate_exclude(entry: str) -> None:
         raise ValueError(f"Exclude entry must not contain '..': {entry!r}")
 
 
+class SafeConfigDir:
+    """Manages safe mounting of a tool's config directory into containers.
+
+    Handles symlink-escape checking, mount generation, and credential detection
+    for a tool config directory (e.g., ~/.claude, ~/.codex).
+    """
+
+    def __init__(
+        self,
+        base_dir: Path,
+        container_dir: str,
+        config_items: list[str],
+        credential_items: list[str],
+    ):
+        self.base_dir = base_dir
+        self.container_dir = container_dir
+        self.config_items = config_items
+        self.credential_items = credential_items
+
+    def safe_path(self, item: str) -> Path | None:
+        """Return resolved path for a config item, or None if unsafe.
+
+        Rejects symlinks that escape the base directory to prevent exposing
+        arbitrary host files into containers.
+        """
+        source = self.base_dir / item
+        if not source.exists():
+            return None
+        resolved = source.resolve()
+        base_resolved = self.base_dir.resolve()
+        try:
+            resolved.relative_to(base_resolved)
+        except ValueError:
+            return None
+        return resolved
+
+    def config_mounts(self, include_credentials: bool = True) -> list[MountSpec]:
+        """Return read-only mounts for config files that exist on the host.
+
+        Args:
+            include_credentials: If True, also mount credential files.
+        """
+        mounts = []
+        if not self.base_dir.is_dir():
+            return mounts
+        items = list(self.config_items)
+        if include_credentials:
+            items.extend(self.credential_items)
+        for item in items:
+            resolved = self.safe_path(item)
+            if resolved is not None:
+                target = f"{self.container_dir}/{item}"
+                mounts.append(MountSpec(source=str(resolved), target=target, readonly=True))
+        return mounts
+
+    def has_credentials(self) -> bool:
+        """Check if the host has credential files for this tool."""
+        if not self.base_dir.is_dir():
+            return False
+        return any((self.base_dir / item).exists() for item in self.credential_items)
+
+
 CLAUDE_CONFIG_DIR = Path.home() / ".claude"
 
-# Specific items from ~/.claude to mount read-only into containers.
-# Only these are mounted; session history and transient state are
-# excluded by omission.
-_CLAUDE_CONFIG_ITEMS = [
-    "CLAUDE.md",
-    "settings.json",
-    "skills",
-    "keybindings.json",
-    "commands",
-]
-
-# Credential files — included by default, opt-out with --no-claude-credentials.
-_CLAUDE_CREDENTIAL_ITEMS = [
-    ".credentials.json",
-]
-
-
-def _safe_claude_path(item: str) -> Path | None:
-    """Return resolved path for a claude config item, or None if unsafe.
-
-    Rejects symlinks that escape ~/.claude to prevent exposing arbitrary
-    host files into containers.
-    """
-    source = CLAUDE_CONFIG_DIR / item
-    if not source.exists():
-        return None
-    resolved = source.resolve()
-    claude_resolved = CLAUDE_CONFIG_DIR.resolve()
-    # Ensure the resolved path is inside ~/.claude
-    try:
-        resolved.relative_to(claude_resolved)
-    except ValueError:
-        return None
-    return resolved
+CLAUDE_CONFIG = SafeConfigDir(
+    base_dir=CLAUDE_CONFIG_DIR,
+    container_dir="/home/user/.claude",
+    config_items=["CLAUDE.md", "settings.json", "skills", "keybindings.json", "commands"],
+    credential_items=[".credentials.json"],
+)
 
 
 def claude_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
-    """Return read-only mounts for Claude Code config files that exist on the host.
-
-    Mounts specific files/directories from ~/.claude into /home/user/.claude/
-    inside containers, giving Claude Code sessions access to global config.
-
-    Args:
-        include_credentials: If True, also mount .credentials.json.
-            On by default; opt out with --no-claude-credentials.
-    """
-    mounts = []
-    if not CLAUDE_CONFIG_DIR.is_dir():
-        return mounts
-    items = list(_CLAUDE_CONFIG_ITEMS)
-    if include_credentials:
-        items.extend(_CLAUDE_CREDENTIAL_ITEMS)
-    for item in items:
-        resolved = _safe_claude_path(item)
-        if resolved is not None:
-            target = f"/home/user/.claude/{item}"
-            mounts.append(MountSpec(source=str(resolved), target=target, readonly=True))
-    return mounts
+    """Return read-only mounts for Claude Code config files that exist on the host."""
+    return CLAUDE_CONFIG.config_mounts(include_credentials)
 
 
 def has_claude_credentials() -> bool:
     """Check if the host has Claude credential files."""
-    if not CLAUDE_CONFIG_DIR.is_dir():
-        return False
-    return any((CLAUDE_CONFIG_DIR / item).exists() for item in _CLAUDE_CREDENTIAL_ITEMS)
+    return CLAUDE_CONFIG.has_credentials()
 
 
 # Editor config directories to mount into containers.
@@ -408,65 +421,22 @@ def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSp
 
 CODEX_CONFIG_DIR = Path.home() / ".codex"
 
-# Specific items from ~/.codex to mount read-only into containers.
-_CODEX_CONFIG_ITEMS = [
-    "config.toml",
-]
-
-# Credential files — included by default, opt-out with --no-codex-credentials.
-_CODEX_CREDENTIAL_ITEMS = [
-    "auth.json",
-]
-
-
-def _safe_codex_path(item: str) -> Path | None:
-    """Return resolved path for a codex config item, or None if unsafe.
-
-    Rejects symlinks that escape ~/.codex to prevent exposing arbitrary
-    host files into containers.
-    """
-    source = CODEX_CONFIG_DIR / item
-    if not source.exists():
-        return None
-    resolved = source.resolve()
-    codex_resolved = CODEX_CONFIG_DIR.resolve()
-    # Ensure the resolved path is inside ~/.codex
-    try:
-        resolved.relative_to(codex_resolved)
-    except ValueError:
-        return None
-    return resolved
+CODEX_CONFIG = SafeConfigDir(
+    base_dir=CODEX_CONFIG_DIR,
+    container_dir="/home/user/.codex",
+    config_items=["config.toml"],
+    credential_items=["auth.json"],
+)
 
 
 def codex_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
-    """Return read-only mounts for Codex config files that exist on the host.
-
-    Mounts specific files from ~/.codex into /home/user/.codex/
-    inside containers, giving Codex sessions access to config and auth.
-
-    Args:
-        include_credentials: If True, also mount auth.json.
-            On by default; opt out with --no-codex-credentials.
-    """
-    mounts = []
-    if not CODEX_CONFIG_DIR.is_dir():
-        return mounts
-    items = list(_CODEX_CONFIG_ITEMS)
-    if include_credentials:
-        items.extend(_CODEX_CREDENTIAL_ITEMS)
-    for item in items:
-        resolved = _safe_codex_path(item)
-        if resolved is not None:
-            target = f"/home/user/.codex/{item}"
-            mounts.append(MountSpec(source=str(resolved), target=target, readonly=True))
-    return mounts
+    """Return read-only mounts for Codex config files that exist on the host."""
+    return CODEX_CONFIG.config_mounts(include_credentials)
 
 
 def has_codex_credentials() -> bool:
     """Check if the host has Codex credential files."""
-    if not CODEX_CONFIG_DIR.is_dir():
-        return False
-    return any((CODEX_CONFIG_DIR / item).exists() for item in _CODEX_CREDENTIAL_ITEMS)
+    return CODEX_CONFIG.has_credentials()
 
 
 CLAUDE_PROJECTS_DIR = DATA_DIR / "claude-projects"
