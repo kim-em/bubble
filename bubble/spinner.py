@@ -15,7 +15,7 @@ from contextlib import contextmanager
 @contextmanager
 def heartbeat(
     message: str = "  still working...",
-    delay: float = 15.0,
+    delay: float = 5.0,
     interval: float = 10.0,
 ):
     """Print periodic heartbeat messages to stderr during slow operations.

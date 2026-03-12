@@ -512,7 +512,7 @@ def build_image(
 
             # Run setup script
             script = (SCRIPTS_DIR / spec["script"]).read_text()
-            with heartbeat(f"  still building {image_name} image..."):
+            with heartbeat(f"  still building {image_name} image...", delay=15.0):
                 runtime.exec(build_name, ["bash", "-c", script])
 
             # Install configured tools (only on base image — derived images inherit them)
@@ -614,7 +614,7 @@ def build_lean_toolchain_image(
 
             script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
             script = f"export LEAN_TOOLCHAIN={shlex.quote(version)}\n" + script
-            with heartbeat(f"  still building {alias} image..."):
+            with heartbeat(f"  still building {alias} image...", delay=15.0):
                 runtime.exec(build_name, ["bash", "-c", script])
 
             # Run user customization script as the final build step
