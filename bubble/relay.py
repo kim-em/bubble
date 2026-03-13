@@ -322,11 +322,16 @@ def run_daemon():
         port = config.get("relay", {}).get("port", 7653)
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", port))
+        # On macOS, bind to the VMNet bridge IP so the Colima VM can
+        # reach us without exposing the service to the wider LAN.
+        from .runtime.colima import colima_bind_ip
+
+        bind_addr = colima_bind_ip()
+        server.bind((bind_addr, port))
         server.listen(5)
         RELAY_PORT_FILE.write_text(str(port))
         os.chmod(str(RELAY_PORT_FILE), 0o600)
-        listen_addr = f"127.0.0.1:{port}"
+        listen_addr = f"{bind_addr}:{port}"
     else:
         # Remove stale socket
         RELAY_SOCK.unlink(missing_ok=True)

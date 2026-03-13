@@ -16,6 +16,7 @@ from bubble.auth_proxy import (
     LEVEL_REST_READ,
     AuthProxyHandler,
     AuthTokenRegistry,
+    GitHubTokenRefresher,
     ProxyRateLimiter,
     ThreadedHTTPServer,
     _build_api_url,
@@ -308,7 +309,7 @@ class TestAuthProxyHandler:
         # Set up class-level attributes
         handler.token_registry = AuthTokenRegistry()
         handler.rate_limiter = ProxyRateLimiter()
-        handler.github_token = "ghp_test_token"
+        handler.token_refresher = GitHubTokenRefresher("ghp_test_token")
 
         # Mock token lookup
         if token_info:
@@ -374,7 +375,7 @@ class TestProxyIntegration:
 
         AuthProxyHandler.token_registry = registry
         AuthProxyHandler.rate_limiter = rate_limiter
-        AuthProxyHandler.github_token = "ghp_test_token"
+        AuthProxyHandler.token_refresher = GitHubTokenRefresher("ghp_test_token")
 
         server = ThreadedHTTPServer(("127.0.0.1", 0), AuthProxyHandler)
         port = server.server_address[1]
@@ -904,7 +905,7 @@ class TestAccessLevelRouting:
 
         handler.token_registry = AuthTokenRegistry()
         handler.rate_limiter = ProxyRateLimiter()
-        handler.github_token = "ghp_test_token"
+        handler.token_refresher = GitHubTokenRefresher("ghp_test_token")
 
         if token_info:
             handler.token_registry.lookup = lambda t: token_info if t == "valid-token" else None
@@ -1040,7 +1041,7 @@ class TestApiProxyIntegration:
 
         AuthProxyHandler.token_registry = registry
         AuthProxyHandler.rate_limiter = rate_limiter
-        AuthProxyHandler.github_token = "ghp_test_token"
+        AuthProxyHandler.token_refresher = GitHubTokenRefresher("ghp_test_token")
 
         server = ThreadedHTTPServer(("127.0.0.1", 0), AuthProxyHandler)
         port = server.server_address[1]
