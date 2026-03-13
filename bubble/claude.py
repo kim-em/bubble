@@ -143,16 +143,22 @@ def _fetch_github_item(owner: str, repo: str, endpoint: str, jq: str) -> str | N
         return None
 
 
-def _resolve_second_opinion(second_opinion: str) -> bool:
+def _resolve_second_opinion(second_opinion: str, config: dict | None = None) -> bool:
     """Resolve the second_opinion setting to a boolean.
 
-    'on' → True, 'off' → False, 'auto' → True if codex is on PATH.
+    'on' → True, 'off' → False, 'auto' → True if codex will be
+    available in the container (checked via tool resolution, not host PATH).
     """
     if second_opinion == "on":
         return True
     if second_opinion == "off":
         return False
-    # auto: check if codex is installed
+    # auto: check if codex is resolved as an enabled tool
+    if config is not None:
+        from .tools import resolve_tools
+
+        return "codex" in resolve_tools(config)
+    # Fallback when no config available: check host PATH
     import shutil
 
     return shutil.which("codex") is not None
@@ -164,7 +170,8 @@ def generate_issue_prompt(
     issue_num: str,
     branch: str,
     autonomy: str = "plan",
-    second_opinion: str = "off",
+    second_opinion: str = "auto",
+    config: dict | None = None,
 ) -> str | None:
     """Fetch GitHub issue details and generate a Claude prompt.
 
@@ -200,11 +207,13 @@ def generate_issue_prompt(
     instructions = instructions.format(branch=branch)
 
     # Append second opinion request if enabled
-    if _resolve_second_opinion(second_opinion):
+    if _resolve_second_opinion(second_opinion, config=config):
         instructions += _SECOND_OPINION_SUFFIX
 
-    template = _load_template("issue") or _DEFAULT_ISSUE_TEMPLATE
-    return _render_template(
+    custom_template = _load_template("issue")
+    template = custom_template or _DEFAULT_ISSUE_TEMPLATE
+
+    prompt = _render_template(
         template,
         owner=owner,
         repo=repo,
@@ -216,6 +225,13 @@ def generate_issue_prompt(
         branch=branch,
         instructions=instructions,
     )
+
+    # If a custom template didn't use {instructions}, append them so
+    # autonomy/second-opinion settings are never silently lost.
+    if custom_template and "{instructions}" not in custom_template:
+        prompt = prompt.rstrip() + "\n\n" + instructions
+
+    return prompt
 
 
 def generate_pr_prompt(owner: str, repo: str, pr_num: str, branch: str) -> str | None:

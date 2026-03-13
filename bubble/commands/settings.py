@@ -208,7 +208,7 @@ def register_settings_commands(main):
         creds = claude_cfg.get("credentials", True)
         autonomy = claude_cfg.get("autonomy", "plan")
         second_opinion = claude_cfg.get("second_opinion", "auto")
-        resolved_so = _resolve_second_opinion(second_opinion)
+        resolved_so = _resolve_second_opinion(second_opinion, config=config)
 
         click.echo(f"  credentials:    {'on' if creds else 'off'}")
         click.echo(f"  autonomy:       {autonomy}")

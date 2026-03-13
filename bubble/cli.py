@@ -273,7 +273,8 @@ def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -
                     t.ref,
                     branch,
                     autonomy=_claude_cfg.get("autonomy", "plan"),
-                    second_opinion=_claude_cfg.get("second_opinion", "off"),
+                    second_opinion=_claude_cfg.get("second_opinion", "auto"),
+                    config=_cfg,
                 )
                 or ""
             )
@@ -1053,7 +1054,8 @@ def _open_single(
                     t.ref,
                     checkout_branch,
                     autonomy=claude_cfg.get("autonomy", "plan"),
-                    second_opinion=claude_cfg.get("second_opinion", "off"),
+                    second_opinion=claude_cfg.get("second_opinion", "auto"),
+                    config=config,
                 )
                 or ""
             )

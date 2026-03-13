@@ -102,7 +102,9 @@ class TestGenerateIssuePrompt:
     def test_custom_template(self, tmp_path):
         template_dir = tmp_path / "templates"
         template_dir.mkdir()
-        (template_dir / "issue.txt").write_text("Issue #{issue_num} by {owner}: {title}\n{body}")
+        (template_dir / "issue.txt").write_text(
+            "Issue #{issue_num} by {owner}: {title}\n{body}\n{instructions}"
+        )
 
         with (
             patch("bubble.claude.TEMPLATES_DIR", template_dir),
@@ -118,10 +120,13 @@ class TestGenerateIssuePrompt:
 
             mock_run.side_effect = [issue_result, comments_result]
 
-            prompt = generate_issue_prompt("acme", "widgets", "7", "issue-7")
+            prompt = generate_issue_prompt(
+                "acme", "widgets", "7", "issue-7", second_opinion="off"
+            )
 
             assert prompt is not None
-            assert prompt == "Issue #7 by acme: Bug report\nSomething broke."
+            assert prompt.startswith("Issue #7 by acme: Bug report\nSomething broke.")
+            assert "propose a plan" in prompt
 
     def test_includes_owner_and_repo(self):
         """Default issue template doesn't include owner/repo, but they're available."""
@@ -482,7 +487,24 @@ class TestSecondOpinion:
             prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="off")
             assert "second opinion" not in prompt.lower()
 
-    def test_second_opinion_auto_with_codex(self):
+    def test_second_opinion_auto_with_codex_tool(self):
+        """auto mode uses tool resolution when config is provided."""
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            config = {"tools": {"codex": "yes"}}
+            prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="auto", config=config)
+            assert "second opinion" in prompt.lower()
+
+    def test_second_opinion_auto_without_codex_tool(self):
+        """auto mode disabled when codex tool is explicitly off."""
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            config = {"tools": {"codex": "no"}}
+            prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="auto", config=config)
+            assert "second opinion" not in prompt.lower()
+
+    def test_second_opinion_auto_fallback_no_config(self):
+        """auto mode falls back to shutil.which when no config provided."""
         with (
             patch("bubble.claude.subprocess.run") as mock_run,
             patch("shutil.which", return_value="/usr/bin/codex"),
@@ -491,23 +513,63 @@ class TestSecondOpinion:
             prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="auto")
             assert "second opinion" in prompt.lower()
 
-    def test_second_opinion_auto_without_codex(self):
-        with (
-            patch("bubble.claude.subprocess.run") as mock_run,
-            patch("shutil.which", return_value=None),
-        ):
-            mock_run.side_effect = self._make_mock_run()
-            prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="auto")
-            assert "second opinion" not in prompt.lower()
-
     def test_resolve_second_opinion_on(self):
         assert _resolve_second_opinion("on") is True
 
     def test_resolve_second_opinion_off(self):
         assert _resolve_second_opinion("off") is False
 
-    def test_resolve_second_opinion_auto(self):
+    def test_resolve_second_opinion_auto_with_config(self):
+        config = {"tools": {"codex": "yes"}}
+        assert _resolve_second_opinion("auto", config=config) is True
+        config_no = {"tools": {"codex": "no"}}
+        assert _resolve_second_opinion("auto", config=config_no) is False
+
+    def test_resolve_second_opinion_auto_without_config(self):
         with patch("shutil.which", return_value="/usr/bin/codex"):
             assert _resolve_second_opinion("auto") is True
         with patch("shutil.which", return_value=None):
             assert _resolve_second_opinion("auto") is False
+
+
+class TestCustomTemplateBackcompat:
+    """Custom templates without {instructions} should still get autonomy instructions."""
+
+    def _make_mock_run(self):
+        issue_result = MagicMock()
+        issue_result.returncode = 0
+        issue_result.stdout = "Title\nBody"
+        comments_result = MagicMock()
+        comments_result.returncode = 0
+        comments_result.stdout = ""
+        return [issue_result, comments_result]
+
+    def test_custom_template_without_instructions_appends(self, tmp_path):
+        """A legacy template missing {instructions} still gets autonomy text appended."""
+        template_dir = tmp_path / "templates"
+        template_dir.mkdir()
+        (template_dir / "issue.txt").write_text("Issue #{issue_num}: {title}\n{body}")
+
+        with (
+            patch("bubble.claude.TEMPLATES_DIR", template_dir),
+            patch("bubble.claude.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "b", autonomy="pr")
+            assert "Issue #1: Title" in prompt
+            assert "open a PR" in prompt
+
+    def test_custom_template_with_instructions_not_duplicated(self, tmp_path):
+        """A template with {instructions} doesn't get them appended again."""
+        template_dir = tmp_path / "templates"
+        template_dir.mkdir()
+        (template_dir / "issue.txt").write_text("{title}\n{instructions}")
+
+        with (
+            patch("bubble.claude.TEMPLATES_DIR", template_dir),
+            patch("bubble.claude.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "b", autonomy="pr")
+            # instructions should appear exactly once
+            assert prompt.count("open a PR") == 1
