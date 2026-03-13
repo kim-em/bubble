@@ -991,6 +991,34 @@ def _open_single(
             codex_mounts=cx_mounts,
             editor_mounts=ec_mounts,
         )
+
+        # Set up GitHub auth BEFORE clone — network allowlisting strips
+        # github.com from allowed domains when using the auth proxy (levels
+        # 1-4), so git must be configured to route through the proxy first.
+        if is_enabled(config, "github_token_inject"):
+            from .github_token import setup_gh_token
+
+            setup_gh_token(
+                runtime,
+                name,
+                machine_readable=machine_readable,
+                token_inject=True,
+            )
+        elif is_enabled(config, "github_auth"):
+            from .github_token import setup_gh_token
+            from .tools import resolve_tools
+
+            gh_enabled = "gh" in resolve_tools(config)
+            setup_gh_token(
+                runtime,
+                name,
+                owner=t.owner,
+                repo=t.repo,
+                machine_readable=machine_readable,
+                gh_enabled=gh_enabled,
+                config=config,
+            )
+
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 
         # Resolve Claude prompt: stdin flag > env var > auto-generate for issues/PRs

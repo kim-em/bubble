@@ -385,3 +385,96 @@ def test_gh_status_shows_token_injection(tmp_data_dir):
     assert result.exit_code == 0
     assert "Token injection:" in result.output
     assert "effectively off" in result.output
+
+
+# --- Ordering test: auth proxy must be set up before clone (issue #221) ---
+
+
+def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
+    """Auth proxy setup must run between provision and clone (fixes #221).
+
+    When network allowlisting is enabled, github.com is stripped from allowed
+    domains (traffic goes through the loopback auth proxy instead). If git
+    url.insteadOf isn't configured before clone, git clone fails because
+    github.com is blocked by iptables.
+    """
+    from bubble.target import Target
+
+    call_order = []
+
+    t = Target(
+        owner="kim-em",
+        repo="bubble",
+        kind="main",
+        ref="",
+        original="kim-em/bubble",
+    )
+
+    def mock_provision(*args, **kwargs):
+        call_order.append("provision")
+
+    call_order_kwargs = {}
+
+    def mock_setup_gh_token(*args, **kwargs):
+        call_order.append("setup_gh_token")
+        call_order_kwargs.update(kwargs)
+        return True
+
+    def mock_clone(*args, **kwargs):
+        call_order.append("clone")
+        return ""
+
+    def mock_finalize(*args, **kwargs):
+        call_order.append("finalize")
+
+    # Return True for github_auth but False for github_token_inject,
+    # matching the default security posture. This ensures the test exercises
+    # the auth proxy branch (the one affected by issue #221), not the
+    # token injection branch.
+    def is_enabled_side_effect(_config, setting):
+        return setting != "github_token_inject"
+
+    with (
+        patch("bubble.cli.load_config", return_value={}),
+        patch("bubble.cli.get_host_git_identity", return_value=("Test", "t@t.com")),
+        patch("bubble.cli.get_runtime", return_value=mock_runtime),
+        patch("bubble.cli.find_existing_container", return_value=None),
+        patch("bubble.cli.print_warnings"),
+        patch("bubble.cli.maybe_rebuild_base_image"),
+        patch("bubble.cli.maybe_rebuild_tools"),
+        patch("bubble.cli.maybe_rebuild_customize"),
+        patch("bubble.cli.maybe_symlink_claude_projects"),
+        patch("bubble.cli.RepoRegistry"),
+        patch("bubble.cli.parse_target", return_value=t),
+        patch("bubble.cli._resolve_ref_source", return_value=("/tmp/fake.git", "fake.git")),
+        patch("bubble.cli.detect_and_build_image", return_value=(None, "base")),
+        patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
+        patch("bubble.cli.provision_container", side_effect=mock_provision),
+        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
+        patch("bubble.github_token.setup_gh_token", side_effect=mock_setup_gh_token),
+        patch("bubble.cli.clone_and_checkout", side_effect=mock_clone),
+        patch("bubble.cli.finalize_bubble", side_effect=mock_finalize),
+    ):
+        from click.testing import CliRunner
+
+        from bubble.cli import main
+
+        runner = CliRunner()
+        runner.invoke(main, ["kim-em/bubble", "--no-interactive"])
+
+    assert "provision" in call_order, f"provision not called, order: {call_order}"
+    assert "setup_gh_token" in call_order, f"setup_gh_token not called, order: {call_order}"
+    assert "clone" in call_order, f"clone not called, order: {call_order}"
+
+    prov_idx = call_order.index("provision")
+    auth_idx = call_order.index("setup_gh_token")
+    clone_idx = call_order.index("clone")
+
+    assert prov_idx < auth_idx < clone_idx, (
+        f"Expected provision < setup_gh_token < clone, got order: {call_order}"
+    )
+
+    # Verify the proxy branch was taken (owner/repo passed, no token_inject)
+    assert call_order_kwargs["owner"] == "kim-em"
+    assert call_order_kwargs["repo"] == "bubble"
+    assert not call_order_kwargs.get("token_inject", False)
