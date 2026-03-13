@@ -122,9 +122,11 @@ def test_ai_status_cli(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["ai", "status"])
     assert result.exit_code == 0
-    assert "preferred: claude" in result.output
-    assert "second_opinion: codex" in result.output
-    assert "credentials: on" in result.output
+    assert "preferred:" in result.output
+    assert "claude" in result.output
+    assert "autonomy:" in result.output
+    assert "credentials:" in result.output
+    assert "on" in result.output
 
 
 def test_ai_credentials_with_provider_flag(tmp_data_dir):
@@ -144,6 +146,63 @@ def test_ai_credentials_with_provider_flag(tmp_data_dir):
     assert config["codex"]["credentials"] is False
     # Claude should still be on
     assert config["claude"]["credentials"] is True
+
+
+def test_ai_set_autonomy(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+
+    # Set to pr
+    result = runner.invoke(main, ["ai", "set", "autonomy", "pr"])
+    assert result.exit_code == 0
+    assert "autonomy" in result.output
+    assert "pr" in result.output
+
+    # Verify it persists in status
+    result = runner.invoke(main, ["ai", "status"])
+    assert result.exit_code == 0
+    assert "autonomy:       pr" in result.output
+
+    # Invalid value
+    result = runner.invoke(main, ["ai", "set", "autonomy", "bogus"])
+    assert result.exit_code != 0
+
+
+def test_ai_set_second_opinion(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+
+    # Set to on
+    result = runner.invoke(main, ["ai", "set", "second-opinion", "on"])
+    assert result.exit_code == 0
+    assert "second-opinion" in result.output
+
+    # Verify it persists in status
+    result = runner.invoke(main, ["ai", "status"])
+    assert result.exit_code == 0
+    assert "second-opinion: on" in result.output
+
+    # Invalid value
+    result = runner.invoke(main, ["ai", "set", "second-opinion", "bogus"])
+    assert result.exit_code != 0
+
+
+def test_ai_status_shows_autonomy_defaults(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["ai", "status"])
+    assert result.exit_code == 0
+    assert "autonomy:       plan" in result.output
+    assert "second-opinion: auto" in result.output
 
 
 def test_load_raw_config_fresh_install(tmp_data_dir):
@@ -353,7 +412,9 @@ def test_default_config_has_ai_section(tmp_data_dir):
 
     config = load_config()
     assert config["ai"]["preferred"] == "claude"
-    assert config["ai"]["second_opinion"] == "codex"
+    assert config["ai"]["second_opinion_provider"] == "codex"
+    assert config["ai"]["second_opinion"] == "auto"
+    assert config["ai"]["autonomy"] == "plan"
 
 
 def test_deep_merge_does_not_mutate_default(tmp_data_dir):

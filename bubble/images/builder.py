@@ -18,8 +18,9 @@ if TYPE_CHECKING:
 from ..config import DATA_DIR, load_config
 from ..lean import LEAN_VERSION_RE
 from ..runtime.base import ContainerRuntime
-from ..spinner import heartbeat
-from ..tools import combined_tool_script, resolve_tools, tools_hash
+from ..tools import resolve_tools, tool_script, tools_hash
+
+PROGRESS_PREFIX = "BUBBLE_PROGRESS: "
 
 VSCODE_COMMIT_FILE = DATA_DIR / "vscode-commit"
 TOOLS_HASH_FILE = DATA_DIR / "tools-hash"
@@ -406,15 +407,14 @@ def _install_tools_if_base(
     enabled = resolve_tools(config)
     if not enabled:
         return enabled
-    script = combined_tool_script(enabled)
-    if script:
-        # Inject VS Code commit hash for the vscode tool script
-        vscode_commit = get_vscode_commit()
-        if vscode_commit and "vscode" in enabled:
+    vscode_commit = get_vscode_commit()
+    total = len(enabled)
+    for i, name in enumerate(enabled, 1):
+        print(f"  Installing tools: {name} ({i}/{total})...")
+        script = tool_script(name)
+        if name == "vscode" and vscode_commit:
             script = f"export VSCODE_COMMIT={shlex.quote(vscode_commit)}\n" + script
-        print(f"  Installing tools: {', '.join(enabled)}")
-        with heartbeat("  still installing tools..."):
-            runtime.exec(build_name, ["bash", "-c", script])
+        runtime.exec(build_name, ["bash", "-c", script])
     return enabled
 
 
@@ -512,8 +512,12 @@ def build_image(
 
             # Run setup script
             script = (SCRIPTS_DIR / spec["script"]).read_text()
-            with heartbeat(f"  still building {image_name} image...", delay=15.0):
-                runtime.exec(build_name, ["bash", "-c", script])
+
+            def _on_progress(line: str, _label: str = image_name) -> None:
+                if line.startswith(PROGRESS_PREFIX):
+                    print(f"  {line[len(PROGRESS_PREFIX) :]}")
+
+            runtime.exec_streaming(build_name, ["bash", "-c", script], on_line=_on_progress)
 
             # Install configured tools (only on base image — derived images inherit them)
             enabled_tools = _install_tools_if_base(runtime, build_name, image_name)
@@ -614,8 +618,12 @@ def build_lean_toolchain_image(
 
             script = (SCRIPTS_DIR / "lean-toolchain.sh").read_text()
             script = f"export LEAN_TOOLCHAIN={shlex.quote(version)}\n" + script
-            with heartbeat(f"  still building {alias} image...", delay=15.0):
-                runtime.exec(build_name, ["bash", "-c", script])
+
+            def _on_tc_progress(line: str) -> None:
+                if line.startswith(PROGRESS_PREFIX):
+                    print(f"  {line[len(PROGRESS_PREFIX) :]}")
+
+            runtime.exec_streaming(build_name, ["bash", "-c", script], on_line=_on_tc_progress)
 
             # Run user customization script as the final build step
             _run_customize_script(runtime, build_name)

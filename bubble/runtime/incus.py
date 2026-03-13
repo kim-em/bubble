@@ -1,7 +1,10 @@
 """Incus container runtime implementation."""
 
+from __future__ import annotations
+
 import json
 import subprocess
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from .base import ContainerInfo, ContainerRuntime
@@ -155,6 +158,50 @@ class IncusRuntime(ContainerRuntime):
         if result.returncode != 0:
             raise IncusError(result.returncode, cmd, result.stdout, result.stderr)
         return result.stdout.strip()
+
+    def exec_streaming(
+        self,
+        name: str,
+        command: list[str],
+        *,
+        on_line: Callable[[str], None] | None = None,
+    ) -> str:
+        """Execute a command with true line-by-line streaming.
+
+        When *on_line* is provided, stdout is streamed line by line and
+        each line is passed to the callback as it arrives.  When *on_line*
+        is ``None``, falls back to the normal captured :meth:`exec`.
+        """
+        if on_line is None:
+            return self.exec(name, command)
+        args = ["exec", name, "--"] + command
+        cmd = ["incus"] + args
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+        lines: list[str] = []
+        stderr_output = ""
+        try:
+            assert proc.stdout is not None
+            for raw in proc.stdout:
+                line = raw.rstrip("\n")
+                lines.append(line)
+                on_line(line)
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                stderr_output = proc.stderr.read()
+                proc.stderr.close()
+            proc.wait()
+        output = "\n".join(lines)
+        if proc.returncode != 0:
+            raise IncusError(proc.returncode, cmd, output, stderr_output)
+        return output
 
     def add_device(self, name: str, device_name: str, device_type: str, **props):
         args = ["config", "device", "add", name, device_name, device_type]

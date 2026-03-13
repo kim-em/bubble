@@ -62,7 +62,9 @@ DEFAULT_CONFIG = {
     },
     "ai": {
         "preferred": "claude",
-        "second_opinion": "codex",
+        "second_opinion": "auto",
+        "second_opinion_provider": "codex",
+        "autonomy": "plan",
     },
     "claude": {
         "credentials": True,

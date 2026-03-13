@@ -11,7 +11,7 @@ import click
 from .lifecycle import load_registry
 from .output import detail, step
 from .runtime.base import ContainerRuntime
-from .security import filter_github_domains, is_enabled
+from .security import filter_github_domains
 from .vscode import add_ssh_config
 
 
@@ -123,11 +123,13 @@ def apply_network(
     for d in tool_runtime_domains(resolve_tools(config)):
         if d not in domains:
             domains.append(d)
-    # Direct GitHub network access is only allowed when github_token_inject
-    # is enabled (level 5: direct token injection). For proxy-mediated access
-    # (levels 0-4) or no auth, iptables blocks direct GitHub traffic — all
-    # GitHub communication is forced through the auth proxy on loopback.
-    if not is_enabled(config, "github_token_inject"):
+    # Direct GitHub network access is only allowed when the github level
+    # is "direct" (raw token injection). For proxy-mediated access or no
+    # auth, iptables blocks direct GitHub traffic — all GitHub communication
+    # is forced through the auth proxy on loopback.
+    from .security import get_github_level
+
+    if get_github_level(config) != "direct":
         domains = filter_github_domains(domains)
     if domains:
         try:

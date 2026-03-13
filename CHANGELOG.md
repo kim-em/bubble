@@ -218,7 +218,7 @@
 - Templated Claude prompts for issues and PRs (#33)
 - PR bubbles now auto-inject a Claude prompt that checks CI status and summarizes PR comments
 - User-customizable prompt templates via `~/.bubble/templates/issue.txt` and `~/.bubble/templates/pr.txt`
-- Issue template placeholders: `{owner}`, `{repo}`, `{issue_num}`, `{title}`, `{body}`, `{comments}`, `{comments_section}`, `{branch}`
+- Issue template placeholders: `{owner}`, `{repo}`, `{issue_num}`, `{title}`, `{body}`, `{comments}`, `{comments_section}`, `{branch}`, `{instructions}`
 - PR template placeholders: `{owner}`, `{repo}`, `{pr_num}`, `{title}`, `{body}`, `{branch}`
 - Falls back to built-in defaults when no custom template exists
 

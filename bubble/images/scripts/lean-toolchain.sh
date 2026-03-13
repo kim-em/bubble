@@ -9,6 +9,6 @@ if [ -z "${LEAN_TOOLCHAIN:-}" ]; then
     exit 1
 fi
 
-echo "Installing Lean toolchain: leanprover/lean4:$LEAN_TOOLCHAIN"
+echo "BUBBLE_PROGRESS: Installing Lean toolchain leanprover/lean4:$LEAN_TOOLCHAIN..."
 su - user -c "export PATH=\"\$HOME/.elan/bin:\$PATH\" && elan toolchain install \"leanprover/lean4:$LEAN_TOOLCHAIN\""
 echo "Lean toolchain $LEAN_TOOLCHAIN installed."

@@ -51,6 +51,7 @@ from .native import open_native
 from .provisioning import mount_overlaps, provision_container
 from .repo_registry import RepoRegistry
 from .security import (
+    get_github_level,
     is_enabled,
     is_locked_off,
     print_warnings,
@@ -264,7 +265,20 @@ def _resolve_ai_prompt_locally(target: str, new_branch: str | None = None) -> st
 
             branch = new_branch or f"issue-{t.ref}"
             detail(f"Fetching issue #{t.ref} for AI prompt...")
-            prompt = generate_issue_prompt(t.owner, t.repo, t.ref, branch) or ""
+            _cfg = load_config()
+            _ai_cfg = _cfg.get("ai", {})
+            prompt = (
+                generate_issue_prompt(
+                    t.owner,
+                    t.repo,
+                    t.ref,
+                    branch,
+                    autonomy=_ai_cfg.get("autonomy", "plan"),
+                    second_opinion=_ai_cfg.get("second_opinion", "auto"),
+                    config=_cfg,
+                )
+                or ""
+            )
         elif t.kind == "pr":
             from .ai import generate_pr_prompt
             from .output import detail
@@ -328,8 +342,9 @@ def _open_remote(
     # Inject local SSH keys into the container so the chained ProxyCommand works
     inject_local_ssh_keys(remote_host, name)
 
-    # Set up GitHub auth: token injection (level 5) or tunneled proxy (levels 1-4)
-    if is_enabled(config, "github_token_inject"):
+    # Set up GitHub auth based on the unified github security level
+    gh_level = get_github_level(config)
+    if gh_level == "direct":
         from .github_token import setup_gh_token
 
         setup_gh_token(
@@ -338,7 +353,7 @@ def _open_remote(
             remote_host=remote_host,
             token_inject=True,
         )
-    elif is_enabled(config, "github_auth"):
+    elif gh_level != "off":
         from .github_token import setup_gh_token
         from .tools import resolve_tools
 
@@ -996,9 +1011,10 @@ def _open_single(
         )
 
         # Set up GitHub auth BEFORE clone — network allowlisting strips
-        # github.com from allowed domains when using the auth proxy (levels
-        # 1-4), so git must be configured to route through the proxy first.
-        if is_enabled(config, "github_token_inject"):
+        # github.com from allowed domains when using the auth proxy, so
+        # git must be configured to route through the proxy first.
+        gh_level = get_github_level(config)
+        if gh_level == "direct":
             from .github_token import setup_gh_token
 
             setup_gh_token(
@@ -1007,7 +1023,7 @@ def _open_single(
                 machine_readable=machine_readable,
                 token_inject=True,
             )
-        elif is_enabled(config, "github_auth"):
+        elif gh_level != "off":
             from .github_token import setup_gh_token
             from .tools import resolve_tools
 
@@ -1036,7 +1052,19 @@ def _open_single(
             from .output import detail
 
             detail(f"Fetching issue #{t.ref} for AI prompt...")
-            ai_prompt = generate_issue_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
+            ai_cfg = config.get("ai", {})
+            ai_prompt = (
+                generate_issue_prompt(
+                    t.owner,
+                    t.repo,
+                    t.ref,
+                    checkout_branch,
+                    autonomy=ai_cfg.get("autonomy", "plan"),
+                    second_opinion=ai_cfg.get("second_opinion", "auto"),
+                    config=config,
+                )
+                or ""
+            )
         elif not ai_prompt and t.kind == "pr" and not machine_readable:
             from .ai import generate_pr_prompt
             from .output import detail

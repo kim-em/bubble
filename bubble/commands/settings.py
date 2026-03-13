@@ -170,19 +170,113 @@ def register_settings_commands(main):
         else:
             click.echo(f"{label} credentials disabled.")
 
+    @ai_group.command("set")
+    @click.argument("key", type=click.Choice(["autonomy", "second-opinion"]))
+    @click.argument("value")
+    def ai_set_cmd(key, value):
+        """Set an AI provider setting.
+
+        \b
+        Settings:
+          autonomy       read, plan, implement, pr, merge (default: plan)
+          second-opinion auto, on, off (default: auto)
+
+        \b
+        Examples:
+          bubble ai set autonomy pr
+          bubble ai set second-opinion on
+        """
+        from ..ai import AUTONOMY_LEVELS, SECOND_OPINION_VALUES
+
+        config_key = key.replace("-", "_")
+
+        if config_key == "autonomy":
+            if value not in AUTONOMY_LEVELS:
+                click.echo(
+                    f"Invalid autonomy level: {value}. Choose from: {', '.join(AUTONOMY_LEVELS)}",
+                    err=True,
+                )
+                sys.exit(1)
+        elif config_key == "second_opinion":
+            if value not in SECOND_OPINION_VALUES:
+                click.echo(
+                    f"Invalid second-opinion value: {value}. "
+                    f"Choose from: {', '.join(SECOND_OPINION_VALUES)}",
+                    err=True,
+                )
+                sys.exit(1)
+
+        config = load_config()
+        config.setdefault("ai", {})[config_key] = value
+        save_config(config)
+        click.echo(f"Set ai.{key} = {value}")
+
     @ai_group.command("status")
     def ai_status_cmd():
         """Show current AI provider settings."""
+        from ..ai import _resolve_second_opinion
+
         config = load_config()
-        preferred = config.get("ai", {}).get("preferred", "claude")
-        second = config.get("ai", {}).get("second_opinion", "codex")
-        click.echo(f"  preferred: {preferred}")
-        click.echo(f"  second_opinion: {second}")
+        ai_cfg = config.get("ai", {})
+        preferred = ai_cfg.get("preferred", "claude")
+        second_provider = ai_cfg.get("second_opinion_provider", "codex")
+        autonomy = ai_cfg.get("autonomy", "plan")
+        second_opinion_setting = ai_cfg.get("second_opinion", "auto")
+        resolved_so = _resolve_second_opinion(second_opinion_setting, config=config)
+
+        click.echo(f"  preferred:      {preferred}")
+        click.echo(f"  autonomy:       {autonomy}")
+        so_resolved = "on" if resolved_so else "off"
+        so_extra = f" (resolved: {so_resolved})" if second_opinion_setting == "auto" else ""
+        click.echo(f"  second-opinion: {second_opinion_setting}{so_extra}")
         click.echo()
-        for provider in dict.fromkeys([preferred, second]):
+        for provider in dict.fromkeys([preferred, second_provider]):
             creds = config.get(provider, {}).get("credentials", True)
             click.echo(f"  [{provider}]")
             click.echo(f"    credentials: {'on' if creds else 'off'}")
+
+    # --- codex ---
+
+    @main.group("codex", hidden=True)
+    def codex_group():
+        """Manage Codex/OpenAI settings."""
+
+    @codex_group.command("credentials")
+    @click.argument("setting", required=False, type=click.Choice(["on", "off"]))
+    def codex_credentials_cmd(setting):
+        """Set whether Codex credentials are mounted into bubbles.
+
+        When on, ~/.codex credentials (auth.json) are mounted
+        read-only into containers by default. Override per-bubble with
+        --no-codex-credentials.
+
+        Shows current setting if no argument given.
+        """
+        config = load_config()
+        if setting is None:
+            current = config.get("codex", {}).get("credentials", True)
+            state = "on" if current else "off"
+            click.echo(f"Codex credentials: {state}")
+            if current:
+                click.echo("Credentials are mounted into bubbles by default.")
+                click.echo("Override with: bubble open --no-codex-credentials <target>")
+            else:
+                click.echo("Use --codex-credentials flag or: bubble codex credentials on")
+            return
+        config.setdefault("codex", {})["credentials"] = setting == "on"
+        save_config(config)
+        if setting == "on":
+            click.echo("Codex credentials enabled. Mounted into all new bubbles by default.")
+            click.echo("Override with: bubble open --no-codex-credentials <target>")
+        else:
+            click.echo("Codex credentials disabled.")
+
+    @codex_group.command("status")
+    def codex_status_cmd():
+        """Show current Codex settings."""
+        config = load_config()
+        creds = config.get("codex", {}).get("credentials", True)
+        click.echo(f"  credentials: {'on' if creds else 'off'}")
 
     # --- tools ---
 
@@ -298,34 +392,30 @@ def register_settings_commands(main):
         """Show GitHub integration status."""
         from ..automation import is_auth_proxy_installed
         from ..github_token import has_gh_auth
-        from ..security import is_enabled as sec_is_enabled
+        from ..security import get_github_level
 
         config = load_config()
-        github_auth = get_setting(config, "github_auth")
-        enabled = sec_is_enabled(config, "github_auth")
+        gh_level = get_github_level(config)
+        raw_value = get_setting(config, "github")
         host_auth = has_gh_auth()
         proxy_installed = is_auth_proxy_installed()
 
-        token_inject = get_setting(config, "github_token_inject")
-        inject_enabled = sec_is_enabled(config, "github_token_inject")
-
-        click.echo(f"GitHub auth:      {github_auth} (effectively {'on' if enabled else 'off'})")
-        click.echo(
-            f"Token injection:  {token_inject} (effectively {'on' if inject_enabled else 'off'})"
-        )
+        if raw_value == "auto":
+            click.echo(f"GitHub level:     auto (effectively {gh_level})")
+        else:
+            click.echo(f"GitHub level:     {gh_level}")
         click.echo(f"Host gh auth:     {'authenticated' if host_auth else 'not authenticated'}")
         click.echo(f"Auth proxy:       {'installed' if proxy_installed else 'not installed'}")
-        if inject_enabled:
+        if gh_level == "direct":
             click.echo(
-                "\nWarning: token injection is enabled. Containers get your full GitHub token."
-                "\nDisable: bubble security set github-token-inject off"
+                "\nWarning: direct token injection is enabled."
+                " Containers get your full GitHub token."
+                "\nChange: bubble security set github allowlist-write-graphql"
             )
+        elif gh_level == "off":
+            click.echo("\nGitHub access is disabled. Enable: bubble security set github auto")
         elif not host_auth:
             click.echo("\nRun 'gh auth login' to authenticate on the host first.")
-        elif not enabled:
-            click.echo(
-                "\nRun 'bubble security set github-auth on' to enable GitHub auth in bubbles."
-            )
 
     @gh_group.group("proxy")
     def gh_proxy_group():
@@ -457,7 +547,7 @@ def register_settings_commands(main):
         """Set a security setting: bubble config set security.<name> <value>.
 
         Alias for `bubble security set <name> <value>`.
-        Setting names use hyphens (e.g. github-auth, claude-credentials).
+        Setting names use hyphens (e.g. github, claude-credentials).
         Underscores are also accepted as permanent aliases.
         """
         # Accept both "security.X" and bare "X", normalize hyphens to underscores

@@ -248,8 +248,8 @@ def test_gh_status_shows_security_setting(tmp_data_dir):
         mock_run.return_value.returncode = 0
         result = runner.invoke(main, ["gh", "status"])
     assert result.exit_code == 0
-    assert "GitHub auth:" in result.output
-    assert "effectively on" in result.output
+    assert "GitHub level:" in result.output
+    assert "allowlist-write-graphql" in result.output
 
 
 # --- Token injection (level 5) tests ---
@@ -381,8 +381,8 @@ def test_setup_gh_token_with_token_inject_skips_owner_repo_check(mock_runtime):
         mock_inject.assert_called_once()
 
 
-def test_gh_status_shows_token_injection(tmp_data_dir):
-    """gh status shows token injection setting."""
+def test_gh_status_shows_github_level(tmp_data_dir):
+    """gh status shows the unified github level."""
     from bubble.cli import main
 
     runner = CliRunner()
@@ -390,8 +390,8 @@ def test_gh_status_shows_token_injection(tmp_data_dir):
         mock_run.return_value.returncode = 0
         result = runner.invoke(main, ["gh", "status"])
     assert result.exit_code == 0
-    assert "Token injection:" in result.output
-    assert "effectively off" in result.output
+    assert "GitHub level:" in result.output
+    assert "allowlist-write-graphql" in result.output
 
 
 # --- Ordering test: auth proxy must be set up before clone (issue #221) ---
@@ -434,13 +434,10 @@ def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
     def mock_finalize(*args, **kwargs):
         call_order.append("finalize")
 
-    # Return True for github_auth but False for github_token_inject,
-    # matching the default security posture. This ensures the test exercises
-    # the auth proxy branch (the one affected by issue #221), not the
-    # token injection branch.
-    def is_enabled_side_effect(_config, setting):
-        return setting != "github_token_inject"
-
+    # Return "allowlist-write-graphql" as the github level, matching the
+    # default security posture. This ensures the test exercises the auth
+    # proxy branch (the one affected by issue #221), not the token
+    # injection branch.
     with (
         patch("bubble.cli.load_config", return_value={}),
         patch("bubble.cli.get_host_git_identity", return_value=("Test", "t@t.com")),
@@ -457,7 +454,7 @@ def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
         patch("bubble.cli.detect_and_build_image", return_value=(None, "base")),
         patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
         patch("bubble.cli.provision_container", side_effect=mock_provision),
-        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
+        patch("bubble.cli.get_github_level", return_value="allowlist-write-graphql"),
         patch("bubble.github_token.setup_gh_token", side_effect=mock_setup_gh_token),
         patch("bubble.cli.clone_and_checkout", side_effect=mock_clone),
         patch("bubble.cli.finalize_bubble", side_effect=mock_finalize),
