@@ -36,11 +36,11 @@ manifest_entries = []
 
 for ext_id in EXTENSIONS:
     # Query marketplace for the latest VSIX download URL
-    criteria = [{"filterType": 7, "value": ext_id}]
-    if TARGET_PLATFORM:
-        criteria.append({"filterType": 8, "value": TARGET_PLATFORM})
+    # Query by extension ID only — do NOT add filterType 8 (target platform).
+    # The marketplace returns 0 results for extensions without platform-specific
+    # builds matching the filter, silently hiding universal extensions on ARM64.
     query = json.dumps({
-        "filters": [{"criteria": criteria}],
+        "filters": [{"criteria": [{"filterType": 7, "value": ext_id}]}],
         "flags": 914,
     }).encode()
     req = urllib.request.Request(
@@ -71,7 +71,15 @@ for ext_id in EXTENSIONS:
             if best_ver is None and (not tp or tp == "universal"):
                 best_ver = ver
         if best_ver is None and ext.get("versions"):
-            best_ver = ext["versions"][0]
+            # Only fall back to versions[0] if it is not a platform-specific
+            # build for a different architecture (e.g. linux-x64 on arm64).
+            candidate = ext["versions"][0]
+            ctp = candidate.get("targetPlatform", "")
+            if not ctp or ctp == "universal" or ctp == TARGET_PLATFORM:
+                best_ver = candidate
+            elif TARGET_PLATFORM:
+                print(f"  Skipping {ext_id}: no build for {TARGET_PLATFORM} "
+                      f"(only {ctp} available)", file=sys.stderr)
         if best_ver:
             version = best_ver["version"]
             for f in best_ver["files"]:
@@ -215,12 +223,11 @@ EXT_ID = "anthropic.claude-code"
 _arch = subprocess.check_output(["dpkg", "--print-architecture"]).decode().strip()
 TARGET_PLATFORM = {"amd64": "linux-x64", "arm64": "linux-arm64"}.get(_arch, "")
 
-# Query marketplace for the latest VSIX download URL
-criteria = [{"filterType": 7, "value": EXT_ID}]
-if TARGET_PLATFORM:
-    criteria.append({"filterType": 8, "value": TARGET_PLATFORM})
+# Query by extension ID only — do NOT add filterType 8 (target platform).
+# The marketplace returns 0 results for extensions without platform-specific
+# builds matching the filter, silently hiding universal extensions on ARM64.
 query = json.dumps({
-    "filters": [{"criteria": criteria}],
+    "filters": [{"criteria": [{"filterType": 7, "value": EXT_ID}]}],
     "flags": 914,
 }).encode()
 req = urllib.request.Request(
@@ -251,7 +258,15 @@ for ext in data["results"][0]["extensions"]:
         if best_ver is None and (not tp or tp == "universal"):
             best_ver = ver
     if best_ver is None and ext.get("versions"):
-        best_ver = ext["versions"][0]
+        # Only fall back to versions[0] if it is not a platform-specific
+        # build for a different architecture (e.g. linux-x64 on arm64).
+        candidate = ext["versions"][0]
+        ctp = candidate.get("targetPlatform", "")
+        if not ctp or ctp == "universal" or ctp == TARGET_PLATFORM:
+            best_ver = candidate
+        elif TARGET_PLATFORM:
+            print(f"  Skipping {EXT_ID}: no build for {TARGET_PLATFORM} "
+                  f"(only {ctp} available)", file=sys.stderr)
     if best_ver:
         version = best_ver["version"]
         for f in best_ver["files"]:
