@@ -844,7 +844,7 @@ def _open_single(
     # Pre-compute user mount targets for overlap checking below
     user_targets = {Path(m.target) for m in mount_specs}
 
-    # Claude Code config mounts (opt-out via --no-ai-config)
+    # AI provider config mounts (opt-out via --no-ai-config)
     include_creds = should_include_credentials(claude_credentials, config, "claude_credentials")
     cc_mounts = []
     if ai_config:
@@ -855,11 +855,15 @@ def _open_single(
         if not machine_readable:
             maybe_symlink_ai_projects(config, notices=notices)
 
-    # Codex config mounts
-    include_codex_creds = should_include_credentials(codex_credentials, config, "codex_credentials")
-    cx_mounts = codex_config_mounts(include_credentials=include_codex_creds)
-    if cx_mounts:
-        cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
+    # Codex config mounts (also gated by --no-ai-config)
+    cx_mounts = []
+    if ai_config:
+        include_codex_creds = should_include_credentials(
+            codex_credentials, config, "codex_credentials"
+        )
+        cx_mounts = codex_config_mounts(include_credentials=include_codex_creds)
+        if cx_mounts:
+            cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
     # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
     ec_mounts = editor_config_mounts(editor)

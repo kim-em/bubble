@@ -30,14 +30,21 @@ _TASK_COMMANDS = {
     ),
 }
 
+SUPPORTED_PROVIDERS = frozenset(_TASK_COMMANDS)
+
 
 def _task_command_for(provider: str) -> str:
-    """Return the VS Code task shell command for the given AI provider."""
-    return _TASK_COMMANDS.get(provider, _TASK_COMMANDS["claude"])
+    """Return the VS Code task shell command for the given AI provider.
+
+    Raises ``ValueError`` for unknown providers so typos are caught early.
+    """
+    try:
+        return _TASK_COMMANDS[provider]
+    except KeyError:
+        supported = ", ".join(sorted(SUPPORTED_PROVIDERS))
+        raise ValueError(f"Unknown AI provider {provider!r} (supported: {supported})") from None
 
 
-# Backward compat: expose the Claude command as the module-level constant
-# that existing tests may reference.
 AI_TASK_COMMAND = _TASK_COMMANDS["claude"]
 
 TEMPLATES_DIR = DATA_DIR / "templates"

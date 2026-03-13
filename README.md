@@ -229,10 +229,10 @@ bubble mathlib4/issues/42
 
 Claude is instructed to read the issue, implement a fix on the `issue-<number>` branch, and open a PR. This turns `bubble 42` (for an issue) into an autonomous coding agent workflow.
 
-You can also provide a custom prompt for any bubble via the `BUBBLE_CLAUDE_PROMPT` environment variable:
+You can also provide a custom prompt for any bubble via the `BUBBLE_AI_PROMPT` environment variable:
 
 ```bash
-BUBBLE_CLAUDE_PROMPT="Refactor the parser module" bubble leanprover/lean4
+BUBBLE_AI_PROMPT="Refactor the parser module" bubble leanprover/lean4
 ```
 
 Requirements: Claude Code must be installed in the container (see tool settings above), the `gh` CLI must be available on the host (for fetching issue/PR metadata), and the default VS Code editor must be used. With `--shell` or `--no-interactive`, the prompt is not injected. If `gh` is unavailable or the API call fails, bubble proceeds without injecting a prompt.

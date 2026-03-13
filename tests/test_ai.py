@@ -3,6 +3,8 @@
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from bubble.ai import (
     _DEFAULT_ISSUE_TEMPLATE,
     _DEFAULT_PR_TEMPLATE,
@@ -363,6 +365,29 @@ class TestInjectAITask:
         tasks_call = runtime.exec.call_args_list[2]
         script = tasks_call[0][1][-1]  # the -c argument
         assert "codex" in script
+
+    def test_unknown_provider_raises(self):
+        """Unknown provider in config raises ValueError, not silent fallback."""
+        runtime = MagicMock()
+        config = {"ai": {"preferred": "cluade"}}
+        with pytest.raises(ValueError, match="Unknown AI provider 'cluade'"):
+            inject_ai_task(
+                runtime, "container-1", "/home/user/project", "Do something", config=config
+            )
+
+
+class TestTaskCommandValidation:
+    def test_known_providers_succeed(self):
+        from bubble.ai import _task_command_for
+
+        assert "claude" in _task_command_for("claude")
+        assert "codex" in _task_command_for("codex")
+
+    def test_unknown_provider_raises(self):
+        from bubble.ai import _task_command_for
+
+        with pytest.raises(ValueError, match="Unknown AI provider"):
+            _task_command_for("gemini")
 
 
 class TestResolveAIPromptLocally:
