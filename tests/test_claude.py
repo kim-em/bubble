@@ -6,9 +6,12 @@ from unittest.mock import MagicMock, patch
 from bubble.claude import (
     _DEFAULT_ISSUE_TEMPLATE,
     _DEFAULT_PR_TEMPLATE,
+    AUTONOMY_LEVELS,
     CLAUDE_TASK_COMMAND,
+    SECOND_OPINION_VALUES,
     _load_template,
     _render_template,
+    _resolve_second_opinion,
     generate_issue_prompt,
     generate_pr_prompt,
     inject_claude_task,
@@ -37,7 +40,8 @@ class TestGenerateIssuePrompt:
             assert '#42: "Fix the bug"' in prompt
             assert "The widget is broken when X happens." in prompt
             assert "I can reproduce this." in prompt
-            assert "issue-42" in prompt
+            # Default autonomy is "plan" so instructions mention proposing a plan
+            assert "propose a plan" in prompt
 
     def test_no_comments(self):
         with patch("bubble.claude.subprocess.run") as mock_run:
@@ -134,8 +138,8 @@ class TestGenerateIssuePrompt:
 
             prompt = generate_issue_prompt("myorg", "myrepo", "1", "issue-1")
             assert prompt is not None
-            # Default template doesn't use {owner}/{repo} but it should still render
-            assert "issue-1" in prompt
+            # Default template renders with the issue number
+            assert "#1" in prompt
 
 
 class TestGeneratePrPrompt:
@@ -285,7 +289,7 @@ class TestTemplateSystem:
             f.chmod(0o644)
 
     def test_default_issue_template_has_required_placeholders(self):
-        for placeholder in ["issue_num", "title", "body", "branch"]:
+        for placeholder in ["issue_num", "title", "body", "instructions"]:
             assert f"{{{placeholder}}}" in _DEFAULT_ISSUE_TEMPLATE
 
     def test_default_pr_template_has_required_placeholders(self):
@@ -366,7 +370,7 @@ class TestResolveClaudePromptLocally:
 
             result = _resolve_claude_prompt_locally("https://github.com/owner/repo/issues/42")
             assert "issue #42" in result
-            assert "issue-42" in result
+            assert "propose a plan" in result
 
     def test_pr_target_generates_prompt(self):
         with (
@@ -391,3 +395,119 @@ class TestResolveClaudePromptLocally:
         with patch.dict("os.environ", {}, clear=True):
             result = _resolve_claude_prompt_locally("")
             assert result == ""
+
+
+class TestAutonomyLevels:
+    """Test autonomy-level-aware issue prompt generation."""
+
+    def _make_mock_run(self):
+        """Create mock subprocess results for a basic issue fetch."""
+        issue_result = MagicMock()
+        issue_result.returncode = 0
+        issue_result.stdout = "Fix bug\nDescription of the bug."
+        comments_result = MagicMock()
+        comments_result.returncode = 0
+        comments_result.stdout = ""
+        return [issue_result, comments_result]
+
+    def test_read_level(self):
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="read")
+            assert "take no further action" in prompt
+            assert "branch" not in prompt.lower() or "issue-1" not in prompt
+
+    def test_plan_level(self):
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="plan")
+            assert "propose a plan" in prompt
+            assert "do not implement" in prompt.lower()
+
+    def test_implement_level(self):
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="implement")
+            assert "implement" in prompt.lower()
+            assert "issue-1" in prompt
+            assert "Do not commit" in prompt
+
+    def test_pr_level(self):
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="pr")
+            assert "implement" in prompt.lower()
+            assert "open a PR" in prompt
+            assert "issue-1" in prompt
+
+    def test_merge_level(self):
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="merge")
+            assert "merge" in prompt.lower()
+            assert "CI" in prompt or "ci" in prompt.lower()
+
+    def test_invalid_autonomy_defaults_to_plan(self):
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="bogus")
+            assert "propose a plan" in prompt
+
+    def test_autonomy_levels_tuple(self):
+        assert AUTONOMY_LEVELS == ("read", "plan", "implement", "pr", "merge")
+
+    def test_second_opinion_values_tuple(self):
+        assert SECOND_OPINION_VALUES == ("auto", "on", "off")
+
+
+class TestSecondOpinion:
+    def _make_mock_run(self):
+        issue_result = MagicMock()
+        issue_result.returncode = 0
+        issue_result.stdout = "Title\nBody"
+        comments_result = MagicMock()
+        comments_result.returncode = 0
+        comments_result.stdout = ""
+        return [issue_result, comments_result]
+
+    def test_second_opinion_on(self):
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="on")
+            assert "second opinion" in prompt.lower()
+
+    def test_second_opinion_off(self):
+        with patch("bubble.claude.subprocess.run") as mock_run:
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="off")
+            assert "second opinion" not in prompt.lower()
+
+    def test_second_opinion_auto_with_codex(self):
+        with (
+            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/codex"),
+        ):
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="auto")
+            assert "second opinion" in prompt.lower()
+
+    def test_second_opinion_auto_without_codex(self):
+        with (
+            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("shutil.which", return_value=None),
+        ):
+            mock_run.side_effect = self._make_mock_run()
+            prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="auto")
+            assert "second opinion" not in prompt.lower()
+
+    def test_resolve_second_opinion_on(self):
+        assert _resolve_second_opinion("on") is True
+
+    def test_resolve_second_opinion_off(self):
+        assert _resolve_second_opinion("off") is False
+
+    def test_resolve_second_opinion_auto(self):
+        with patch("shutil.which", return_value="/usr/bin/codex"):
+            assert _resolve_second_opinion("auto") is True
+        with patch("shutil.which", return_value=None):
+            assert _resolve_second_opinion("auto") is False

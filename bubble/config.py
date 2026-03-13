@@ -62,6 +62,8 @@ DEFAULT_CONFIG = {
     },
     "claude": {
         "credentials": True,
+        "autonomy": "plan",
+        "second_opinion": "auto",
     },
     "codex": {
         "credentials": True,

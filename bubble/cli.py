@@ -264,7 +264,19 @@ def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -
             from .output import detail
 
             detail(f"Fetching issue #{t.ref} for Claude prompt...")
-            prompt = generate_issue_prompt(t.owner, t.repo, t.ref, branch) or ""
+            _cfg = load_config()
+            _claude_cfg = _cfg.get("claude", {})
+            prompt = (
+                generate_issue_prompt(
+                    t.owner,
+                    t.repo,
+                    t.ref,
+                    branch,
+                    autonomy=_claude_cfg.get("autonomy", "plan"),
+                    second_opinion=_claude_cfg.get("second_opinion", "off"),
+                )
+                or ""
+            )
         elif t.kind == "pr":
             from .claude import generate_pr_prompt
 
@@ -1033,7 +1045,18 @@ def _open_single(
             from .output import detail
 
             detail(f"Fetching issue #{t.ref} for Claude prompt...")
-            claude_prompt = generate_issue_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
+            claude_cfg = config.get("claude", {})
+            claude_prompt = (
+                generate_issue_prompt(
+                    t.owner,
+                    t.repo,
+                    t.ref,
+                    checkout_branch,
+                    autonomy=claude_cfg.get("autonomy", "plan"),
+                    second_opinion=claude_cfg.get("second_opinion", "off"),
+                )
+                or ""
+            )
         elif not claude_prompt and t.kind == "pr" and not machine_readable:
             from .claude import generate_pr_prompt
             from .output import detail
