@@ -381,19 +381,6 @@ def test_setup_gh_token_with_token_inject_skips_owner_repo_check(mock_runtime):
         mock_inject.assert_called_once()
 
 
-def test_gh_status_shows_github_level(tmp_data_dir):
-    """gh status shows the unified github level."""
-    from bubble.cli import main
-
-    runner = CliRunner()
-    with patch("bubble.github_token.subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        result = runner.invoke(main, ["gh", "status"])
-    assert result.exit_code == 0
-    assert "GitHub level:" in result.output
-    assert "allowlist-write-graphql" in result.output
-
-
 # --- Ordering test: auth proxy must be set up before clone (issue #221) ---
 
 

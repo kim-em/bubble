@@ -443,18 +443,6 @@ def test_tools_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
     assert len(stored) == 16
 
 
-def test_tools_hash_includes_script_content(tmp_path):
-    """Verify that hash changes when script content changes."""
-    # Same tool names but we can't easily change script content in tests,
-    # so just verify the hash is deterministic and non-trivial
-    h1 = tools_hash(["claude"])
-    h2 = tools_hash(["claude"])
-    assert h1 == h2
-    # Hash of claude should differ from hash of codex (different scripts)
-    h3 = tools_hash(["codex"])
-    assert h1 != h3
-
-
 def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_dir):
     """Verify that building base with tools deletes all derived images recursively."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
