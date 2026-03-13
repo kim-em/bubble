@@ -18,18 +18,56 @@ CLAUDE_TASK_COMMAND = (
 
 TEMPLATES_DIR = DATA_DIR / "templates"
 
+# Ordered autonomy levels. Each level implies all lower levels.
+AUTONOMY_LEVELS = ("read", "plan", "implement", "pr", "merge")
+
+# Valid values for the second_opinion setting.
+SECOND_OPINION_VALUES = ("auto", "on", "off")
+
+# Issue prompt instructions keyed by autonomy level.
+_ISSUE_INSTRUCTIONS = {
+    "read": (
+        "Please read and understand the issue. "
+        "Summarize the problem and any relevant context, but take no further action."
+    ),
+    "plan": (
+        "Please read and understand the issue, then propose a plan to fix it. "
+        "Describe what files need to change and how, but do not implement anything yet."
+    ),
+    "implement": (
+        "Please claim this issue (assign it to yourself if possible), "
+        "then implement a fix or feature as described. "
+        "Work on a branch named `{branch}`. Do not commit or open a PR."
+    ),
+    "pr": (
+        "Please claim this issue (assign it to yourself if possible), "
+        "then implement a fix or feature as described. "
+        "Work on a branch named `{branch}`, and open a PR when done."
+    ),
+    "merge": (
+        "Please claim this issue (assign it to yourself if possible), "
+        "then implement a fix or feature as described. "
+        "Work on a branch named `{branch}`, open a PR, "
+        "rebase onto the default branch, watch CI, and merge when it passes."
+    ),
+}
+
+_SECOND_OPINION_SUFFIX = (
+    "\n\nBefore proceeding, get a second opinion from another AI "
+    "(e.g. Codex) to review your approach."
+)
+
 # Default issue prompt template. Placeholders:
 #   {owner}, {repo}, {issue_num}, {title}, {body}, {comments},
-#   {comments_section} (pre-formatted, empty when no comments), {branch}
+#   {comments_section} (pre-formatted, empty when no comments), {branch},
+#   {instructions}
 _DEFAULT_ISSUE_TEMPLATE = (
     'Please read and understand GitHub issue #{issue_num}: "{title}".\n'
     "\n"
     "Issue description:\n"
     "{body}\n"
     "{comments_section}"
-    "\nPlease claim this issue (assign it to yourself if possible), "
-    "then implement a fix or feature as described. "
-    "Work on a branch named `{branch}`, and open a PR when done."
+    "\n{instructions}"
 )
 
 # Default PR prompt template. Placeholders:
@@ -105,12 +143,44 @@ def _fetch_github_item(owner: str, repo: str, endpoint: str, jq: str) -> str | N
         return None
 
 
-def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) -> str | None:
+def _resolve_second_opinion(second_opinion: str, config: dict | None = None) -> bool:
+    """Resolve the second_opinion setting to a boolean.
+
+    'on' → True, 'off' → False, 'auto' → True if codex will be
+    available in the container (checked via tool resolution, not host PATH).
+    """
+    if second_opinion == "on":
+        return True
+    if second_opinion == "off":
+        return False
+    # auto: check if codex is resolved as an enabled tool
+    if config is not None:
+        from .tools import resolve_tools
+
+        return "codex" in resolve_tools(config)
+    # Fallback when no config available: check host PATH
+    import shutil
+
+    return shutil.which("codex") is not None
+
+
+def generate_issue_prompt(
+    owner: str,
+    repo: str,
+    issue_num: str,
+    branch: str,
+    autonomy: str = "plan",
+    second_opinion: str = "auto",
+    config: dict | None = None,
+) -> str | None:
     """Fetch GitHub issue details and generate a Claude prompt.
 
     Returns the prompt string, or None if the issue can't be fetched.
     Uses a custom template from ~/.bubble/templates/issue.txt if present,
     otherwise falls back to the built-in default.
+
+    The autonomy level controls what action instructions are included:
+      read, plan, implement, pr, merge.
     """
     raw = _fetch_github_item(owner, repo, f"issues/{issue_num}", ".title,.body")
     if raw is None:
@@ -129,8 +199,21 @@ def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) ->
     if comments_text:
         comments_section = f"\nComments:\n{comments_text}\n"
 
-    template = _load_template("issue") or _DEFAULT_ISSUE_TEMPLATE
-    return _render_template(
+    # Build instructions from autonomy level
+    if autonomy not in AUTONOMY_LEVELS:
+        autonomy = "plan"
+    instructions = _ISSUE_INSTRUCTIONS[autonomy]
+    # The instructions may contain {branch} placeholder
+    instructions = instructions.format(branch=branch)
+
+    # Append second opinion request if enabled
+    if _resolve_second_opinion(second_opinion, config=config):
+        instructions += _SECOND_OPINION_SUFFIX
+
+    custom_template = _load_template("issue")
+    template = custom_template or _DEFAULT_ISSUE_TEMPLATE
+
+    prompt = _render_template(
         template,
         owner=owner,
         repo=repo,
@@ -140,7 +223,15 @@ def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) ->
         comments=comments_text,
         comments_section=comments_section,
         branch=branch,
+        instructions=instructions,
     )
+
+    # If a custom template didn't use {instructions}, append them so
+    # autonomy/second-opinion settings are never silently lost.
+    if custom_template and "{instructions}" not in custom_template:
+        prompt = prompt.rstrip() + "\n\n" + instructions
+
+    return prompt
 
 
 def generate_pr_prompt(owner: str, repo: str, pr_num: str, branch: str) -> str | None:

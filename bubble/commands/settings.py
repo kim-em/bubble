@@ -157,12 +157,64 @@ def register_settings_commands(main):
         else:
             click.echo("Claude credentials disabled.")
 
+    @claude_group.command("set")
+    @click.argument("key", type=click.Choice(["autonomy", "second-opinion"]))
+    @click.argument("value")
+    def claude_set_cmd(key, value):
+        """Set a Claude Code setting.
+
+        \b
+        Settings:
+          autonomy       read, plan, implement, pr, merge (default: plan)
+          second-opinion auto, on, off (default: auto)
+
+        \b
+        Examples:
+          bubble claude set autonomy pr
+          bubble claude set second-opinion on
+        """
+        from ..claude import AUTONOMY_LEVELS, SECOND_OPINION_VALUES
+
+        config_key = key.replace("-", "_")
+
+        if config_key == "autonomy":
+            if value not in AUTONOMY_LEVELS:
+                click.echo(
+                    f"Invalid autonomy level: {value}. Choose from: {', '.join(AUTONOMY_LEVELS)}",
+                    err=True,
+                )
+                sys.exit(1)
+        elif config_key == "second_opinion":
+            if value not in SECOND_OPINION_VALUES:
+                click.echo(
+                    f"Invalid second-opinion value: {value}. "
+                    f"Choose from: {', '.join(SECOND_OPINION_VALUES)}",
+                    err=True,
+                )
+                sys.exit(1)
+
+        config = load_config()
+        config.setdefault("claude", {})[config_key] = value
+        save_config(config)
+        click.echo(f"Set claude.{key} = {value}")
+
     @claude_group.command("status")
     def claude_status_cmd():
         """Show current Claude Code settings."""
+        from ..claude import _resolve_second_opinion
+
         config = load_config()
-        creds = config.get("claude", {}).get("credentials", True)
-        click.echo(f"  credentials: {'on' if creds else 'off'}")
+        claude_cfg = config.get("claude", {})
+        creds = claude_cfg.get("credentials", True)
+        autonomy = claude_cfg.get("autonomy", "plan")
+        second_opinion = claude_cfg.get("second_opinion", "auto")
+        resolved_so = _resolve_second_opinion(second_opinion, config=config)
+
+        click.echo(f"  credentials:    {'on' if creds else 'off'}")
+        click.echo(f"  autonomy:       {autonomy}")
+        so_resolved = "on" if resolved_so else "off"
+        so_extra = f" (resolved: {so_resolved})" if second_opinion == "auto" else ""
+        click.echo(f"  second-opinion: {second_opinion}{so_extra}")
 
     # --- codex ---
 

@@ -123,13 +123,72 @@ def test_claude_status_cli(tmp_data_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["claude", "status"])
     assert result.exit_code == 0
-    assert "credentials: on" in result.output
+    assert "credentials:" in result.output
+    assert "on" in result.output
 
     # Disable and check again
     runner.invoke(main, ["claude", "credentials", "off"])
     result = runner.invoke(main, ["claude", "status"])
     assert result.exit_code == 0
-    assert "credentials: off" in result.output
+    assert "credentials:" in result.output
+    assert "off" in result.output
+
+
+def test_claude_set_autonomy(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+
+    # Set to pr
+    result = runner.invoke(main, ["claude", "set", "autonomy", "pr"])
+    assert result.exit_code == 0
+    assert "autonomy" in result.output
+    assert "pr" in result.output
+
+    # Verify it persists in status
+    result = runner.invoke(main, ["claude", "status"])
+    assert result.exit_code == 0
+    assert "autonomy:       pr" in result.output
+
+    # Invalid value
+    result = runner.invoke(main, ["claude", "set", "autonomy", "bogus"])
+    assert result.exit_code != 0
+
+
+def test_claude_set_second_opinion(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+
+    # Set to on
+    result = runner.invoke(main, ["claude", "set", "second-opinion", "on"])
+    assert result.exit_code == 0
+    assert "second-opinion" in result.output
+
+    # Verify it persists in status
+    result = runner.invoke(main, ["claude", "status"])
+    assert result.exit_code == 0
+    assert "second-opinion: on" in result.output
+
+    # Invalid value
+    result = runner.invoke(main, ["claude", "set", "second-opinion", "bogus"])
+    assert result.exit_code != 0
+
+
+def test_claude_status_shows_autonomy_defaults(tmp_data_dir):
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["claude", "status"])
+    assert result.exit_code == 0
+    assert "autonomy:       plan" in result.output
+    assert "second-opinion: auto" in result.output
 
 
 def test_load_raw_config_fresh_install(tmp_data_dir):
