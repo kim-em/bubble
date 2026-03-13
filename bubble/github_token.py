@@ -107,20 +107,52 @@ def _ensure_auth_proxy_running() -> int | None:
 
 
 def _resolve_access_level(config: dict, gh_enabled: bool) -> int:
-    """Determine the auth proxy access level for a container.
+    """Determine the auth proxy REST access level for a container.
 
-    Returns the access level (1-4) based on config and tool availability.
+    Returns the REST access level (1 or 4) based on config and tool
+    availability.  GraphQL policies are resolved separately by
+    _resolve_graphql_config().
     """
-    from .auth_proxy import DEFAULT_LEVEL, LEVEL_GH_READWRITE, LEVEL_GIT_ONLY
-    from .security import get_setting, is_enabled
+    from .auth_proxy import LEVEL_GH_READWRITE, LEVEL_GIT_ONLY
+    from .security import is_enabled
 
     if not gh_enabled or not is_enabled(config, "github_api"):
         return LEVEL_GIT_ONLY
 
-    if get_setting(config, "github_api") == "read-write":
-        return LEVEL_GH_READWRITE
+    # REST is already repo-scoped by path validation, so read-write is
+    # safe by default.  This enables REST POST operations like
+    # gh run rerun (/repos/{owner}/{repo}/actions/runs/{id}/rerun).
+    return LEVEL_GH_READWRITE
 
-    return DEFAULT_LEVEL  # LEVEL_GH_READ (3)
+
+def _resolve_graphql_config(config: dict, gh_enabled: bool) -> tuple[str, str]:
+    """Determine GraphQL policies for a container.
+
+    Returns (graphql_read, graphql_write).
+    """
+    from .security import get_setting, is_enabled
+
+    if not gh_enabled or not is_enabled(config, "github_api"):
+        return "none", "none"
+
+    if get_setting(config, "github_api") == "read-write":
+        return "unrestricted", "unrestricted"
+
+    # Default: whitelisted for both — repo-scoped reads, allowlisted mutations
+    return "whitelisted", "whitelisted"
+
+
+def _describe_graphql_mode(graphql_read: str, graphql_write: str) -> str:
+    """Human-readable description of GraphQL access mode."""
+    if graphql_read == "whitelisted" and graphql_write == "whitelisted":
+        return "repo-scoped (allowlisted GraphQL)"
+    if graphql_read == "unrestricted" and graphql_write == "unrestricted":
+        return "unrestricted GraphQL read-write"
+    if graphql_read == "unrestricted" and graphql_write == "none":
+        return "unrestricted GraphQL read-only"
+    if graphql_read == "none" and graphql_write == "none":
+        return "git only"
+    return f"GraphQL read={graphql_read}, write={graphql_write}"
 
 
 def _wait_for_proxy_device(runtime: ContainerRuntime, container: str, port: int):
@@ -168,6 +200,7 @@ def setup_auth_proxy(
     from .auth_proxy import generate_auth_token
 
     level = _resolve_access_level(config or {}, gh_enabled)
+    graphql_read, graphql_write = _resolve_graphql_config(config or {}, gh_enabled)
 
     port = _ensure_auth_proxy_running()
     if not port:
@@ -177,7 +210,14 @@ def setup_auth_proxy(
         return False
 
     # Generate per-container token with appropriate access level
-    token = generate_auth_token(container, owner, repo, level=level)
+    token = generate_auth_token(
+        container,
+        owner,
+        repo,
+        level=level,
+        graphql_read=graphql_read,
+        graphql_write=graphql_write,
+    )
 
     # Add Incus proxy device: expose host TCP port into container
     # On macOS (Colima), need to use the host IP from the VM's perspective
@@ -234,11 +274,8 @@ def setup_auth_proxy(
         _setup_gh_proxy(runtime, container, token, connect_addr, machine_readable)
 
     if not machine_readable:
-        level_desc = {1: "git only", 2: "REST read-only", 3: "gh read-only", 4: "gh read-write"}
-        detail(
-            f"GitHub auth proxy configured"
-            f" (scoped to {owner}/{repo}, level {level}: {level_desc.get(level, '?')})."
-        )
+        mode_desc = _describe_graphql_mode(graphql_read, graphql_write)
+        detail(f"GitHub auth proxy configured (scoped to {owner}/{repo}, {mode_desc}).")
     return True
 
 
@@ -316,6 +353,7 @@ def setup_auth_proxy_remote(
     from .tunnel import start_tunnel
 
     level = _resolve_access_level(config or {}, gh_enabled)
+    graphql_read, graphql_write = _resolve_graphql_config(config or {}, gh_enabled)
 
     port = _ensure_auth_proxy_running()
     if not port:
@@ -331,7 +369,14 @@ def setup_auth_proxy_remote(
         return False
 
     # Generate per-container token with appropriate access level
-    token = generate_auth_token(container, owner, repo, level=level)
+    token = generate_auth_token(
+        container,
+        owner,
+        repo,
+        level=level,
+        graphql_read=graphql_read,
+        graphql_write=graphql_write,
+    )
 
     # Add Incus proxy device on the remote: tunneled port → container
     from .tunnel import TUNNEL_REMOTE_PORT
@@ -398,11 +443,9 @@ def setup_auth_proxy_remote(
         _setup_gh_proxy_remote(remote_host, container, token, connect_addr, machine_readable)
 
     if not machine_readable:
-        level_desc = {1: "git only", 2: "REST read-only", 3: "gh read-only", 4: "gh read-write"}
+        mode_desc = _describe_graphql_mode(graphql_read, graphql_write)
         detail(
-            f"GitHub auth proxy configured"
-            f" (scoped to {owner}/{repo}, level {level}: {level_desc.get(level, '?')}"
-            f", via SSH tunnel)."
+            f"GitHub auth proxy configured (scoped to {owner}/{repo}, {mode_desc}, via SSH tunnel)."
         )
     return True
 

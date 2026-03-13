@@ -141,16 +141,29 @@ logger = logging.getLogger("bubble.auth_proxy")
 
 
 def generate_auth_token(
-    container_name: str, owner: str, repo: str, level: int = DEFAULT_LEVEL
+    container_name: str,
+    owner: str,
+    repo: str,
+    level: int = DEFAULT_LEVEL,
+    graphql_read: str = "whitelisted",
+    graphql_write: str = "whitelisted",
 ) -> str:
     """Generate an auth proxy token for a container.
 
-    The token maps to (container_name, owner, repo, level) — the proxy
-    uses this to validate requests and enforce the access level.
+    The token maps to (container_name, owner, repo, level, graphql_read,
+    graphql_write) — the proxy uses this to validate requests and enforce
+    the access policy.
     Uses file locking to prevent read-modify-write races.
     """
     return TokenStore(AUTH_PROXY_TOKENS).generate(
-        {"container": container_name, "owner": owner, "repo": repo, "level": level}
+        {
+            "container": container_name,
+            "owner": owner,
+            "repo": repo,
+            "level": level,
+            "graphql_read": graphql_read,
+            "graphql_write": graphql_write,
+        }
     )
 
 
@@ -420,6 +433,31 @@ def _parse_graphql_op_type(query: str) -> str | None:
     return "query"
 
 
+def _resolve_graphql_policies(info: dict) -> tuple[str, str]:
+    """Extract GraphQL policies from token info, with backward compat.
+
+    Returns (graphql_read, graphql_write).
+    For tokens created before the graphql_read/graphql_write fields
+    existed, derives policies from the legacy level field.
+    """
+    from .graphql_validator import VALID_GRAPHQL_POLICIES
+
+    graphql_read = info.get("graphql_read")
+    graphql_write = info.get("graphql_write")
+
+    if graphql_read in VALID_GRAPHQL_POLICIES and graphql_write in VALID_GRAPHQL_POLICIES:
+        return graphql_read, graphql_write
+
+    # Backward compat: derive from level
+    level = info.get("level", LEVEL_GIT_ONLY)
+    if level < LEVEL_GH_READ:
+        return "none", "none"
+    elif level < LEVEL_GH_READWRITE:
+        return "unrestricted", "none"
+    else:
+        return "unrestricted", "unrestricted"
+
+
 def classify_graphql(body: bytes) -> tuple[str | None, str | None]:
     """Classify a GraphQL request body.
 
@@ -605,6 +643,10 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
     rate_limiter: ProxyRateLimiter
     token_refresher: GitHubTokenRefresher
 
+    # Thread-safe caches for pre-flight queries (shared across handler instances)
+    _repo_node_id_cache: dict[tuple[str, str], str] = {}
+    _repo_node_id_lock = threading.Lock()
+
     def log_message(self, format, *args):
         """Route HTTP server logs to our logger."""
         logger.info(format, *args)
@@ -663,6 +705,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         owner = info["owner"]
         repo = info["repo"]
         level = info.get("level", LEVEL_GIT_ONLY)
+        graphql_read, graphql_write = _resolve_graphql_policies(info)
 
         # Rate limit
         if not self.rate_limiter.check(container):
@@ -689,7 +732,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         # Route: GraphQL (/graphql)
         if path == "/graphql" and method == "POST":
-            self._handle_graphql_request(body, container, owner, repo, level)
+            self._handle_graphql_request(body, container, owner, repo, graphql_read, graphql_write)
             return
 
         # Route: REST API (/repos/{owner}/{repo}/...)
@@ -756,32 +799,183 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             follow_redirects=(method in ("GET", "HEAD")),
         )
 
-    def _handle_graphql_request(self, body, container, owner, repo, level):
-        """Handle GraphQL requests (level 3+)."""
-        if level < LEVEL_GH_READ:
-            self._send_error(403, "GraphQL access not enabled at this access level")
-            logger.info("BLOCKED POST /graphql container=%s reason=level_%d", container, level)
+    def _handle_graphql_request(self, body, container, owner, repo, graphql_read, graphql_write):
+        """Handle GraphQL requests with policy-based access control.
+
+        graphql_read/graphql_write: "whitelisted", "unrestricted", or "none".
+        """
+        if graphql_read == "none" and graphql_write == "none":
+            self._send_error(403, "GraphQL access not enabled")
+            logger.info("BLOCKED POST /graphql container=%s reason=graphql_disabled", container)
             return
 
         if not body:
             self._send_error(400, "Missing request body for GraphQL")
             return
 
-        op_type, error = classify_graphql(body)
+        # For unrestricted mode, use the simpler classify_graphql path
+        if graphql_read == "unrestricted" and graphql_write == "unrestricted":
+            op_type, error = classify_graphql(body)
+            if error:
+                self._send_error(400, f"GraphQL validation failed: {error}")
+                logger.info("BLOCKED POST /graphql container=%s reason=%s", container, error)
+                return
+            # Both unrestricted: allow any query or mutation
+            upstream_url = f"{GITHUB_API_URL}/graphql"
+            self._forward_to_github(
+                "POST", upstream_url, body, container, "/graphql", host=GITHUB_API_HOST
+            )
+            return
+
+        if graphql_read == "unrestricted" and graphql_write == "none":
+            # Legacy level 3 behavior: unrestricted reads, no writes
+            op_type, error = classify_graphql(body)
+            if error:
+                self._send_error(400, f"GraphQL validation failed: {error}")
+                logger.info("BLOCKED POST /graphql container=%s reason=%s", container, error)
+                return
+            if op_type == "mutation":
+                self._send_error(403, "Mutations not allowed at this access level")
+                logger.info(
+                    "BLOCKED POST /graphql container=%s reason=mutation_rejected", container
+                )
+                return
+            upstream_url = f"{GITHUB_API_URL}/graphql"
+            self._forward_to_github(
+                "POST", upstream_url, body, container, "/graphql", host=GITHUB_API_HOST
+            )
+            return
+
+        # Whitelisted mode: full structural + semantic validation
+        from .graphql_validator import (
+            _count_operations,
+            _tokenize,
+            parse_graphql,
+            validate_read,
+            validate_structure,
+            validate_write,
+        )
+
+        parsed, error = parse_graphql(body)
         if error:
             self._send_error(400, f"GraphQL validation failed: {error}")
             logger.info("BLOCKED POST /graphql container=%s reason=%s", container, error)
             return
 
-        if op_type == "mutation" and level < LEVEL_GH_READWRITE:
-            self._send_error(403, "Mutations not allowed at this access level")
-            logger.info("BLOCKED POST /graphql container=%s reason=mutation_rejected", container)
+        # Count operations for structural validation
+        tokens = _tokenize(parsed.query_str)
+        op_count = _count_operations(tokens)
+
+        # Structural validation
+        error = validate_structure(parsed, op_count=op_count)
+        if error:
+            self._send_error(403, f"GraphQL structural validation failed: {error}")
+            logger.info("BLOCKED POST /graphql container=%s reason=structural_%s", container, error)
             return
+
+        if parsed.op_type == "mutation":
+            if graphql_write == "none":
+                self._send_error(403, "Mutations not allowed")
+                logger.info(
+                    "BLOCKED POST /graphql container=%s reason=mutation_rejected", container
+                )
+                return
+
+            if graphql_write == "whitelisted":
+                error = validate_write(
+                    parsed,
+                    owner,
+                    repo,
+                    preflight_fn=self._preflight_check,
+                    repo_node_id_fn=self._get_repo_node_id,
+                )
+                if error:
+                    self._send_error(403, f"GraphQL mutation validation failed: {error}")
+                    logger.info(
+                        "BLOCKED POST /graphql container=%s mutation=%s reason=%s",
+                        container,
+                        parsed.top_level_fields[0].name if parsed.top_level_fields else "?",
+                        error,
+                    )
+                    return
+            # "unrestricted" write: structural validation already passed
+        else:
+            # Query
+            if graphql_read == "none":
+                self._send_error(403, "Queries not allowed")
+                logger.info("BLOCKED POST /graphql container=%s reason=query_rejected", container)
+                return
+
+            if graphql_read == "whitelisted":
+                error = validate_read(
+                    parsed,
+                    owner,
+                    repo,
+                    preflight_fn=self._preflight_check,
+                )
+                if error:
+                    self._send_error(403, f"GraphQL read validation failed: {error}")
+                    logger.info("BLOCKED POST /graphql container=%s reason=%s", container, error)
+                    return
+            # "unrestricted" read: structural validation already passed
 
         upstream_url = f"{GITHUB_API_URL}/graphql"
         self._forward_to_github(
             "POST", upstream_url, body, container, "/graphql", host=GITHUB_API_HOST
         )
+
+    def _github_graphql_query(self, query: str, variables: dict) -> dict:
+        """Make a GraphQL query to GitHub API. Returns parsed JSON response.
+
+        Used for pre-flight ownership checks and repo node ID resolution.
+        """
+        github_token = self.token_refresher.token
+        body = json.dumps({"query": query, "variables": variables}).encode()
+
+        req = Request(f"{GITHUB_API_URL}/graphql", data=body, method="POST")
+        req.add_header("Authorization", f"token {github_token}")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Host", GITHUB_API_HOST)
+
+        ctx = ssl.create_default_context()
+        opener = build_opener(ProxyHandler({}), HTTPSHandler(context=ctx))
+        resp = opener.open(req, timeout=30)
+        return json.loads(resp.read())
+
+    def _get_repo_node_id(self, owner: str, repo: str) -> str | None:
+        """Get the GitHub node ID for a repository. Cached."""
+        key = (owner.lower(), repo.lower())
+        with self._repo_node_id_lock:
+            cached = self._repo_node_id_cache.get(key)
+            if cached is not None:
+                return cached
+
+        from .graphql_validator import REPO_ID_QUERY
+
+        try:
+            data = self._github_graphql_query(REPO_ID_QUERY, {"owner": owner, "name": repo})
+            node_id = data.get("data", {}).get("repository", {}).get("id")
+            if node_id:
+                with self._repo_node_id_lock:
+                    self._repo_node_id_cache[key] = node_id
+            return node_id
+        except Exception:
+            logger.info("PREFLIGHT repo_node_id failed for %s/%s", owner, repo)
+            return None
+
+    def _preflight_check(self, node_id: str) -> str | None:
+        """Check which repo a node belongs to.
+
+        Returns "owner/repo" string or None on failure.
+        """
+        from .graphql_validator import PREFLIGHT_QUERY, extract_repo_from_preflight
+
+        try:
+            data = self._github_graphql_query(PREFLIGHT_QUERY, {"id": node_id})
+            return extract_repo_from_preflight(data)
+        except Exception:
+            logger.info("PREFLIGHT check failed for node %s", node_id)
+            return None
 
     def _forward_to_github(
         self,
