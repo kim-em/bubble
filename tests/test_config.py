@@ -1,5 +1,7 @@
 """Tests for configuration management."""
 
+import pytest
+
 from bubble.config import _deep_merge, is_first_run, load_raw_config, repo_short_name
 
 
@@ -51,22 +53,24 @@ def test_save_load_roundtrip(tmp_data_dir):
     assert reloaded["runtime"]["colima_cpu"] == 42
 
 
-def test_default_config_has_claude_credentials_true(tmp_data_dir):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_default_config_has_provider_credentials_true(tmp_data_dir, provider):
     from bubble.config import load_config
 
     config = load_config()
-    assert config["claude"]["credentials"] is True
+    assert config[provider]["credentials"] is True
 
 
-def test_claude_credentials_roundtrip(tmp_data_dir):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_provider_credentials_roundtrip(tmp_data_dir, provider):
     from bubble.config import load_config, save_config
 
     config = load_config()
-    config["claude"]["credentials"] = True
+    config[provider]["credentials"] = True
     save_config(config)
 
     reloaded = load_config()
-    assert reloaded["claude"]["credentials"] is True
+    assert reloaded[provider]["credentials"] is True
 
 
 def test_ai_credentials_on_cli(tmp_data_dir):
@@ -221,9 +225,9 @@ def test_load_raw_config_fresh_install(tmp_data_dir):
     assert "claude" in raw  # defaults are written to file
 
 
-def test_load_raw_config_legacy_no_claude(tmp_data_dir):
-    """Legacy config file without [claude] section should show no explicit setting."""
-    # Write a legacy config without [claude] section
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_load_raw_config_legacy_no_provider(tmp_data_dir, provider):
+    """Legacy config file without [provider] section should show no explicit setting."""
     import tomli_w
 
     import bubble.config as config
@@ -236,48 +240,10 @@ def test_load_raw_config_legacy_no_claude(tmp_data_dir):
         tomli_w.dump(legacy, f)
 
     raw = load_raw_config()
-    assert "claude" not in raw
+    assert provider not in raw
     # But merged config should still have defaults
     merged = config.load_config()
-    assert merged["claude"]["credentials"] is True
-
-
-def test_default_config_has_codex_credentials_true(tmp_data_dir):
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["codex"]["credentials"] is True
-
-
-def test_codex_credentials_roundtrip(tmp_data_dir):
-    from bubble.config import load_config, save_config
-
-    config = load_config()
-    config["codex"]["credentials"] = True
-    save_config(config)
-
-    reloaded = load_config()
-    assert reloaded["codex"]["credentials"] is True
-
-
-def test_load_raw_config_legacy_no_codex(tmp_data_dir):
-    """Legacy config file without [codex] section should show no explicit setting."""
-    import tomli_w
-
-    import bubble.config as config
-
-    legacy = {
-        "editor": "vscode",
-        "runtime": {"backend": "incus"},
-    }
-    with open(config.CONFIG_FILE, "wb") as f:
-        tomli_w.dump(legacy, f)
-
-    raw = load_raw_config()
-    assert "codex" not in raw
-    # But merged config should still have defaults
-    merged = config.load_config()
-    assert merged["codex"]["credentials"] is True
+    assert merged[provider]["credentials"] is True
 
 
 def test_config_show_defaults(tmp_data_dir):

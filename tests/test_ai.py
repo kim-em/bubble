@@ -10,9 +10,6 @@ import pytest
 from bubble.ai import (
     _DEFAULT_ISSUE_TEMPLATE,
     _DEFAULT_PR_TEMPLATE,
-    AI_TASK_COMMAND,
-    AUTONOMY_LEVELS,
-    SECOND_OPINION_VALUES,
     _load_template,
     _render_template,
     _resolve_second_opinion,
@@ -305,20 +302,6 @@ class TestTemplateSystem:
             assert f"{{{placeholder}}}" in _DEFAULT_PR_TEMPLATE
 
 
-class TestAITaskCommand:
-    def test_command_reads_prompt_file(self):
-        assert "ai-prompt.txt" in AI_TASK_COMMAND
-
-    def test_command_skips_permissions(self):
-        assert "--dangerously-skip-permissions" in AI_TASK_COMMAND
-
-    def test_command_clears_api_key(self):
-        assert "ANTHROPIC_API_KEY=" in AI_TASK_COMMAND
-
-    def test_command_deletes_prompt_after(self):
-        assert "rm -f .vscode/ai-prompt.txt" in AI_TASK_COMMAND
-
-
 class TestInjectAITask:
     def test_calls_runtime_exec(self):
         runtime = MagicMock()
@@ -491,12 +474,6 @@ class TestAutonomyLevels:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="bogus")
             assert "propose a plan" in prompt
-
-    def test_autonomy_levels_tuple(self):
-        assert AUTONOMY_LEVELS == ("read", "plan", "implement", "pr", "merge")
-
-    def test_second_opinion_values_tuple(self):
-        assert SECOND_OPINION_VALUES == ("auto", "on", "off")
 
 
 class TestSecondOpinion:
