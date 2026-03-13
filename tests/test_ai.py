@@ -1,6 +1,8 @@
 """Tests for the AI provider integration module."""
 
+import json
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +19,7 @@ from bubble.ai import (
     generate_issue_prompt,
     generate_pr_prompt,
     inject_ai_task,
+    setup_claude_settings,
 )
 from bubble.cli import _resolve_ai_prompt_locally
 
@@ -327,8 +330,8 @@ class TestInjectAITask:
         # 3. create/update tasks.json
         # 4. configure settings.json
         # 5. add to git exclude
-        # 6. pre-trust in .claude.json (default provider is claude)
-        assert runtime.exec.call_count == 6
+        # (Claude trust is now handled by setup_claude_settings, not here)
+        assert runtime.exec.call_count == 5
 
     def test_all_calls_use_su_user(self):
         runtime = MagicMock()
@@ -342,24 +345,12 @@ class TestInjectAITask:
             assert cmd[1] == "-"
             assert cmd[2] == "user"
 
-    def test_trust_script_sets_onboarding_fields(self):
-        runtime = MagicMock()
-        inject_ai_task(runtime, "c1", "/home/user/project", "prompt")
-
-        # The last exec call is the trust script
-        trust_call = runtime.exec.call_args_list[-1]
-        script = trust_call[0][1][-1]  # the -c argument
-        assert "hasCompletedOnboarding" in script
-        assert "numStartups" in script
-        assert "isinstance" in script  # defensive coercion
-
-    def test_codex_provider_skips_trust(self):
-        """When preferred provider is codex, no Claude trust script is run."""
+    def test_codex_provider_same_call_count(self):
+        """Codex and Claude now have the same call count (trust moved out)."""
         runtime = MagicMock()
         config = {"ai": {"preferred": "codex"}}
         inject_ai_task(runtime, "container-1", "/home/user/project", "Do something", config=config)
 
-        # Without the Claude trust script, should be 5 calls (not 6)
         assert runtime.exec.call_count == 5
 
     def test_codex_provider_uses_codex_command(self):
@@ -573,6 +564,136 @@ class TestSecondOpinion:
             assert _resolve_second_opinion("auto") is True
         with patch("shutil.which", return_value=None):
             assert _resolve_second_opinion("auto") is False
+
+
+class TestSetupClaudeSettings:
+    """Tests for setup_claude_settings — pre-populating ~/.claude.json."""
+
+    def test_writes_claude_json(self):
+        """Should exec a command to write ~/.claude.json in the container."""
+        runtime = MagicMock()
+        with patch("bubble.ai.Path.home") as mock_home:
+            mock_home.return_value = Path("/nonexistent")
+            setup_claude_settings(runtime, "container-1", "/home/user/project")
+
+        assert runtime.exec.call_count == 1
+        call = runtime.exec.call_args_list[0]
+        assert call[0][0] == "container-1"
+        cmd = call[0][1]
+        assert cmd[0] == "su"
+        assert "~/.claude.json" in cmd[-1]
+
+    def test_sets_onboarding_complete(self):
+        """Should set hasCompletedOnboarding=True even without host file."""
+        runtime = MagicMock()
+        with patch("bubble.ai.Path.home") as mock_home:
+            mock_home.return_value = Path("/nonexistent")
+            setup_claude_settings(runtime, "c1", "/home/user/project")
+
+        script = runtime.exec.call_args_list[0][0][1][-1]
+        assert "hasCompletedOnboarding" in script
+
+    def test_copies_allowlisted_settings(self, tmp_path):
+        """Should copy only allowlisted settings from host ~/.claude.json."""
+        host_config = {"theme": "dark", "hasCompletedOnboarding": True, "numStartups": 5}
+        host_file = tmp_path / ".claude.json"
+        host_file.write_text(json.dumps(host_config))
+
+        runtime = MagicMock()
+        with patch("bubble.ai.Path.home", return_value=tmp_path):
+            setup_claude_settings(runtime, "c1", "/home/user/project")
+
+        script = runtime.exec.call_args_list[0][0][1][-1]
+        # Theme should be in the written JSON
+        assert "dark" in script
+
+    def test_excludes_non_allowlisted_keys(self, tmp_path):
+        """Should NOT copy unknown/sensitive keys from host config."""
+        host_config = {
+            "theme": "dark",
+            "hasCompletedOnboarding": True,
+            "mcpServers": {"dangerous": {}},
+            "secretApiKey": "sk-secret",
+            "projects": {"/host/path": {"hasTrustDialogAccepted": True}},
+        }
+        host_file = tmp_path / ".claude.json"
+        host_file.write_text(json.dumps(host_config))
+
+        runtime = MagicMock()
+        with patch("bubble.ai.Path.home", return_value=tmp_path):
+            setup_claude_settings(runtime, "c1", "/home/user/myproject")
+
+        script = runtime.exec.call_args_list[0][0][1][-1]
+        # Allowlisted keys present
+        assert "dark" in script
+        # Non-allowlisted keys absent
+        assert "mcpServers" not in script
+        assert "secretApiKey" not in script
+        assert "sk-secret" not in script
+        # Host project paths absent, container project present
+        assert "/host/path" not in script
+        assert "/home/user/myproject" in script
+
+    def test_trusts_project_dir(self, tmp_path):
+        """Should pre-trust the container's project directory."""
+        runtime = MagicMock()
+        with patch("bubble.ai.Path.home", return_value=tmp_path):
+            setup_claude_settings(runtime, "c1", "/home/user/repo")
+
+        script = runtime.exec.call_args_list[0][0][1][-1]
+        assert "/home/user/repo" in script
+        assert "hasTrustDialogAccepted" in script
+
+    def test_handles_corrupt_host_file(self, tmp_path):
+        """Should handle corrupt host ~/.claude.json gracefully."""
+        host_file = tmp_path / ".claude.json"
+        host_file.write_text("not valid json{{{")
+
+        runtime = MagicMock()
+        with patch("bubble.ai.Path.home", return_value=tmp_path):
+            setup_claude_settings(runtime, "c1", "/home/user/project")
+
+        # Should still succeed with default settings
+        assert runtime.exec.call_count == 1
+        script = runtime.exec.call_args_list[0][0][1][-1]
+        assert "hasCompletedOnboarding" in script
+
+    def test_increments_num_startups(self, tmp_path):
+        """Should increment numStartups from host value."""
+        host_config = {"numStartups": 10}
+        host_file = tmp_path / ".claude.json"
+        host_file.write_text(json.dumps(host_config))
+
+        runtime = MagicMock()
+        with patch("bubble.ai.Path.home", return_value=tmp_path):
+            setup_claude_settings(runtime, "c1", "/home/user/project")
+
+        script = runtime.exec.call_args_list[0][0][1][-1]
+        assert '"numStartups": 11' in script
+
+    def test_handles_non_dict_json(self, tmp_path):
+        """Should handle ~/.claude.json containing a non-dict (list, string, null)."""
+        for content in ["[]", '"hello"', "null", "42"]:
+            host_file = tmp_path / ".claude.json"
+            host_file.write_text(content)
+
+            runtime = MagicMock()
+            with patch("bubble.ai.Path.home", return_value=tmp_path):
+                setup_claude_settings(runtime, "c1", "/home/user/project")
+
+            assert runtime.exec.call_count == 1
+            script = runtime.exec.call_args_list[0][0][1][-1]
+            assert "hasCompletedOnboarding" in script
+
+    def test_exec_failure_is_best_effort(self):
+        """Should not raise if runtime.exec fails — just warn."""
+        runtime = MagicMock()
+        runtime.exec.side_effect = RuntimeError("container gone")
+
+        with patch("bubble.ai.Path.home") as mock_home:
+            mock_home.return_value = Path("/nonexistent")
+            # Should NOT raise
+            setup_claude_settings(runtime, "c1", "/home/user/project")
 
 
 class TestCustomTemplateBackcompat:

@@ -42,6 +42,11 @@ def finalize_bubble(
     if hook:
         hook.post_clone(runtime, name, project_dir)
 
+    # Pre-populate Claude Code settings to skip the first-run wizard
+    from .ai import setup_claude_settings
+
+    setup_claude_settings(runtime, name, project_dir)
+
     # Inject AI task if prompt is provided
     if ai_prompt:
         from .ai import inject_ai_task

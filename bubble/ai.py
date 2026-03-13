@@ -10,6 +10,7 @@ import json
 import re
 import shlex
 import subprocess
+from pathlib import Path
 
 from .config import DATA_DIR
 from .runtime.base import ContainerRuntime
@@ -291,6 +292,68 @@ def generate_pr_prompt(owner: str, repo: str, pr_num: str, branch: str) -> str |
     )
 
 
+# Known-safe keys to copy from the host's ~/.claude.json.
+# Only cosmetic/UX settings — no credentials, MCP config, or host-specific paths.
+_CLAUDE_JSON_SAFE_KEYS = frozenset(
+    {
+        "theme",
+        "hasCompletedOnboarding",
+        "numStartups",
+        "preferredNotifChannel",
+        "autoUpdaterStatus",
+    }
+)
+
+
+def setup_claude_settings(
+    runtime: ContainerRuntime,
+    container: str,
+    project_dir: str,
+):
+    """Pre-populate ~/.claude.json in the container to skip the first-run wizard.
+
+    Copies allowlisted settings (theme, onboarding state, etc.) from the host's
+    ~/.claude.json if it exists. Always ensures hasCompletedOnboarding=True
+    and pre-trusts the project directory. This runs for ALL bubbles, not just
+    those with AI task injection.
+
+    Best-effort: failures are logged but do not abort bubble creation.
+    """
+    host_claude_json = Path.home() / ".claude.json"
+
+    # Extract only allowlisted keys from host settings
+    settings: dict = {}
+    if host_claude_json.is_file():
+        try:
+            host_data = json.loads(host_claude_json.read_text())
+            if isinstance(host_data, dict):
+                settings = {k: v for k, v in host_data.items() if k in _CLAUDE_JSON_SAFE_KEYS}
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # Ensure onboarding is marked complete
+    settings["hasCompletedOnboarding"] = True
+    n = settings.get("numStartups", 0)
+    settings["numStartups"] = (n if isinstance(n, int) else 0) + 1
+
+    # Pre-trust the project directory
+    settings["projects"] = {
+        project_dir: {"hasTrustDialogAccepted": True, "allowedTools": []},
+    }
+
+    # Write to container (best-effort — don't abort bubble creation on failure)
+    settings_json = shlex.quote(json.dumps(settings, indent=2))
+    try:
+        runtime.exec(
+            container,
+            ["su", "-", "user", "-c", f"printf '%s' {settings_json} > ~/.claude.json"],
+        )
+    except Exception:
+        from .output import detail
+
+        detail("Warning: could not pre-populate Claude Code settings.", err=True)
+
+
 def inject_ai_task(
     runtime: ContainerRuntime,
     container: str,
@@ -384,24 +447,6 @@ def inject_ai_task(
         f"done"
     )
     runtime.exec(container, ["su", "-", "user", "-c", exclude_script])
-
-    # Pre-trust the project directory and skip onboarding in provider config
-    if provider == "claude":
-        trust_script = (
-            f'python3 -c "'
-            f"import json,os; "
-            f"p=os.path.expanduser('~/.claude.json'); "
-            f"d=json.load(open(p)) if os.path.exists(p) else {{}}; "
-            f"d['hasCompletedOnboarding']=True; "
-            f"n=d.get('numStartups',0); d['numStartups']=(n if isinstance(n,int) else 0)+1; "
-            f"d.setdefault('projects',{{}}); "
-            f"proj=d['projects'].setdefault({shlex.quote(project_dir)!r},{{}}); "  # noqa: E501
-            f"proj['hasTrustDialogAccepted']=True; "
-            f"proj.setdefault('allowedTools',[]); "
-            f"json.dump(d,open(p,'w'),indent=2)"
-            f'"'
-        )
-        runtime.exec(container, ["su", "-", "user", "-c", trust_script])
 
     if not quiet:
         from .output import detail
