@@ -31,4 +31,14 @@ http_unix_socket: /bubble/gh-proxy.sock
 GHCONF
 chown 1001:1001 /etc/bubble/gh/config.yml
 
+# Tell gh that github.com is a known host.  Without this, overriding
+# GH_CONFIG_DIR wipes the default host list and gh can't resolve repos
+# from git remotes ("none of the git remotes ... point to a known GitHub
+# host").  GH_TOKEN handles auth; this just registers the host.
+cat > /etc/bubble/gh/hosts.yml <<'GHHOSTS'
+github.com:
+  git_protocol: https
+GHHOSTS
+chown 1001:1001 /etc/bubble/gh/hosts.yml
+
 echo "gh installed: $(gh --version 2>/dev/null | head -1 || echo 'unknown version')"
