@@ -543,6 +543,56 @@ class _NoRedirectHandler(BaseHandler):
     http_error_308 = http_error_301
 
 
+class GitHubTokenRefresher:
+    """Thread-safe GitHub token with automatic refresh on 401.
+
+    The ``gh`` CLI stores OAuth tokens (``gho_*``) that expire after ~8 hours.
+    Running ``gh auth token`` triggers an automatic refresh via the stored
+    refresh token.  This class re-fetches the token when prompted, with a
+    cooldown to avoid hammering ``gh`` on persistent auth failures.
+    """
+
+    _MIN_REFRESH_INTERVAL = 30  # seconds between refresh attempts
+
+    def __init__(self, initial_token: str):
+        self._token = initial_token
+        self._lock = threading.Lock()
+        self._last_refresh = 0.0
+
+    @property
+    def token(self) -> str:
+        return self._token
+
+    def refresh(self) -> str:
+        """Re-fetch the token from ``gh auth token``.
+
+        Returns the (possibly new) token.  Skips the subprocess call if
+        a refresh was attempted within the last ``_MIN_REFRESH_INTERVAL``
+        seconds to avoid contention when GitHub returns persistent 401s
+        for reasons other than token expiry.
+        """
+        import time
+
+        with self._lock:
+            now = time.monotonic()
+            if now - self._last_refresh < self._MIN_REFRESH_INTERVAL:
+                return self._token
+            self._last_refresh = now
+
+        # Run outside the lock — subprocess may block
+        try:
+            new_token = _get_github_token()
+        except RuntimeError:
+            return self._token
+
+        with self._lock:
+            old = self._token
+            self._token = new_token
+            if new_token != old:
+                logger.info("GitHub token refreshed")
+        return new_token
+
+
 class AuthProxyHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the git auth proxy."""
 
@@ -552,7 +602,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
     # Class-level references set by the server
     token_registry: AuthTokenRegistry
     rate_limiter: ProxyRateLimiter
-    github_token: str
+    token_refresher: GitHubTokenRefresher
 
     def log_message(self, format, *args):
         """Route HTTP server logs to our logger."""
@@ -733,9 +783,18 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         )
 
     def _forward_to_github(
-        self, method, upstream_url, body, container, log_path, host, follow_redirects=False
+        self,
+        method,
+        upstream_url,
+        body,
+        container,
+        log_path,
+        host,
+        follow_redirects=False,
+        _retried=False,
     ):
         """Forward a validated request to GitHub and return the response."""
+        github_token = self.token_refresher.token
         req = Request(upstream_url, data=body, method=method)
 
         # Copy relevant headers, strip auth/proxy headers
@@ -745,8 +804,16 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                 continue
             req.add_header(header, value)
 
-        # Add real authorization
-        req.add_header("Authorization", f"token {self.github_token}")
+        # Add real authorization.
+        # Git smart HTTP on github.com requires Basic auth for OAuth tokens;
+        # the API (api.github.com) accepts "token <token>" directly.
+        if host == GITHUB_HOST:
+            import base64
+
+            cred = base64.b64encode(f"x-access-token:{github_token}".encode()).decode()
+            req.add_header("Authorization", f"Basic {cred}")
+        else:
+            req.add_header("Authorization", f"token {github_token}")
         req.add_header("Host", host)
 
         # Forward to GitHub — pinned TLS, no proxy, no redirects
@@ -785,6 +852,30 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                     e.code,
                 )
                 return
+            # On 401 from GitHub, the OAuth token may have expired.
+            # Refresh via `gh auth token` (which triggers OAuth refresh)
+            # and retry the request once.
+            if e.code == 401 and not _retried:
+                e.read()  # drain response body before retry
+                new_token = self.token_refresher.refresh()
+                if new_token != github_token:
+                    logger.info(
+                        "RETRY %s %s container=%s after token refresh",
+                        method,
+                        log_path,
+                        container,
+                    )
+                    self._forward_to_github(
+                        method,
+                        upstream_url,
+                        body,
+                        container,
+                        log_path,
+                        host,
+                        follow_redirects,
+                        _retried=True,
+                    )
+                    return
             # Pass through 4xx errors from GitHub (auth failures, not found, etc.)
             if 400 <= e.code < 500:
                 self.send_response(e.code)
@@ -809,8 +900,8 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                 )
                 return
             error_msg = str(e)
-            if self.github_token in error_msg:
-                error_msg = error_msg.replace(self.github_token, "[REDACTED]")
+            if github_token in error_msg:
+                error_msg = error_msg.replace(github_token, "[REDACTED]")
             self._send_error(502, f"Upstream error: {error_msg}")
             logger.info(
                 "UPSTREAM_ERROR %s %s container=%s error=%s",
@@ -822,8 +913,8 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             return
         except Exception as e:
             error_msg = str(e)
-            if self.github_token in error_msg:
-                error_msg = error_msg.replace(self.github_token, "[REDACTED]")
+            if github_token in error_msg:
+                error_msg = error_msg.replace(github_token, "[REDACTED]")
             self._send_error(502, f"Upstream error: {error_msg}")
             logger.info(
                 "UPSTREAM_ERROR %s %s container=%s error=%s",
@@ -858,8 +949,9 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             status, headers, body = _follow_redirect(location, MAX_REDIRECT_HOPS, method=method)
         except (ValueError, HTTPError) as e:
             error_msg = str(e)
-            if self.github_token in error_msg:
-                error_msg = error_msg.replace(self.github_token, "[REDACTED]")
+            current_token = self.token_refresher.token
+            if current_token in error_msg:
+                error_msg = error_msg.replace(current_token, "[REDACTED]")
             self._send_error(502, f"Redirect error: {error_msg}")
             logger.info("REDIRECT_ERROR %s container=%s error=%s", log_path, container, error_msg)
             return
@@ -978,7 +1070,21 @@ def _setup_logging():
 
 
 def _get_github_token() -> str:
-    """Get the host's GitHub token for proxy use."""
+    """Get the host's GitHub token for proxy use.
+
+    Runs ``gh auth status`` first to trigger an OAuth token refresh if
+    the stored access token has expired, then reads the (now-current)
+    token via ``gh auth token``.
+    """
+    import subprocess
+
+    # Trigger OAuth refresh (gh auth token alone returns the stale token)
+    subprocess.run(
+        ["gh", "auth", "status"],
+        capture_output=True,
+        timeout=15,
+    )
+
     from .github_token import get_host_gh_token
 
     token = get_host_gh_token()
@@ -1004,8 +1110,9 @@ def run_daemon(port: int = 0):
         config = load_config()
         port = config.get("auth_proxy", {}).get("port", DEFAULT_PORT)
 
-    # Get GitHub token
+    # Get GitHub token (refreshed automatically on 401)
     github_token = _get_github_token()
+    token_refresher = GitHubTokenRefresher(github_token)
 
     token_registry = AuthTokenRegistry()
     rate_limiter = ProxyRateLimiter()
@@ -1013,15 +1120,23 @@ def run_daemon(port: int = 0):
     # Configure the handler class
     AuthProxyHandler.token_registry = token_registry
     AuthProxyHandler.rate_limiter = rate_limiter
-    AuthProxyHandler.github_token = github_token
+    AuthProxyHandler.token_refresher = token_refresher
 
-    server = ThreadedHTTPServer(("127.0.0.1", port), AuthProxyHandler)
+    # On macOS, Incus runs inside a Colima VM that reaches the host via a
+    # bridge IP (not 127.0.0.1).  We must bind to 0.0.0.0 because the
+    # bridge IP (e.g. 192.168.5.2) is not a local address on the host —
+    # it's the host's address as seen from the VM's network namespace.
+    # Per-container token auth prevents unauthorized access.
+    import platform
+
+    bind_addr = "0.0.0.0" if platform.system() == "Darwin" else "127.0.0.1"
+    server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
 
     AUTH_PROXY_PORT_FILE.write_text(str(port))
     os.chmod(str(AUTH_PROXY_PORT_FILE), 0o600)
 
-    logger.info("Auth proxy daemon started on 127.0.0.1:%d", port)
-    print(f"Auth proxy listening on 127.0.0.1:{port}")
+    logger.info("Auth proxy daemon started on %s:%d", bind_addr, port)
+    print(f"Auth proxy listening on {bind_addr}:{port}")
 
     try:
         server.serve_forever()

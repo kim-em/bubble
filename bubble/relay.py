@@ -322,11 +322,16 @@ def run_daemon():
         port = config.get("relay", {}).get("port", 7653)
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", port))
+        # On macOS, Incus runs inside a Colima VM that reaches the host
+        # via a bridge IP (not 127.0.0.1).  We must bind to 0.0.0.0
+        # because the bridge IP is not a local address on the host.
+        # Token auth prevents unauthorized access.
+        bind_addr = "0.0.0.0"
+        server.bind((bind_addr, port))
         server.listen(5)
         RELAY_PORT_FILE.write_text(str(port))
         os.chmod(str(RELAY_PORT_FILE), 0o600)
-        listen_addr = f"127.0.0.1:{port}"
+        listen_addr = f"{bind_addr}:{port}"
     else:
         # Remove stale socket
         RELAY_SOCK.unlink(missing_ok=True)

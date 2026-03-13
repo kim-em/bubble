@@ -123,6 +123,29 @@ def _resolve_access_level(config: dict, gh_enabled: bool) -> int:
     return DEFAULT_LEVEL  # LEVEL_GH_READ (3)
 
 
+def _wait_for_proxy_device(runtime: ContainerRuntime, container: str, port: int):
+    """Wait for a proxy device TCP listener to be ready inside a container.
+
+    Incus proxy devices may take a brief moment after add_device returns
+    before the TCP listener is actually accepting connections.  Does a
+    single retry-loop inside one ``incus exec`` call to avoid per-attempt
+    subprocess overhead.
+    """
+    try:
+        runtime.exec(
+            container,
+            [
+                "bash",
+                "-c",
+                f"for i in $(seq 1 20); do"
+                f" (echo > /dev/tcp/127.0.0.1/{port}) 2>/dev/null && exit 0;"
+                f" sleep 0.1; done; exit 1",
+            ],
+        )
+    except RuntimeError:
+        pass  # Best-effort; clone will produce a clearer error if still down
+
+
 def setup_auth_proxy(
     runtime: ContainerRuntime,
     container: str,
@@ -180,6 +203,11 @@ def setup_auth_proxy(
             detail(f"Warning: failed to add proxy device: {e}")
             detail("No GitHub auth configured (fail-closed).")
         return False
+
+    # Wait for the Incus proxy device TCP listener to be ready inside the
+    # container.  There's a small delay between add_device returning and
+    # the listener actually accepting connections.
+    _wait_for_proxy_device(runtime, container, _CONTAINER_PROXY_PORT)
 
     # Configure git inside the container to use the proxy
     q_token = shlex.quote(token)
