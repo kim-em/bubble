@@ -22,6 +22,7 @@ fi
 # Usage: python3 "$_VSCODE_EXT_HELPER" ext.id1 ext.id2 ...
 # Reads/updates extensions.json cooperatively (safe to call multiple times).
 _VSCODE_EXT_HELPER=$(mktemp)
+trap 'rm -f "$_VSCODE_EXT_HELPER"' EXIT
 cat > "$_VSCODE_EXT_HELPER" << 'PYEOF'
 import json, urllib.request, os, sys, subprocess, tempfile, glob, shutil
 
@@ -246,8 +247,6 @@ echo "Installing Claude Code VS Code extension..."
 python3 "$_VSCODE_EXT_HELPER" anthropic.claude-code
 
 fi  # end of Claude Code extension conditional
-
-rm -f "$_VSCODE_EXT_HELPER"
 
 # Fix ownership (script runs as root, extension dir must be owned by user)
 if [ -d /home/user/.vscode-server ]; then
