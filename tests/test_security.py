@@ -164,6 +164,12 @@ def test_get_github_level_migration_inject_on():
     assert get_github_level(config) == "direct"
 
 
+def test_get_github_level_migration_inject_overrides_auth_off():
+    """Token injection wins even when github_auth=off (matches old runtime behavior)."""
+    config = {"security": {"github_auth": "off", "github_token_inject": "on"}}
+    assert get_github_level(config) == "direct"
+
+
 def test_get_github_level_migration_api_off():
     """Old github_api=off (with auth on) maps to basic."""
     config = {"security": {"github_api": "off"}}
@@ -204,6 +210,16 @@ def test_warn_legacy_no_warning_for_new_config(capsys):
     from bubble.security import warn_legacy_github_settings
 
     config = {"security": {"github": "rest"}}
+    warn_legacy_github_settings(config)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_warn_legacy_suppressed_when_new_key_set(capsys):
+    """No warning when both legacy and new keys are present (partially migrated)."""
+    from bubble.security import warn_legacy_github_settings
+
+    config = {"security": {"github": "rest", "github_auth": "on"}}
     warn_legacy_github_settings(config)
     captured = capsys.readouterr()
     assert captured.err == ""

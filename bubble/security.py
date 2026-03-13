@@ -205,13 +205,15 @@ def _migrate_legacy_github(security: dict) -> str:
     api = security.get("github_api", "auto")
     inject = security.get("github_token_inject", "auto")
 
+    # Token injection overrides everything — in the old code, token
+    # injection was checked independently of github_auth, so
+    # {github_auth=off, github_token_inject=on} meant "direct".
+    if inject == "on":
+        return "direct"
+
     # If auth is off, nothing works
     if auth == "off":
         return "off"
-
-    # Token injection overrides everything
-    if inject == "on":
-        return "direct"
 
     # Auth is on/auto (effectively on). Check API level.
     if api == "off":
@@ -250,6 +252,12 @@ def warn_legacy_github_settings(config: dict, notices=None):
     security = config.get("security", {})
     old_keys = [k for k in _LEGACY_GITHUB_KEYS if k in security]
     if not old_keys:
+        return
+
+    # If the user has already set the new 'github' key explicitly,
+    # the legacy keys are inert — skip the warning to avoid suggesting
+    # overwriting the user's explicit new setting with a legacy-derived value.
+    if "github" in security:
         return
 
     migrated = _migrate_legacy_github(security)
