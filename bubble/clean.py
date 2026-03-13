@@ -70,7 +70,9 @@ REASONS=""
 EXPECTED=$(echo {q_repo} | tr '[:upper:]' '[:lower:]')
 
 # Check 1: no unexpected non-hidden items in home
-ITEMS=$(ls /home/user/ 2>/dev/null || true)
+# Filter out known infrastructure files (build.log from background builds,
+# bin/ from tool installation)
+ITEMS=$(ls /home/user/ 2>/dev/null | grep -v -x -e 'build.log' -e 'bin' || true)
 if [ -n "$EXPECTED" ]; then
   if [ "$(echo "$ITEMS" | tr '[:upper:]' '[:lower:]')" != "$EXPECTED" ]; then
     CLEAN=false
