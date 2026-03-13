@@ -28,12 +28,19 @@ import json, urllib.request, os, sys, subprocess, tempfile, glob, shutil
 EXTENSIONS_DIR = "/home/user/.vscode-server/extensions"
 EXTENSIONS = ["leanprover.lean4", "tamasfe.even-better-toml"]
 
+# Determine VS Code target platform from container architecture
+_arch = subprocess.check_output(["dpkg", "--print-architecture"]).decode().strip()
+TARGET_PLATFORM = {"amd64": "linux-x64", "arm64": "linux-arm64"}.get(_arch, "")
+
 manifest_entries = []
 
 for ext_id in EXTENSIONS:
     # Query marketplace for the latest VSIX download URL
+    criteria = [{"filterType": 7, "value": ext_id}]
+    if TARGET_PLATFORM:
+        criteria.append({"filterType": 8, "value": TARGET_PLATFORM})
     query = json.dumps({
-        "filters": [{"criteria": [{"filterType": 7, "value": ext_id}]}],
+        "filters": [{"criteria": criteria}],
         "flags": 914,
     }).encode()
     req = urllib.request.Request(
@@ -51,13 +58,23 @@ for ext_id in EXTENSIONS:
         print(f"Warning: could not query marketplace for {ext_id}: {e}", file=sys.stderr)
         continue
 
-    # Find the VSIX URL and version
+    # Find the VSIX URL and version, preferring our target platform
     vsix_url = None
     version = None
     for ext in data["results"][0]["extensions"]:
-        for ver in ext["versions"][:1]:
-            version = ver["version"]
-            for f in ver["files"]:
+        best_ver = None
+        for ver in ext["versions"]:
+            tp = ver.get("targetPlatform", "")
+            if tp == TARGET_PLATFORM:
+                best_ver = ver
+                break
+            if best_ver is None and (not tp or tp == "universal"):
+                best_ver = ver
+        if best_ver is None and ext.get("versions"):
+            best_ver = ext["versions"][0]
+        if best_ver:
+            version = best_ver["version"]
+            for f in best_ver["files"]:
                 if f["assetType"] == "Microsoft.VisualStudio.Services.VSIXPackage":
                     vsix_url = f["source"]
                     break
@@ -194,9 +211,16 @@ import json, urllib.request, os, sys, subprocess, tempfile, glob, shutil
 EXTENSIONS_DIR = "/home/user/.vscode-server/extensions"
 EXT_ID = "anthropic.claude-code"
 
+# Determine VS Code target platform from container architecture
+_arch = subprocess.check_output(["dpkg", "--print-architecture"]).decode().strip()
+TARGET_PLATFORM = {"amd64": "linux-x64", "arm64": "linux-arm64"}.get(_arch, "")
+
 # Query marketplace for the latest VSIX download URL
+criteria = [{"filterType": 7, "value": EXT_ID}]
+if TARGET_PLATFORM:
+    criteria.append({"filterType": 8, "value": TARGET_PLATFORM})
 query = json.dumps({
-    "filters": [{"criteria": [{"filterType": 7, "value": EXT_ID}]}],
+    "filters": [{"criteria": criteria}],
     "flags": 914,
 }).encode()
 req = urllib.request.Request(
@@ -214,13 +238,23 @@ except Exception as e:
     print(f"Warning: could not query marketplace for {EXT_ID}: {e}", file=sys.stderr)
     sys.exit(0)
 
-# Find the VSIX URL and version
+# Find the VSIX URL and version, preferring our target platform
 vsix_url = None
 version = None
 for ext in data["results"][0]["extensions"]:
-    for ver in ext["versions"][:1]:
-        version = ver["version"]
-        for f in ver["files"]:
+    best_ver = None
+    for ver in ext["versions"]:
+        tp = ver.get("targetPlatform", "")
+        if tp == TARGET_PLATFORM:
+            best_ver = ver
+            break
+        if best_ver is None and (not tp or tp == "universal"):
+            best_ver = ver
+    if best_ver is None and ext.get("versions"):
+        best_ver = ext["versions"][0]
+    if best_ver:
+        version = best_ver["version"]
+        for f in best_ver["files"]:
             if f["assetType"] == "Microsoft.VisualStudio.Services.VSIXPackage":
                 vsix_url = f["source"]
                 break
