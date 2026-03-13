@@ -128,8 +128,15 @@ def test_setup_auth_proxy_remote_starts_tunnel():
         # Tunnel started with local port
         mock_tunnel.assert_called_once_with(remote_host, local_port=7654)
 
-        # Token generated for the container with access level
-        mock_gen.assert_called_once_with("my-container", "kim-em", "bubble", level=LEVEL_GIT_ONLY)
+        # Token generated for the container with access level and graphql policies
+        mock_gen.assert_called_once_with(
+            "my-container",
+            "kim-em",
+            "bubble",
+            level=LEVEL_GIT_ONLY,
+            graphql_read="none",
+            graphql_write="none",
+        )
 
         # Two SSH calls: incus device add + incus exec (git config)
         assert mock_ssh.call_count == 2

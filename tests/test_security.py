@@ -567,13 +567,45 @@ def test_resolve_access_level_read_write():
     assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
 
 
-def test_resolve_access_level_on_returns_default():
-    """on config returns LEVEL_GH_READ (3)."""
-    from bubble.auth_proxy import LEVEL_GH_READ
+def test_resolve_access_level_on_returns_readwrite():
+    """on config returns LEVEL_GH_READWRITE (REST is repo-scoped, so writes are safe)."""
+    from bubble.auth_proxy import LEVEL_GH_READWRITE
     from bubble.github_token import _resolve_access_level
 
     config = {"security": {"github_api": "on"}}
-    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READ
+    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
+
+
+def test_resolve_graphql_config_on_returns_whitelisted():
+    """on config returns whitelisted GraphQL for both read and write."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github_api": "on"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("whitelisted", "whitelisted")
+
+
+def test_resolve_graphql_config_read_write():
+    """read-write config returns unrestricted GraphQL."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github_api": "read-write"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("unrestricted", "unrestricted")
+
+
+def test_resolve_graphql_config_off():
+    """off config returns none for both."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github_api": "off"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("none", "none")
+
+
+def test_resolve_graphql_config_gh_disabled():
+    """gh not enabled returns none regardless of config."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github_api": "read-write"}}
+    assert _resolve_graphql_config(config, gh_enabled=False) == ("none", "none")
 
 
 def test_resolve_access_level_off_returns_git_only():
@@ -651,10 +683,16 @@ def test_invalid_raw_config_falls_back_to_auto():
     # auto_default is "on", so it's enabled but at the default level (not read-write)
     assert is_enabled(config, "github_api") is True
 
-    from bubble.auth_proxy import LEVEL_GH_READ
+    from bubble.auth_proxy import LEVEL_GH_READWRITE
     from bubble.github_token import _resolve_access_level
 
-    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READ
+    # Typo falls back to auto, which is "on" → LEVEL_GH_READWRITE for REST
+    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
+
+    # GraphQL should be whitelisted (the safe default)
+    from bubble.github_token import _resolve_graphql_config
+
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("whitelisted", "whitelisted")
 
 
 def test_invalid_raw_config_other_setting():

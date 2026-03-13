@@ -44,6 +44,8 @@ class TestAuthTokenManagement:
         assert tokens[token]["owner"] == "owner"
         assert tokens[token]["repo"] == "repo"
         assert tokens[token]["level"] == LEVEL_GH_READ  # default
+        assert tokens[token]["graphql_read"] == "whitelisted"
+        assert tokens[token]["graphql_write"] == "whitelisted"
 
     def test_generate_token_with_level(self, auth_proxy_env):
         import bubble.auth_proxy
@@ -1111,7 +1113,13 @@ class TestApiProxyIntegration:
 
         port = api_proxy_server["port"]
         token = api_proxy_server["token"]
-        data = json.dumps({"query": "{ viewer { login } }"}).encode()
+        query = (
+            "query($owner: String!, $repo: String!)"
+            " { repository(owner: $owner, name: $repo) { name } }"
+        )
+        data = json.dumps(
+            {"query": query, "variables": {"owner": "owner", "repo": "repo"}}
+        ).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/graphql",
             data=data,

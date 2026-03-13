@@ -105,7 +105,7 @@ SETTINGS: dict[str, SecuritySettingDef] = {
     "github_api": SecuritySettingDef(
         description="GitHub API access via auth proxy (gh CLI, REST, GraphQL)",
         auto_default="on",
-        warning="containers get read-only GitHub API access (account-wide reads via GraphQL)",
+        warning="containers get repo-scoped GitHub API access (allowlisted GraphQL operations)",
         category="Authentication",
         extra_values=("read-write",),
     ),
