@@ -1,6 +1,6 @@
 """GitHub authentication for containers via auth proxy or direct injection.
 
-Levels 1-4 use an HTTP reverse proxy on the host:
+Most github levels use an HTTP reverse proxy on the host:
 1. Receives plain HTTP git requests from the container
 2. Validates the request targets only the allowed repository
 3. Adds the real Authorization header
@@ -9,8 +9,8 @@ Levels 1-4 use an HTTP reverse proxy on the host:
 The host GitHub token never enters the container. Each container
 gets a per-container bearer token scoped to one repository.
 
-Level 5 (token injection) bypasses the proxy entirely: the host's
-actual GitHub token is injected into the container as GH_TOKEN and
+The "direct" level bypasses the proxy entirely: the host's actual
+GitHub token is injected into the container as GH_TOKEN and
 GITHUB_TOKEN environment variables, giving unrestricted access.
 
 For local containers, the proxy is exposed via Incus proxy devices.
@@ -18,15 +18,18 @@ For remote/cloud containers, an SSH reverse tunnel forwards the
 local proxy port to the remote host, then an Incus proxy device
 on the remote exposes it into the container.
 
-Access levels:
-  Level 1: git only (push/pull)
-  Level 3: git + gh read-only (REST read + GraphQL queries)
-  Level 4: git + gh read-write (REST read-write + GraphQL mutations)
-  Level 5: direct token injection (bypasses proxy)
+GitHub levels (each a strict superset of the one above):
+  off:                      no GitHub access
+  basic:                    git push/pull only
+  rest:                     + repo-scoped REST API
+  allowlist-read-graphql:   + allowlisted GraphQL queries
+  allowlist-write-graphql:  + allowlisted GraphQL mutations (default)
+  write-graphql:            + arbitrary GraphQL
+  direct:                   raw token injection, no proxy
 
-When the gh tool is installed and github_api is enabled, the proxy
-is also exposed as a Unix socket at /bubble/gh-proxy.sock and gh
-is configured to route through it via http_unix_socket.
+When gh is installed and the github level includes REST or higher,
+the proxy is also exposed as a Unix socket at /bubble/gh-proxy.sock
+and gh is configured to route through it via http_unix_socket.
 """
 
 import platform
