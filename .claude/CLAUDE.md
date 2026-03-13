@@ -23,6 +23,7 @@ bubble/
 ├── automation.py       # Periodic jobs: launchd (macOS), systemd (Linux)
 ├── relay.py            # Bubble-in-bubble relay daemon (Unix socket, validation, rate limiting)
 ├── auth_proxy.py       # HTTP reverse proxy for repo-scoped GitHub auth (token stays on host)
+├── graphql_validator.py # GraphQL tokenizer, parser, and allowlist validation for auth proxy
 ├── tunnel.py           # SSH reverse tunnel management for remote auth proxy access
 ├── remote.py           # Remote SSH host support: run bubbles on remote machines
 ├── cloud.py            # Hetzner Cloud auto-provisioning (provision, destroy, start, stop)
@@ -133,13 +134,15 @@ The auth proxy (`auth_proxy.py`) provides repo-scoped GitHub authentication with
 
 **gh CLI flow:** `gh` configured with `http_unix_socket: /bubble/gh-proxy.sock` (via `GH_CONFIG_DIR=/etc/bubble/gh`) → sends requests through Unix socket → proxy validates token from `Authorization` header → enforces access level (REST repo-scoping, GraphQL mutation filtering) → adds real token → forwards to `https://api.github.com`.
 
-**API security:** REST paths validated against `/repos/{owner}/{repo}/...` (repo-scoped). GraphQL scans ALL operations in a document and classifies by the most dangerous one — `query` allowed at level 3, `mutation` requires level 4. This prevents `operationName`-based bypasses where a query is listed first but a mutation is selected for execution. Batched requests, subscriptions, and malformed bodies rejected. Note: GraphQL is NOT repo-scoped — queries can access any data the host token can read (GitHub's GraphQL API doesn't support path-based scoping). API redirects (e.g. CI log downloads) followed with hardened rules: GET/HEAD only, HTTPS only, allowlisted hosts, max 2 hops, auth headers stripped. GitHub 4xx errors are passed through to clients (not collapsed to 502).
+**GraphQL validation** (`graphql_validator.py`): GraphQL access is controlled by two independent axes — `graphql_read` and `graphql_write` — each supporting `whitelisted`, `unrestricted`, or `none` modes. The default is `whitelisted` for both. In whitelisted mode, a lightweight tokenizer/parser validates structure (single operation, single top-level field, no aliases/directives, no fragments in mutations) and semantics. Read validation repo-scopes `repository` queries via variables, verifies `node` queries via pre-flight ownership checks, and checks second-level fields against an allowlist. Write validation checks mutations against an allowlist (createPullRequest, addComment, mergePullRequest, etc.) with repo-scoping via repositoryId comparison or pre-flight node ownership verification. Old tokens without `graphql_*` fields derive policies from the legacy `level` field for backward compatibility.
+
+**REST security:** REST paths validated against `/repos/{owner}/{repo}/...` (repo-scoped). REST level defaults to `LEVEL_GH_READWRITE` since path validation already constrains access. API redirects (e.g. CI log downloads) followed with hardened rules: GET/HEAD only, HTTPS only, allowlisted hosts, max 2 hops, auth headers stripped. GitHub 4xx errors are passed through to clients (not collapsed to 502).
 
 **Local bubbles:** Exposed via Incus proxy devices — TCP for git, Unix socket for gh (`listen=unix:/bubble/gh-proxy.sock`).
 
 **Remote/cloud bubbles:** SSH reverse tunnel forwards the local proxy port. Incus proxy devices on the remote expose both TCP and Unix socket endpoints.
 
-**Token management:** Per-container tokens in `~/.bubble/auth-tokens.json` map to `{container, owner, repo, level}`. Tokens are cleaned up on `bubble pop`. The daemon is managed via launchd/systemd.
+**Token management:** Per-container tokens in `~/.bubble/auth-tokens.json` map to `{container, owner, repo, level, graphql_read, graphql_write}`. Tokens are cleaned up on `bubble pop`. The daemon is managed via launchd/systemd.
 
 ### Security Model
 The `user` account has no sudo and a locked password. Network allowlisting is applied on container creation. SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Each container mounts only its specific bare repo, not the entire git store.
