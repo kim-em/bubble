@@ -254,3 +254,45 @@ def colima_host_ip() -> str:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     return "192.168.5.2"
+
+
+def colima_bind_ip() -> str:
+    """Get the macOS-side IP to bind daemons that need VM reachability.
+
+    With ``--vm-type=vz`` (vzNAT), macOS creates a ``bridge*`` interface
+    backed by ``vmenet*`` that connects the VM.  Binding to that bridge's
+    IPv4 address is tighter than ``0.0.0.0`` — only the VM and the host
+    can reach it, not the wider LAN.
+
+    Discovery: find any ``bridge*`` interface whose member is ``vmenet*``
+    and return its IPv4 address.  Falls back to ``0.0.0.0`` if no VMNet
+    bridge is found (e.g. qemu backend or unusual network config).
+    """
+    import re as _re
+
+    try:
+        result = subprocess.run(
+            ["ifconfig"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            return "0.0.0.0"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "0.0.0.0"
+
+    # Split output into per-interface blocks
+    blocks = _re.split(r"(?=^\S+:)", result.stdout, flags=_re.MULTILINE)
+    for block in blocks:
+        if not block.startswith("bridge"):
+            continue
+        if "vmenet" not in block:
+            continue
+        # Found the VMNet bridge — extract its IPv4 address
+        m = _re.search(r"inet (\d+\.\d+\.\d+\.\d+)", block)
+        if m:
+            return m.group(1)
+
+    return "0.0.0.0"

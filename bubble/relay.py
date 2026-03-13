@@ -322,11 +322,11 @@ def run_daemon():
         port = config.get("relay", {}).get("port", 7653)
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # On macOS, Incus runs inside a Colima VM that reaches the host
-        # via a bridge IP (not 127.0.0.1).  We must bind to 0.0.0.0
-        # because the bridge IP is not a local address on the host.
-        # Token auth prevents unauthorized access.
-        bind_addr = "0.0.0.0"
+        # On macOS, bind to the VMNet bridge IP so the Colima VM can
+        # reach us without exposing the service to the wider LAN.
+        from .runtime.colima import colima_bind_ip
+
+        bind_addr = colima_bind_ip()
         server.bind((bind_addr, port))
         server.listen(5)
         RELAY_PORT_FILE.write_text(str(port))

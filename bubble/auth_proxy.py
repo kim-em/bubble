@@ -1133,14 +1133,17 @@ def run_daemon(port: int = 0):
     AuthProxyHandler.rate_limiter = rate_limiter
     AuthProxyHandler.token_refresher = token_refresher
 
-    # On macOS, Incus runs inside a Colima VM that reaches the host via a
-    # bridge IP (not 127.0.0.1).  We must bind to 0.0.0.0 because the
-    # bridge IP (e.g. 192.168.5.2) is not a local address on the host —
-    # it's the host's address as seen from the VM's network namespace.
-    # Per-container token auth prevents unauthorized access.
+    # On macOS, Incus runs inside a Colima VM.  Bind to the VMNet bridge
+    # IP (e.g. 192.168.64.1) so the VM can reach us without exposing the
+    # service to the wider LAN.  Falls back to 0.0.0.0 if no bridge found.
     import platform
 
-    bind_addr = "0.0.0.0" if platform.system() == "Darwin" else "127.0.0.1"
+    if platform.system() == "Darwin":
+        from .runtime.colima import colima_bind_ip
+
+        bind_addr = colima_bind_ip()
+    else:
+        bind_addr = "127.0.0.1"
     server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
 
     AUTH_PROXY_PORT_FILE.write_text(str(port))
