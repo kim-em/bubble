@@ -57,7 +57,7 @@ def _format_value(value) -> str:
 
 
 def register_settings_commands(main):
-    """Register skill, claude, tools, gh, and config command groups on the main CLI group."""
+    """Register skill, ai, tools, gh, and config command groups."""
 
     # --- skill ---
 
@@ -121,47 +121,60 @@ def register_settings_commands(main):
             click.echo("Bubble skill is installed but outdated.")
             click.echo("  Update with: bubble skill install")
 
-    # --- claude ---
+    # --- ai ---
 
-    @main.group("claude", hidden=True)
-    def claude_group():
-        """Manage Claude Code settings."""
+    @main.group("ai")
+    def ai_group():
+        """Manage AI provider settings."""
 
-    @claude_group.command("credentials")
+    @ai_group.command("credentials")
     @click.argument("setting", required=False, type=click.Choice(["on", "off"]))
-    def claude_credentials_cmd(setting):
-        """Set whether Claude credentials are mounted into bubbles.
+    @click.option(
+        "--provider",
+        type=click.Choice(["claude", "codex"]),
+        default=None,
+        help="Provider to configure (default: preferred provider from config)",
+    )
+    def ai_credentials_cmd(setting, provider):
+        """Set whether AI credentials are mounted into bubbles.
 
-        When on, ~/.claude credentials (.credentials.json) are mounted
-        read-only into containers by default. Override per-bubble with
-        --no-claude-credentials.
+        Controls the preferred AI provider's credentials by default.
+        Use --provider to target a specific provider (e.g. claude, codex).
 
         Shows current setting if no argument given.
         """
         config = load_config()
+        if provider is None:
+            provider = config.get("ai", {}).get("preferred", "claude")
+
         if setting is None:
-            current = config.get("claude", {}).get("credentials", True)
+            current = config.get(provider, {}).get("credentials", True)
             state = "on" if current else "off"
-            click.echo(f"Claude credentials: {state}")
+            label = provider.capitalize()
+            click.echo(f"{label} credentials: {state}")
             if current:
                 click.echo("Credentials are mounted into bubbles by default.")
-                click.echo("Override with: bubble open --no-claude-credentials <target>")
+                click.echo(f"Override with: bubble open --no-{provider}-credentials <target>")
             else:
-                click.echo("Use --claude-credentials flag or: bubble claude credentials on")
+                click.echo(
+                    f"Use --{provider}-credentials flag or: bubble ai credentials on"
+                    f" --provider {provider}"
+                )
             return
-        config.setdefault("claude", {})["credentials"] = setting == "on"
+        config.setdefault(provider, {})["credentials"] = setting == "on"
         save_config(config)
+        label = provider.capitalize()
         if setting == "on":
-            click.echo("Claude credentials enabled. Mounted into all new bubbles by default.")
-            click.echo("Override with: bubble open --no-claude-credentials <target>")
+            click.echo(f"{label} credentials enabled. Mounted into all new bubbles by default.")
+            click.echo(f"Override with: bubble open --no-{provider}-credentials <target>")
         else:
-            click.echo("Claude credentials disabled.")
+            click.echo(f"{label} credentials disabled.")
 
-    @claude_group.command("set")
+    @ai_group.command("set")
     @click.argument("key", type=click.Choice(["autonomy", "second-opinion"]))
     @click.argument("value")
-    def claude_set_cmd(key, value):
-        """Set a Claude Code setting.
+    def ai_set_cmd(key, value):
+        """Set an AI provider setting.
 
         \b
         Settings:
@@ -170,10 +183,10 @@ def register_settings_commands(main):
 
         \b
         Examples:
-          bubble claude set autonomy pr
-          bubble claude set second-opinion on
+          bubble ai set autonomy pr
+          bubble ai set second-opinion on
         """
-        from ..claude import AUTONOMY_LEVELS, SECOND_OPINION_VALUES
+        from ..ai import AUTONOMY_LEVELS, SECOND_OPINION_VALUES
 
         config_key = key.replace("-", "_")
 
@@ -194,27 +207,33 @@ def register_settings_commands(main):
                 sys.exit(1)
 
         config = load_config()
-        config.setdefault("claude", {})[config_key] = value
+        config.setdefault("ai", {})[config_key] = value
         save_config(config)
-        click.echo(f"Set claude.{key} = {value}")
+        click.echo(f"Set ai.{key} = {value}")
 
-    @claude_group.command("status")
-    def claude_status_cmd():
-        """Show current Claude Code settings."""
-        from ..claude import _resolve_second_opinion
+    @ai_group.command("status")
+    def ai_status_cmd():
+        """Show current AI provider settings."""
+        from ..ai import _resolve_second_opinion
 
         config = load_config()
-        claude_cfg = config.get("claude", {})
-        creds = claude_cfg.get("credentials", True)
-        autonomy = claude_cfg.get("autonomy", "plan")
-        second_opinion = claude_cfg.get("second_opinion", "auto")
-        resolved_so = _resolve_second_opinion(second_opinion, config=config)
+        ai_cfg = config.get("ai", {})
+        preferred = ai_cfg.get("preferred", "claude")
+        second_provider = ai_cfg.get("second_opinion_provider", "codex")
+        autonomy = ai_cfg.get("autonomy", "plan")
+        second_opinion_setting = ai_cfg.get("second_opinion", "auto")
+        resolved_so = _resolve_second_opinion(second_opinion_setting, config=config)
 
-        click.echo(f"  credentials:    {'on' if creds else 'off'}")
+        click.echo(f"  preferred:      {preferred}")
         click.echo(f"  autonomy:       {autonomy}")
         so_resolved = "on" if resolved_so else "off"
-        so_extra = f" (resolved: {so_resolved})" if second_opinion == "auto" else ""
-        click.echo(f"  second-opinion: {second_opinion}{so_extra}")
+        so_extra = f" (resolved: {so_resolved})" if second_opinion_setting == "auto" else ""
+        click.echo(f"  second-opinion: {second_opinion_setting}{so_extra}")
+        click.echo()
+        for provider in dict.fromkeys([preferred, second_provider]):
+            creds = config.get(provider, {}).get("credentials", True)
+            click.echo(f"  [{provider}]")
+            click.echo(f"    credentials: {'on' if creds else 'off'}")
 
     # --- codex ---
 
@@ -463,6 +482,7 @@ def register_settings_commands(main):
             ("relay", "section"),
             ("remote", "section"),
             ("cloud", "section"),
+            ("ai", "section"),
             ("claude", "section"),
             ("codex", "section"),
             ("tools", "section"),
@@ -554,18 +574,18 @@ def register_settings_commands(main):
         save_config(config)
         click.echo(f"Set security.{display_setting_name(name)} = {value}")
 
-    @config_group.command("symlink-claude-projects")
-    def config_symlink_claude_projects():
-        """Link ~/.bubble/claude-projects/ to ~/.claude/projects/ via symlink.
+    @config_group.command("symlink-ai-projects")
+    def config_symlink_ai_projects():
+        """Link ~/.bubble/ai-projects/ to ~/.claude/projects/ via symlink.
 
         If ~/.claude/projects/ is inside a git repo, this command merges any
-        existing session data from ~/.bubble/claude-projects/ into
+        existing session data from ~/.bubble/ai-projects/ into
         ~/.claude/projects/ and creates a symlink in its place.
 
         This lets bubble session state live inside the git-tracked directory
         and get synced across machines automatically.
         """
-        from ..config import do_symlink_claude_projects
+        from ..config import do_symlink_ai_projects
 
-        if not do_symlink_claude_projects():
+        if not do_symlink_ai_projects():
             raise SystemExit(1)

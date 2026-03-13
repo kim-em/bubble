@@ -185,13 +185,13 @@ def provision_container(
             )
         # Writable projects directory — per-bubble subdirectory, persists on host.
         # Each bubble gets its own isolated subdir so bubbles can't see each
-        # other's sessions, but all accumulate under ~/.bubble/claude-projects/
+        # other's sessions, but all accumulate under ~/.bubble/ai-projects/
         # on the host (useful for backing up with a git repo).
         # Skip if a user mount overlaps with this target.
         projects_target = Path("/home/user/.claude/projects")
         user_targets = {Path(m.target) for m in (user_mounts or [])}
         if not mount_overlaps(projects_target, user_targets):
-            projects_dir = DATA_DIR / "claude-projects" / name
+            projects_dir = DATA_DIR / "ai-projects" / name
             projects_dir.mkdir(parents=True, exist_ok=True)
             projects_dir.chmod(0o770)
             runtime.add_disk(

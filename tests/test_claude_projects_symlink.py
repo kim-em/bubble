@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from bubble.config import do_symlink_claude_projects, maybe_symlink_claude_projects
+from bubble.config import do_symlink_ai_projects, maybe_symlink_ai_projects
 
 
 @pytest.fixture
@@ -19,10 +19,10 @@ def setup_dirs(tmp_path, monkeypatch):
 
     bubble_dir = tmp_path / ".bubble"
     bubble_dir.mkdir()
-    bubble_projects = bubble_dir / "claude-projects"
+    bubble_projects = bubble_dir / "ai-projects"
 
     monkeypatch.setattr(config, "CLAUDE_CONFIG_DIR", claude_dir)
-    monkeypatch.setattr(config, "CLAUDE_PROJECTS_DIR", bubble_projects)
+    monkeypatch.setattr(config, "AI_PROJECTS_DIR", bubble_projects)
     monkeypatch.setattr(config, "DATA_DIR", bubble_dir)
 
     return claude_projects, bubble_projects
@@ -35,7 +35,7 @@ class TestMaybeSymlinkClaudeProjects:
         bubble_projects.mkdir()
 
         with patch("bubble.config._is_inside_git_repo", return_value=False):
-            maybe_symlink_claude_projects()
+            maybe_symlink_ai_projects()
 
         assert bubble_projects.is_dir()
         assert not bubble_projects.is_symlink()
@@ -48,14 +48,14 @@ class TestMaybeSymlinkClaudeProjects:
         claude_dir.mkdir()
         # Don't create projects/ subdirectory
 
-        bubble_projects = tmp_path / ".bubble" / "claude-projects"
+        bubble_projects = tmp_path / ".bubble" / "ai-projects"
         bubble_projects.mkdir(parents=True)
 
         monkeypatch.setattr(config, "CLAUDE_CONFIG_DIR", claude_dir)
-        monkeypatch.setattr(config, "CLAUDE_PROJECTS_DIR", bubble_projects)
+        monkeypatch.setattr(config, "AI_PROJECTS_DIR", bubble_projects)
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            maybe_symlink_claude_projects()
+            maybe_symlink_ai_projects()
 
         assert bubble_projects.is_dir()
         assert not bubble_projects.is_symlink()
@@ -66,7 +66,7 @@ class TestMaybeSymlinkClaudeProjects:
         bubble_projects.symlink_to(claude_projects)
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            maybe_symlink_claude_projects()
+            maybe_symlink_ai_projects()
 
         assert bubble_projects.is_symlink()
         assert bubble_projects.resolve() == claude_projects.resolve()
@@ -77,7 +77,7 @@ class TestMaybeSymlinkClaudeProjects:
         # Don't create bubble_projects
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            maybe_symlink_claude_projects()
+            maybe_symlink_ai_projects()
 
         assert bubble_projects.is_symlink()
         assert bubble_projects.resolve() == claude_projects.resolve()
@@ -88,7 +88,7 @@ class TestMaybeSymlinkClaudeProjects:
         bubble_projects.mkdir()
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            maybe_symlink_claude_projects()
+            maybe_symlink_ai_projects()
 
         # Directory is NOT replaced (no prompt, no auto-replace)
         assert bubble_projects.is_dir()
@@ -96,16 +96,16 @@ class TestMaybeSymlinkClaudeProjects:
 
         # Message was printed to stderr
         captured = capsys.readouterr()
-        assert "symlink-claude-projects" in captured.err
-        assert "claude_projects_symlink" in captured.err
+        assert "symlink-ai-projects" in captured.err
+        assert "ai_projects_symlink" in captured.err
 
     def test_suppressed_by_config(self, setup_dirs, capsys):
-        """No message when claude_projects_symlink = 'no' in config."""
+        """No message when ai_projects_symlink = 'no' in config."""
         claude_projects, bubble_projects = setup_dirs
         bubble_projects.mkdir()
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            maybe_symlink_claude_projects(config={"claude_projects_symlink": "no"})
+            maybe_symlink_ai_projects(config={"ai_projects_symlink": "no"})
 
         assert bubble_projects.is_dir()
         assert not bubble_projects.is_symlink()
@@ -119,12 +119,12 @@ class TestMaybeSymlinkClaudeProjects:
         bubble_projects.mkdir()
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            maybe_symlink_claude_projects()
+            maybe_symlink_ai_projects()
 
         # Not replaced — just a hint
         assert bubble_projects.is_dir()
         assert not bubble_projects.is_symlink()
-        assert "symlink-claude-projects" in capsys.readouterr().err
+        assert "symlink-ai-projects" in capsys.readouterr().err
 
 
 class TestDoSymlinkClaudeProjects:
@@ -138,7 +138,7 @@ class TestDoSymlinkClaudeProjects:
         (bubble_projects / "session-a" / "data.jsonl").write_text("data")
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is True
         assert bubble_projects.is_symlink()
@@ -151,7 +151,7 @@ class TestDoSymlinkClaudeProjects:
         claude_projects, bubble_projects = setup_dirs
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is True
         assert bubble_projects.is_symlink()
@@ -163,7 +163,7 @@ class TestDoSymlinkClaudeProjects:
         bubble_projects.symlink_to(claude_projects)
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is True
         assert bubble_projects.is_symlink()
@@ -174,7 +174,7 @@ class TestDoSymlinkClaudeProjects:
         bubble_projects.mkdir()
 
         with patch("bubble.config._is_inside_git_repo", return_value=False):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is False
         assert not bubble_projects.is_symlink()
@@ -195,7 +195,7 @@ class TestDoSymlinkClaudeProjects:
         (bubble_projects / "unique" / "data.txt").write_text("unique-data")
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is True
         assert bubble_projects.is_symlink()
@@ -219,7 +219,7 @@ class TestDoSymlinkClaudeProjects:
         (bubble_projects / "safe.txt").write_text("safe-data")
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is False
         # Directory was NOT replaced with symlink
@@ -252,7 +252,7 @@ class TestDoSymlinkClaudeProjects:
         (bubble_projects / "other.txt").write_text("other-data")
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is False
         assert not bubble_projects.is_symlink()
@@ -268,7 +268,7 @@ class TestDoSymlinkClaudeProjects:
         bubble_projects.write_text("not a directory")
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is False
         assert not bubble_projects.is_symlink()
@@ -281,7 +281,7 @@ class TestDoSymlinkClaudeProjects:
         bubble_projects.symlink_to(other_dir)
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is False
 
@@ -291,7 +291,7 @@ class TestDoSymlinkClaudeProjects:
         bubble_projects.symlink_to(claude_projects)
 
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = do_symlink_claude_projects()
+            result = do_symlink_ai_projects()
 
         assert result is True
 
@@ -308,7 +308,7 @@ class TestSymlinkClaudeProjectsCLI:
 
         runner = CliRunner()
         with patch("bubble.config._is_inside_git_repo", return_value=False):
-            result = runner.invoke(main, ["config", "symlink-claude-projects"])
+            result = runner.invoke(main, ["config", "symlink-ai-projects"])
 
         assert result.exit_code != 0
 
@@ -323,7 +323,7 @@ class TestSymlinkClaudeProjectsCLI:
 
         runner = CliRunner()
         with patch("bubble.config._is_inside_git_repo", return_value=True):
-            result = runner.invoke(main, ["config", "symlink-claude-projects"])
+            result = runner.invoke(main, ["config", "symlink-ai-projects"])
 
         assert result.exit_code == 0
         assert bubble_projects.is_symlink()

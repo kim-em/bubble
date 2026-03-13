@@ -52,13 +52,23 @@ bubble cleanup
 bubble doctor
 ```
 
+## AI Providers
+
+Configure your preferred AI provider and second-opinion provider:
+
+```bash
+bubble ai status                   # show configured providers and credentials
+bubble ai credentials on           # enable preferred provider's credentials
+bubble ai credentials on --provider codex  # enable a specific provider
+```
+
 ## Tools
 
 Tools like Claude Code and OpenAI Codex can be installed in container images:
 
 ```bash
 bubble tools list                  # show available tools and settings
-bubble tools set claude yes   # always install (also: "no", "auto")
+bubble tools set claude yes        # always install (also: "no", "auto")
 bubble tools status                # show what would actually be installed
 ```
 

@@ -406,12 +406,12 @@ def remote_open(
     custom_name: str | None = None,
     git_name: str = "",
     git_email: str = "",
-    claude_config: bool = True,
+    ai_config: bool = True,
     claude_credentials: bool | None = None,
     codex_credentials: bool | None = None,
     new_branch: str | None = None,
     base_ref: str | None = None,
-    claude_prompt: str = "",
+    ai_prompt: str = "",
 ) -> dict:
     """Open a bubble on a remote host.
 
@@ -426,8 +426,8 @@ def remote_open(
     args = ["open", "--no-interactive", "--machine-readable"]
     if not network:
         args.append("--no-network")
-    if not claude_config:
-        args.append("--no-claude-config")
+    if not ai_config:
+        args.append("--no-ai-config")
     if claude_credentials is True:
         args.append("--claude-credentials")
     elif claude_credentials is False:
@@ -446,8 +446,8 @@ def remote_open(
         args += ["-b", new_branch]
     if base_ref:
         args += ["--base", base_ref]
-    if claude_prompt:
-        args.append("--claude-prompt-stdin")
+    if ai_prompt:
+        args.append("--ai-prompt-stdin")
     args.append(target)
 
     click_mod.echo(f"Creating bubble on {host.ssh_destination}...")
@@ -472,13 +472,13 @@ def remote_open(
         ssh_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        stdin=subprocess.PIPE if claude_prompt else subprocess.DEVNULL,
+        stdin=subprocess.PIPE if ai_prompt else subprocess.DEVNULL,
         text=True,
     )
 
     # Send prompt via stdin to avoid exposing it in ps/audit logs
-    if claude_prompt:
-        proc.stdin.write(claude_prompt)
+    if ai_prompt:
+        proc.stdin.write(ai_prompt)
         proc.stdin.close()
 
     stderr_chunks = []

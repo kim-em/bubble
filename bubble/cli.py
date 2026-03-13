@@ -17,7 +17,7 @@ from .config import (
     ensure_dirs,
     is_first_run,
     load_config,
-    maybe_symlink_claude_projects,
+    maybe_symlink_ai_projects,
     parse_mounts,
     repo_short_name,
 )
@@ -242,13 +242,14 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
     return ref_path, mount_name
 
 
-def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -> str:
-    """Resolve a Claude prompt on the local machine for remote bubbles.
+def _resolve_ai_prompt_locally(target: str, new_branch: str | None = None) -> str:
+    """Resolve an AI prompt on the local machine for remote bubbles.
 
-    Checks BUBBLE_CLAUDE_PROMPT env var first, then auto-generates for issue
-    and PR targets using the local gh CLI (which may not exist on remote hosts).
+    Checks BUBBLE_AI_PROMPT env var first, then auto-generates for issue
+    and PR targets using the local gh CLI (which may not exist on remote
+    hosts).
     """
-    prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
+    prompt = os.environ.get("BUBBLE_AI_PROMPT", "")
     if prompt:
         return prompt
 
@@ -259,33 +260,31 @@ def _resolve_claude_prompt_locally(target: str, new_branch: str | None = None) -
 
         t = parse_target(target, RepoRegistry())
         if t.kind == "issue":
-            from .claude import generate_issue_prompt
-
-            branch = new_branch or f"issue-{t.ref}"
+            from .ai import generate_issue_prompt
             from .output import detail
 
-            detail(f"Fetching issue #{t.ref} for Claude prompt...")
+            branch = new_branch or f"issue-{t.ref}"
+            detail(f"Fetching issue #{t.ref} for AI prompt...")
             _cfg = load_config()
-            _claude_cfg = _cfg.get("claude", {})
+            _ai_cfg = _cfg.get("ai", {})
             prompt = (
                 generate_issue_prompt(
                     t.owner,
                     t.repo,
                     t.ref,
                     branch,
-                    autonomy=_claude_cfg.get("autonomy", "plan"),
-                    second_opinion=_claude_cfg.get("second_opinion", "auto"),
+                    autonomy=_ai_cfg.get("autonomy", "plan"),
+                    second_opinion=_ai_cfg.get("second_opinion", "auto"),
                     config=_cfg,
                 )
                 or ""
             )
         elif t.kind == "pr":
-            from .claude import generate_pr_prompt
-
-            branch = new_branch or f"pr-{t.ref}"
+            from .ai import generate_pr_prompt
             from .output import detail
 
-            detail(f"Fetching PR #{t.ref} for Claude prompt...")
+            branch = new_branch or f"pr-{t.ref}"
+            detail(f"Fetching PR #{t.ref} for AI prompt...")
             prompt = generate_pr_prompt(t.owner, t.repo, t.ref, branch) or ""
     except Exception:
         pass
@@ -304,7 +303,7 @@ def _open_remote(
     git_name="",
     git_email="",
     command=None,
-    claude_config=True,
+    ai_config=True,
     claude_credentials=None,
     codex_credentials=None,
     new_branch=None,
@@ -313,8 +312,8 @@ def _open_remote(
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
 
-    # Resolve Claude prompt locally (gh CLI may not exist on the remote)
-    claude_prompt = _resolve_claude_prompt_locally(target, new_branch=new_branch)
+    # Resolve AI prompt locally (gh CLI may not exist on the remote)
+    ai_prompt = _resolve_ai_prompt_locally(target, new_branch=new_branch)
 
     try:
         result = remote_open(
@@ -324,12 +323,12 @@ def _open_remote(
             custom_name=custom_name,
             git_name=git_name,
             git_email=git_email,
-            claude_config=claude_config,
+            ai_config=ai_config,
             claude_credentials=claude_credentials,
             codex_credentials=codex_credentials,
             new_branch=new_branch,
             base_ref=base_ref,
-            claude_prompt=claude_prompt,
+            ai_prompt=ai_prompt,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -532,9 +531,9 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     help="Mount host dir: /host/path:/container/path[:ro|rw] (repeatable)",
 )
 @click.option(
-    "--claude-config/--no-claude-config",
+    "--ai-config/--no-ai-config",
     default=True,
-    help="Mount ~/.claude config read-only into container (default: enabled)",
+    help="Mount AI provider config read-only into container (default: enabled)",
 )
 @click.option(
     "--claude-credentials/--no-claude-credentials",
@@ -547,10 +546,10 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     help="Mount ~/.codex credentials into container (default: from config or enabled)",
 )
 @click.option(
-    "--claude-prompt-stdin",
+    "--ai-prompt-stdin",
     is_flag=True,
     hidden=True,
-    help="Read Claude prompt from stdin (used internally by remote open).",
+    help="Read AI prompt from stdin (used internally by remote open).",
 )
 def open_cmd(
     targets,
@@ -574,10 +573,10 @@ def open_cmd(
     git_name,
     git_email,
     mounts,
-    claude_config,
+    ai_config,
     claude_credentials,
     codex_credentials,
-    claude_prompt_stdin,
+    ai_prompt_stdin,
 ):
     """Open a bubble for one or more targets (GitHub URL, repo, local path, or PR number)."""
     # When -b is used without an explicit target, infer owner/repo from cwd
@@ -633,10 +632,10 @@ def open_cmd(
                 git_name=git_name,
                 git_email=git_email,
                 mounts=mounts,
-                claude_config=claude_config,
+                ai_config=ai_config,
                 claude_credentials=claude_credentials,
                 codex_credentials=codex_credentials,
-                claude_prompt_stdin=claude_prompt_stdin,
+                ai_prompt_stdin=ai_prompt_stdin,
             )
         except SystemExit as e:
             if not multi:
@@ -687,10 +686,10 @@ def _open_single(
     git_name,
     git_email,
     mounts,
-    claude_config,
+    ai_config,
     claude_credentials,
     codex_credentials,
-    claude_prompt_stdin,
+    ai_prompt_stdin,
 ):
     """Open a single bubble target."""
     if force_path and not target.startswith(("/", ".", "..")):
@@ -849,7 +848,7 @@ def _open_single(
             git_name=git_name,
             git_email=git_email,
             command=command_args,
-            claude_config=claude_config,
+            ai_config=ai_config,
             claude_credentials=claude_credentials,
             codex_credentials=codex_credentials,
             new_branch=new_branch,
@@ -860,22 +859,26 @@ def _open_single(
     # Pre-compute user mount targets for overlap checking below
     user_targets = {Path(m.target) for m in mount_specs}
 
-    # Claude Code config mounts (opt-out via --no-claude-config)
+    # AI provider config mounts (opt-out via --no-ai-config)
     include_creds = should_include_credentials(claude_credentials, config, "claude_credentials")
     cc_mounts = []
-    if claude_config:
+    if ai_config:
         cc_mounts = claude_config_mounts(include_credentials=include_creds)
         # Suppress auto mounts that overlap with user mounts (exact or ancestry)
         cc_mounts = [m for m in cc_mounts if not mount_overlaps(Path(m.target), user_targets)]
-        # Hint about symlinking ~/.bubble/claude-projects/ to ~/.claude/projects/
+        # Hint about symlinking ~/.bubble/ai-projects/ to ~/.claude/projects/
         if not machine_readable:
-            maybe_symlink_claude_projects(config, notices=notices)
+            maybe_symlink_ai_projects(config, notices=notices)
 
-    # Codex config mounts
-    include_codex_creds = should_include_credentials(codex_credentials, config, "codex_credentials")
-    cx_mounts = codex_config_mounts(include_credentials=include_codex_creds)
-    if cx_mounts:
-        cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
+    # Codex config mounts (also gated by --no-ai-config)
+    cx_mounts = []
+    if ai_config:
+        include_codex_creds = should_include_credentials(
+            codex_credentials, config, "codex_credentials"
+        )
+        cx_mounts = codex_config_mounts(include_credentials=include_codex_creds)
+        if cx_mounts:
+            cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
     # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
     ec_mounts = editor_config_mounts(editor)
@@ -1037,37 +1040,37 @@ def _open_single(
 
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 
-        # Resolve Claude prompt: stdin flag > env var > auto-generate for issues/PRs
+        # Resolve AI prompt: stdin flag > env var > auto-generate for issues/PRs
         # The stdin flag is set by _open_remote() which generates the prompt locally.
-        claude_prompt = ""
-        if claude_prompt_stdin:
-            claude_prompt = sys.stdin.read()
-        if not claude_prompt:
-            claude_prompt = os.environ.get("BUBBLE_CLAUDE_PROMPT", "")
-        if not claude_prompt and t.kind == "issue" and not machine_readable:
-            from .claude import generate_issue_prompt
+        ai_prompt = ""
+        if ai_prompt_stdin:
+            ai_prompt = sys.stdin.read()
+        if not ai_prompt:
+            ai_prompt = os.environ.get("BUBBLE_AI_PROMPT", "")
+        if not ai_prompt and t.kind == "issue" and not machine_readable:
+            from .ai import generate_issue_prompt
             from .output import detail
 
-            detail(f"Fetching issue #{t.ref} for Claude prompt...")
-            claude_cfg = config.get("claude", {})
-            claude_prompt = (
+            detail(f"Fetching issue #{t.ref} for AI prompt...")
+            ai_cfg = config.get("ai", {})
+            ai_prompt = (
                 generate_issue_prompt(
                     t.owner,
                     t.repo,
                     t.ref,
                     checkout_branch,
-                    autonomy=claude_cfg.get("autonomy", "plan"),
-                    second_opinion=claude_cfg.get("second_opinion", "auto"),
+                    autonomy=ai_cfg.get("autonomy", "plan"),
+                    second_opinion=ai_cfg.get("second_opinion", "auto"),
                     config=config,
                 )
                 or ""
             )
-        elif not claude_prompt and t.kind == "pr" and not machine_readable:
-            from .claude import generate_pr_prompt
+        elif not ai_prompt and t.kind == "pr" and not machine_readable:
+            from .ai import generate_pr_prompt
             from .output import detail
 
-            detail(f"Fetching PR #{t.ref} for Claude prompt...")
-            claude_prompt = generate_pr_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
+            detail(f"Fetching PR #{t.ref} for AI prompt...")
+            ai_prompt = generate_pr_prompt(t.owner, t.repo, t.ref, checkout_branch) or ""
 
         finalize_bubble(
             runtime,
@@ -1085,7 +1088,7 @@ def _open_single(
             git_name=git_name,
             git_email=git_email,
             command=command_args,
-            claude_prompt=claude_prompt,
+            ai_prompt=ai_prompt,
         )
     except Exception:
         # Clean up partially-provisioned container on failure

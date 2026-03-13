@@ -69,13 +69,14 @@ def test_claude_credentials_roundtrip(tmp_data_dir):
     assert reloaded["claude"]["credentials"] is True
 
 
-def test_claude_credentials_on_cli(tmp_data_dir):
+def test_ai_credentials_on_cli(tmp_data_dir):
+    """bubble ai credentials on (controls preferred provider, default claude)."""
     from click.testing import CliRunner
 
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["claude", "credentials", "on"])
+    result = runner.invoke(main, ["ai", "credentials", "on"])
     assert result.exit_code == 0
     assert "enabled" in result.output
 
@@ -85,16 +86,14 @@ def test_claude_credentials_on_cli(tmp_data_dir):
     assert config["claude"]["credentials"] is True
 
 
-def test_claude_credentials_off_cli(tmp_data_dir):
+def test_ai_credentials_off_cli(tmp_data_dir):
     from click.testing import CliRunner
 
     from bubble.cli import main
 
     runner = CliRunner()
-    # First enable
-    runner.invoke(main, ["claude", "credentials", "on"])
-    # Then disable
-    result = runner.invoke(main, ["claude", "credentials", "off"])
+    runner.invoke(main, ["ai", "credentials", "on"])
+    result = runner.invoke(main, ["ai", "credentials", "off"])
     assert result.exit_code == 0
     assert "disabled" in result.output
 
@@ -104,37 +103,52 @@ def test_claude_credentials_off_cli(tmp_data_dir):
     assert config["claude"]["credentials"] is False
 
 
-def test_claude_credentials_show_current(tmp_data_dir):
+def test_ai_credentials_show_current(tmp_data_dir):
     from click.testing import CliRunner
 
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["claude", "credentials"])
+    result = runner.invoke(main, ["ai", "credentials"])
     assert result.exit_code == 0
     assert "on" in result.output
 
 
-def test_claude_status_cli(tmp_data_dir):
+def test_ai_status_cli(tmp_data_dir):
     from click.testing import CliRunner
 
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["claude", "status"])
+    result = runner.invoke(main, ["ai", "status"])
     assert result.exit_code == 0
+    assert "preferred:" in result.output
+    assert "claude" in result.output
+    assert "autonomy:" in result.output
     assert "credentials:" in result.output
     assert "on" in result.output
 
-    # Disable and check again
-    runner.invoke(main, ["claude", "credentials", "off"])
-    result = runner.invoke(main, ["claude", "status"])
+
+def test_ai_credentials_with_provider_flag(tmp_data_dir):
+    """bubble ai credentials off --provider codex targets codex specifically."""
+    from click.testing import CliRunner
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["ai", "credentials", "off", "--provider", "codex"])
     assert result.exit_code == 0
-    assert "credentials:" in result.output
-    assert "off" in result.output
+    assert "Codex credentials disabled" in result.output
+
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["codex"]["credentials"] is False
+    # Claude should still be on
+    assert config["claude"]["credentials"] is True
 
 
-def test_claude_set_autonomy(tmp_data_dir):
+def test_ai_set_autonomy(tmp_data_dir):
     from click.testing import CliRunner
 
     from bubble.cli import main
@@ -142,22 +156,22 @@ def test_claude_set_autonomy(tmp_data_dir):
     runner = CliRunner()
 
     # Set to pr
-    result = runner.invoke(main, ["claude", "set", "autonomy", "pr"])
+    result = runner.invoke(main, ["ai", "set", "autonomy", "pr"])
     assert result.exit_code == 0
     assert "autonomy" in result.output
     assert "pr" in result.output
 
     # Verify it persists in status
-    result = runner.invoke(main, ["claude", "status"])
+    result = runner.invoke(main, ["ai", "status"])
     assert result.exit_code == 0
     assert "autonomy:       pr" in result.output
 
     # Invalid value
-    result = runner.invoke(main, ["claude", "set", "autonomy", "bogus"])
+    result = runner.invoke(main, ["ai", "set", "autonomy", "bogus"])
     assert result.exit_code != 0
 
 
-def test_claude_set_second_opinion(tmp_data_dir):
+def test_ai_set_second_opinion(tmp_data_dir):
     from click.testing import CliRunner
 
     from bubble.cli import main
@@ -165,27 +179,27 @@ def test_claude_set_second_opinion(tmp_data_dir):
     runner = CliRunner()
 
     # Set to on
-    result = runner.invoke(main, ["claude", "set", "second-opinion", "on"])
+    result = runner.invoke(main, ["ai", "set", "second-opinion", "on"])
     assert result.exit_code == 0
     assert "second-opinion" in result.output
 
     # Verify it persists in status
-    result = runner.invoke(main, ["claude", "status"])
+    result = runner.invoke(main, ["ai", "status"])
     assert result.exit_code == 0
     assert "second-opinion: on" in result.output
 
     # Invalid value
-    result = runner.invoke(main, ["claude", "set", "second-opinion", "bogus"])
+    result = runner.invoke(main, ["ai", "set", "second-opinion", "bogus"])
     assert result.exit_code != 0
 
 
-def test_claude_status_shows_autonomy_defaults(tmp_data_dir):
+def test_ai_status_shows_autonomy_defaults(tmp_data_dir):
     from click.testing import CliRunner
 
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["claude", "status"])
+    result = runner.invoke(main, ["ai", "status"])
     assert result.exit_code == 0
     assert "autonomy:       plan" in result.output
     assert "second-opinion: auto" in result.output
@@ -244,69 +258,6 @@ def test_codex_credentials_roundtrip(tmp_data_dir):
 
     reloaded = load_config()
     assert reloaded["codex"]["credentials"] is True
-
-
-def test_codex_credentials_on_cli(tmp_data_dir):
-    from click.testing import CliRunner
-
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["codex", "credentials", "on"])
-    assert result.exit_code == 0
-    assert "enabled" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["codex"]["credentials"] is True
-
-
-def test_codex_credentials_off_cli(tmp_data_dir):
-    from click.testing import CliRunner
-
-    from bubble.cli import main
-
-    runner = CliRunner()
-    # First enable
-    runner.invoke(main, ["codex", "credentials", "on"])
-    # Then disable
-    result = runner.invoke(main, ["codex", "credentials", "off"])
-    assert result.exit_code == 0
-    assert "disabled" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["codex"]["credentials"] is False
-
-
-def test_codex_credentials_show_current(tmp_data_dir):
-    from click.testing import CliRunner
-
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["codex", "credentials"])
-    assert result.exit_code == 0
-    assert "on" in result.output
-
-
-def test_codex_status_cli(tmp_data_dir):
-    from click.testing import CliRunner
-
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["codex", "status"])
-    assert result.exit_code == 0
-    assert "credentials: on" in result.output
-
-    # Disable and check again
-    runner.invoke(main, ["codex", "credentials", "off"])
-    result = runner.invoke(main, ["codex", "status"])
-    assert result.exit_code == 0
-    assert "credentials: off" in result.output
 
 
 def test_load_raw_config_legacy_no_codex(tmp_data_dir):
@@ -454,6 +405,16 @@ def test_config_show_mounts(tmp_data_dir):
     assert result.exit_code == 0
     assert "[[mounts]]" in result.output
     assert "(set in config)" in result.output
+
+
+def test_default_config_has_ai_section(tmp_data_dir):
+    from bubble.config import load_config
+
+    config = load_config()
+    assert config["ai"]["preferred"] == "claude"
+    assert config["ai"]["second_opinion_provider"] == "codex"
+    assert config["ai"]["second_opinion"] == "auto"
+    assert config["ai"]["autonomy"] == "plan"
 
 
 def test_deep_merge_does_not_mutate_default(tmp_data_dir):

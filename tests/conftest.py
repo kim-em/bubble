@@ -122,8 +122,8 @@ def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CLOUD_KEY_FILE", cloud_key_file)
     monkeypatch.setattr(config, "CLOUD_KNOWN_HOSTS", cloud_known_hosts)
 
-    claude_projects_dir = data_dir / "claude-projects"
-    monkeypatch.setattr(config, "CLAUDE_PROJECTS_DIR", claude_projects_dir)
+    ai_projects_dir = data_dir / "ai-projects"
+    monkeypatch.setattr(config, "AI_PROJECTS_DIR", ai_projects_dir)
 
     # Also patch modules that do `from .config import X` (separate bindings)
     monkeypatch.setattr(lifecycle, "REGISTRY_FILE", registry_file)

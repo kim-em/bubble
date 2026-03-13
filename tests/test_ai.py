@@ -1,27 +1,29 @@
-"""Tests for the Claude Code integration module."""
+"""Tests for the AI provider integration module."""
 
 import subprocess
 from unittest.mock import MagicMock, patch
 
-from bubble.claude import (
+import pytest
+
+from bubble.ai import (
     _DEFAULT_ISSUE_TEMPLATE,
     _DEFAULT_PR_TEMPLATE,
+    AI_TASK_COMMAND,
     AUTONOMY_LEVELS,
-    CLAUDE_TASK_COMMAND,
     SECOND_OPINION_VALUES,
     _load_template,
     _render_template,
     _resolve_second_opinion,
     generate_issue_prompt,
     generate_pr_prompt,
-    inject_claude_task,
+    inject_ai_task,
 )
-from bubble.cli import _resolve_claude_prompt_locally
+from bubble.cli import _resolve_ai_prompt_locally
 
 
 class TestGenerateIssuePrompt:
     def test_basic_prompt(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             # First call: fetch issue
             issue_result = MagicMock()
             issue_result.returncode = 0
@@ -44,7 +46,7 @@ class TestGenerateIssuePrompt:
             assert "propose a plan" in prompt
 
     def test_no_comments(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             issue_result = MagicMock()
             issue_result.returncode = 0
             issue_result.stdout = "Title\nBody text"
@@ -61,7 +63,7 @@ class TestGenerateIssuePrompt:
             assert "Comments:" not in prompt
 
     def test_issue_fetch_failure(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             result = MagicMock()
             result.returncode = 1
             mock_run.return_value = result
@@ -70,20 +72,20 @@ class TestGenerateIssuePrompt:
             assert prompt is None
 
     def test_gh_not_found(self):
-        with patch("bubble.claude.subprocess.run", side_effect=FileNotFoundError):
+        with patch("bubble.ai.subprocess.run", side_effect=FileNotFoundError):
             prompt = generate_issue_prompt("owner", "repo", "1", "issue-1")
             assert prompt is None
 
     def test_gh_timeout(self):
         with patch(
-            "bubble.claude.subprocess.run",
+            "bubble.ai.subprocess.run",
             side_effect=subprocess.TimeoutExpired("gh", 15),
         ):
             prompt = generate_issue_prompt("owner", "repo", "1", "issue-1")
             assert prompt is None
 
     def test_comments_truncated(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             issue_result = MagicMock()
             issue_result.returncode = 0
             issue_result.stdout = "Title\nBody"
@@ -107,8 +109,8 @@ class TestGenerateIssuePrompt:
         )
 
         with (
-            patch("bubble.claude.TEMPLATES_DIR", template_dir),
-            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("bubble.ai.TEMPLATES_DIR", template_dir),
+            patch("bubble.ai.subprocess.run") as mock_run,
         ):
             issue_result = MagicMock()
             issue_result.returncode = 0
@@ -128,7 +130,7 @@ class TestGenerateIssuePrompt:
 
     def test_includes_owner_and_repo(self):
         """Default issue template doesn't include owner/repo, but they're available."""
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             issue_result = MagicMock()
             issue_result.returncode = 0
             issue_result.stdout = "Title\nBody"
@@ -147,7 +149,7 @@ class TestGenerateIssuePrompt:
 
 class TestGeneratePrPrompt:
     def test_basic_pr_prompt(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             pr_result = MagicMock()
             pr_result.returncode = 0
             pr_result.stdout = "Add feature X\nThis PR adds feature X to the system."
@@ -163,7 +165,7 @@ class TestGeneratePrPrompt:
             assert "CI status" in prompt
 
     def test_pr_fetch_failure(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             result = MagicMock()
             result.returncode = 1
             mock_run.return_value = result
@@ -172,20 +174,20 @@ class TestGeneratePrPrompt:
             assert prompt is None
 
     def test_gh_not_found(self):
-        with patch("bubble.claude.subprocess.run", side_effect=FileNotFoundError):
+        with patch("bubble.ai.subprocess.run", side_effect=FileNotFoundError):
             prompt = generate_pr_prompt("owner", "repo", "1", "pr-1")
             assert prompt is None
 
     def test_gh_timeout(self):
         with patch(
-            "bubble.claude.subprocess.run",
+            "bubble.ai.subprocess.run",
             side_effect=subprocess.TimeoutExpired("gh", 15),
         ):
             prompt = generate_pr_prompt("owner", "repo", "1", "pr-1")
             assert prompt is None
 
     def test_pr_prompt_mentions_comments_table(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             pr_result = MagicMock()
             pr_result.returncode = 0
             pr_result.stdout = "Title\nBody"
@@ -197,7 +199,7 @@ class TestGeneratePrPrompt:
             assert "author" in prompt.lower()
 
     def test_pr_prompt_mentions_ci_status(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             pr_result = MagicMock()
             pr_result.returncode = 0
             pr_result.stdout = "Title\nBody"
@@ -213,8 +215,8 @@ class TestGeneratePrPrompt:
         (template_dir / "pr.txt").write_text("PR #{pr_num}: {title} on {branch}")
 
         with (
-            patch("bubble.claude.TEMPLATES_DIR", template_dir),
-            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("bubble.ai.TEMPLATES_DIR", template_dir),
+            patch("bubble.ai.subprocess.run") as mock_run,
         ):
             pr_result = MagicMock()
             pr_result.returncode = 0
@@ -227,7 +229,7 @@ class TestGeneratePrPrompt:
             assert prompt == "PR #10: Fix typo on fix-typo"
 
     def test_empty_body(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             pr_result = MagicMock()
             pr_result.returncode = 0
             pr_result.stdout = "Title only"
@@ -273,12 +275,12 @@ class TestTemplateSystem:
         assert result == "Ref: {missing.attr}"
 
     def test_load_template_missing(self, tmp_path):
-        with patch("bubble.claude.TEMPLATES_DIR", tmp_path):
+        with patch("bubble.ai.TEMPLATES_DIR", tmp_path):
             assert _load_template("nonexistent") is None
 
     def test_load_template_exists(self, tmp_path):
         (tmp_path / "issue.txt").write_text("Custom: {title}")
-        with patch("bubble.claude.TEMPLATES_DIR", tmp_path):
+        with patch("bubble.ai.TEMPLATES_DIR", tmp_path):
             assert _load_template("issue") == "Custom: {title}"
 
     def test_load_template_permission_error(self, tmp_path):
@@ -286,7 +288,7 @@ class TestTemplateSystem:
         f.write_text("content")
         f.chmod(0o000)
         try:
-            with patch("bubble.claude.TEMPLATES_DIR", tmp_path):
+            with patch("bubble.ai.TEMPLATES_DIR", tmp_path):
                 assert _load_template("bad") is None
         finally:
             f.chmod(0o644)
@@ -300,24 +302,24 @@ class TestTemplateSystem:
             assert f"{{{placeholder}}}" in _DEFAULT_PR_TEMPLATE
 
 
-class TestClaudeTaskCommand:
+class TestAITaskCommand:
     def test_command_reads_prompt_file(self):
-        assert "claude-prompt.txt" in CLAUDE_TASK_COMMAND
+        assert "ai-prompt.txt" in AI_TASK_COMMAND
 
     def test_command_skips_permissions(self):
-        assert "--dangerously-skip-permissions" in CLAUDE_TASK_COMMAND
+        assert "--dangerously-skip-permissions" in AI_TASK_COMMAND
 
     def test_command_clears_api_key(self):
-        assert "ANTHROPIC_API_KEY=" in CLAUDE_TASK_COMMAND
+        assert "ANTHROPIC_API_KEY=" in AI_TASK_COMMAND
 
     def test_command_deletes_prompt_after(self):
-        assert "rm -f .vscode/claude-prompt.txt" in CLAUDE_TASK_COMMAND
+        assert "rm -f .vscode/ai-prompt.txt" in AI_TASK_COMMAND
 
 
-class TestInjectClaudeTask:
+class TestInjectAITask:
     def test_calls_runtime_exec(self):
         runtime = MagicMock()
-        inject_claude_task(runtime, "container-1", "/home/user/project", "Do something")
+        inject_ai_task(runtime, "container-1", "/home/user/project", "Do something")
 
         # Should have been called multiple times:
         # 1. mkdir .vscode
@@ -325,12 +327,12 @@ class TestInjectClaudeTask:
         # 3. create/update tasks.json
         # 4. configure settings.json
         # 5. add to git exclude
-        # 6. pre-trust in .claude.json
+        # 6. pre-trust in .claude.json (default provider is claude)
         assert runtime.exec.call_count == 6
 
     def test_all_calls_use_su_user(self):
         runtime = MagicMock()
-        inject_claude_task(runtime, "my-container", "/home/user/project", "prompt text")
+        inject_ai_task(runtime, "my-container", "/home/user/project", "prompt text")
 
         for call in runtime.exec.call_args_list:
             args = call[0]
@@ -342,7 +344,7 @@ class TestInjectClaudeTask:
 
     def test_trust_script_sets_onboarding_fields(self):
         runtime = MagicMock()
-        inject_claude_task(runtime, "c1", "/home/user/project", "prompt")
+        inject_ai_task(runtime, "c1", "/home/user/project", "prompt")
 
         # The last exec call is the trust script
         trust_call = runtime.exec.call_args_list[-1]
@@ -351,17 +353,60 @@ class TestInjectClaudeTask:
         assert "numStartups" in script
         assert "isinstance" in script  # defensive coercion
 
+    def test_codex_provider_skips_trust(self):
+        """When preferred provider is codex, no Claude trust script is run."""
+        runtime = MagicMock()
+        config = {"ai": {"preferred": "codex"}}
+        inject_ai_task(runtime, "container-1", "/home/user/project", "Do something", config=config)
 
-class TestResolveClaudePromptLocally:
+        # Without the Claude trust script, should be 5 calls (not 6)
+        assert runtime.exec.call_count == 5
+
+    def test_codex_provider_uses_codex_command(self):
+        """When preferred provider is codex, the task command uses codex binary."""
+        runtime = MagicMock()
+        config = {"ai": {"preferred": "codex"}}
+        inject_ai_task(runtime, "container-1", "/home/user/project", "Do something", config=config)
+
+        # The tasks.json creation call (3rd call) should contain codex command
+        tasks_call = runtime.exec.call_args_list[2]
+        script = tasks_call[0][1][-1]  # the -c argument
+        assert "codex" in script
+
+    def test_unknown_provider_raises(self):
+        """Unknown provider in config raises ValueError, not silent fallback."""
+        runtime = MagicMock()
+        config = {"ai": {"preferred": "cluade"}}
+        with pytest.raises(ValueError, match="Unknown AI provider 'cluade'"):
+            inject_ai_task(
+                runtime, "container-1", "/home/user/project", "Do something", config=config
+            )
+
+
+class TestTaskCommandValidation:
+    def test_known_providers_succeed(self):
+        from bubble.ai import _task_command_for
+
+        assert "claude" in _task_command_for("claude")
+        assert "codex" in _task_command_for("codex")
+
+    def test_unknown_provider_raises(self):
+        from bubble.ai import _task_command_for
+
+        with pytest.raises(ValueError, match="Unknown AI provider"):
+            _task_command_for("gemini")
+
+
+class TestResolveAIPromptLocally:
     def test_env_var_takes_priority(self):
-        with patch.dict("os.environ", {"BUBBLE_CLAUDE_PROMPT": "env prompt"}):
-            result = _resolve_claude_prompt_locally("owner/repo/issues/1")
+        with patch.dict("os.environ", {"BUBBLE_AI_PROMPT": "env prompt"}):
+            result = _resolve_ai_prompt_locally("owner/repo/issues/1")
             assert result == "env prompt"
 
     def test_issue_target_generates_prompt(self):
         with (
             patch.dict("os.environ", {}, clear=True),
-            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("bubble.ai.subprocess.run") as mock_run,
         ):
             issue_result = MagicMock()
             issue_result.returncode = 0
@@ -371,32 +416,32 @@ class TestResolveClaudePromptLocally:
             comments_result.stdout = ""
             mock_run.side_effect = [issue_result, comments_result]
 
-            result = _resolve_claude_prompt_locally("https://github.com/owner/repo/issues/42")
+            result = _resolve_ai_prompt_locally("https://github.com/owner/repo/issues/42")
             assert "issue #42" in result
             assert "propose a plan" in result
 
     def test_pr_target_generates_prompt(self):
         with (
             patch.dict("os.environ", {}, clear=True),
-            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("bubble.ai.subprocess.run") as mock_run,
         ):
             pr_result = MagicMock()
             pr_result.returncode = 0
             pr_result.stdout = "Add feature\nPR body"
             mock_run.return_value = pr_result
 
-            result = _resolve_claude_prompt_locally("https://github.com/owner/repo/pull/99")
+            result = _resolve_ai_prompt_locally("https://github.com/owner/repo/pull/99")
             assert "#99" in result
             assert "pr-99" in result
 
     def test_non_issue_target_returns_empty(self):
         with patch.dict("os.environ", {}, clear=True):
-            result = _resolve_claude_prompt_locally("owner/repo")
+            result = _resolve_ai_prompt_locally("owner/repo")
             assert result == ""
 
     def test_parse_failure_returns_empty(self):
         with patch.dict("os.environ", {}, clear=True):
-            result = _resolve_claude_prompt_locally("")
+            result = _resolve_ai_prompt_locally("")
             assert result == ""
 
 
@@ -414,21 +459,21 @@ class TestAutonomyLevels:
         return [issue_result, comments_result]
 
     def test_read_level(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="read")
             assert "take no further action" in prompt
             assert "branch" not in prompt.lower() or "issue-1" not in prompt
 
     def test_plan_level(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="plan")
             assert "propose a plan" in prompt
             assert "do not implement" in prompt.lower()
 
     def test_implement_level(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="implement")
             assert "implement" in prompt.lower()
@@ -436,7 +481,7 @@ class TestAutonomyLevels:
             assert "Do not commit" in prompt
 
     def test_pr_level(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="pr")
             assert "implement" in prompt.lower()
@@ -444,14 +489,14 @@ class TestAutonomyLevels:
             assert "issue-1" in prompt
 
     def test_merge_level(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="merge")
             assert "merge" in prompt.lower()
             assert "CI" in prompt or "ci" in prompt.lower()
 
     def test_invalid_autonomy_defaults_to_plan(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "issue-1", autonomy="bogus")
             assert "propose a plan" in prompt
@@ -474,20 +519,20 @@ class TestSecondOpinion:
         return [issue_result, comments_result]
 
     def test_second_opinion_on(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="on")
             assert "second opinion" in prompt.lower()
 
     def test_second_opinion_off(self):
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="off")
             assert "second opinion" not in prompt.lower()
 
     def test_second_opinion_auto_with_codex_tool(self):
         """auto mode uses tool resolution when config is provided."""
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             config = {"tools": {"codex": "yes"}}
             prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="auto", config=config)
@@ -495,7 +540,7 @@ class TestSecondOpinion:
 
     def test_second_opinion_auto_without_codex_tool(self):
         """auto mode disabled when codex tool is explicitly off."""
-        with patch("bubble.claude.subprocess.run") as mock_run:
+        with patch("bubble.ai.subprocess.run") as mock_run:
             mock_run.side_effect = self._make_mock_run()
             config = {"tools": {"codex": "no"}}
             prompt = generate_issue_prompt("o", "r", "1", "b", second_opinion="auto", config=config)
@@ -504,7 +549,7 @@ class TestSecondOpinion:
     def test_second_opinion_auto_fallback_no_config(self):
         """auto mode falls back to shutil.which when no config provided."""
         with (
-            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("bubble.ai.subprocess.run") as mock_run,
             patch("shutil.which", return_value="/usr/bin/codex"),
         ):
             mock_run.side_effect = self._make_mock_run()
@@ -549,8 +594,8 @@ class TestCustomTemplateBackcompat:
         (template_dir / "issue.txt").write_text("Issue #{issue_num}: {title}\n{body}")
 
         with (
-            patch("bubble.claude.TEMPLATES_DIR", template_dir),
-            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("bubble.ai.TEMPLATES_DIR", template_dir),
+            patch("bubble.ai.subprocess.run") as mock_run,
         ):
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "b", autonomy="pr")
@@ -564,8 +609,8 @@ class TestCustomTemplateBackcompat:
         (template_dir / "issue.txt").write_text("{title}\n{instructions}")
 
         with (
-            patch("bubble.claude.TEMPLATES_DIR", template_dir),
-            patch("bubble.claude.subprocess.run") as mock_run,
+            patch("bubble.ai.TEMPLATES_DIR", template_dir),
+            patch("bubble.ai.subprocess.run") as mock_run,
         ):
             mock_run.side_effect = self._make_mock_run()
             prompt = generate_issue_prompt("o", "r", "1", "b", autonomy="pr")

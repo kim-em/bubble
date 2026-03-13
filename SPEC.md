@@ -56,7 +56,7 @@ equivalent to `bubble open <url>`.
 | `-b`, `--new-branch` | string | | Create a new branch |
 | `--base` | string | | Base branch for `-b` |
 | `--mount` | string (repeatable) | | Mount host dir into container |
-| `--claude-config/--no-claude-config` | flag | enabled | Mount ~/.claude config read-only |
+| `--ai-config/--no-ai-config` | flag | enabled | Mount AI provider configs read-only |
 | `--claude-credentials/--no-claude-credentials` | flag | enabled | Mount Claude credentials |
 | `--codex-credentials/--no-codex-credentials` | flag | enabled | Mount Codex credentials |
 | `--ssh HOST` | string | | Run on remote host |
@@ -912,7 +912,7 @@ validation already confirmed the repo exists).
 
 ### 10.1 Claude Code config mounting
 
-When `--claude-config` is enabled (default), mount specific items from
+When `--ai-config` is enabled (default), mount specific items from
 `~/.claude/` into `/home/user/.claude/` read-only:
 - `CLAUDE.md`, `settings.json`, `skills/`, `keybindings.json`, `commands/`
 
@@ -1087,11 +1087,10 @@ Configuration is managed through dedicated subcommands rather than a generic
 get/set interface:
 
 - `bubble tools set TOOL yes|no|auto` — configure tool installation
-- `bubble claude credentials on|off` — toggle Claude credential mounting
-- `bubble codex credentials on|off` — toggle Codex credential mounting
+- `bubble ai credentials on|off [--provider claude|codex]` — toggle AI credential mounting
 - `bubble security set NAME on|off|auto` — configure security settings
 - `bubble config set KEY VALUE` — set security settings (alias)
-- `bubble config symlink-claude-projects` — symlink Claude projects directory
+- `bubble config symlink-ai-projects` — symlink AI projects directory
 
 ---
 
