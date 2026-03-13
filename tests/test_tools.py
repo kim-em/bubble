@@ -319,7 +319,7 @@ def test_tools_update_no_changes(tmp_data_dir, monkeypatch):
 
 
 def test_build_image_installs_tools(mock_runtime, monkeypatch, tmp_data_dir):
-    """Verify that building the base image runs tool install scripts."""
+    """Verify that building the base image runs per-tool install scripts."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
@@ -329,13 +329,61 @@ def test_build_image_installs_tools(mock_runtime, monkeypatch, tmp_data_dir):
     mock_runtime._images.discard("base")
     build_image(mock_runtime, "base")
 
-    # Should have exec calls: one for the main script, one for tools
+    # Should have exec calls: base.sh + one per tool (claude, vscode)
     exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
-    # At least 2 exec calls: main script + tool script
     assert len(exec_calls) >= 2
-    # The last exec before stop should be the tools script
-    tool_exec = exec_calls[-1]
-    assert "claude" in tool_exec[2][-1].lower()  # script content contains claude
+    # Should have a per-tool exec call containing claude
+    tool_scripts = [c[2][-1] for c in exec_calls]
+    assert any("claude" in s.lower() for s in tool_scripts)
+
+
+def test_build_image_per_tool_progress(mock_runtime, monkeypatch, tmp_data_dir, capsys):
+    """Verify that tool installation shows per-tool progress messages."""
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd in ("claude", "elan"))
+    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
+
+    from bubble.images.builder import build_image
+
+    mock_runtime._images.discard("base")
+    build_image(mock_runtime, "base")
+
+    captured = capsys.readouterr()
+    # elan (priority 10), claude (priority 50), vscode (priority 90)
+    assert "elan (1/3)" in captured.out
+    assert "claude (2/3)" in captured.out
+    assert "vscode (3/3)" in captured.out
+
+
+def test_build_image_shows_progress_markers(mock_runtime, monkeypatch, tmp_data_dir, capsys):
+    """Verify that BUBBLE_PROGRESS markers from build scripts are displayed."""
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
+
+    from bubble.config import load_config, save_config
+
+    config = load_config()
+    config["editor"] = "shell"
+    save_config(config)
+
+    # Make exec return BUBBLE_PROGRESS lines so the streaming callback can parse them
+    mock_runtime.exec_responses["bash"] = (
+        "BUBBLE_PROGRESS: Installing system packages...\n"
+        "lots of apt output\n"
+        "BUBBLE_PROGRESS: Configuring SSH...\n"
+    )
+
+    from bubble.images.builder import build_image
+
+    mock_runtime._images.discard("base")
+    build_image(mock_runtime, "base")
+
+    captured = capsys.readouterr()
+    assert "Installing system packages..." in captured.out
+    assert "Configuring SSH..." in captured.out
+    # Non-progress lines should not be printed
+    assert "lots of apt output" not in captured.out
 
 
 def test_build_image_no_tools_when_none_enabled(mock_runtime, monkeypatch, tmp_data_dir):
