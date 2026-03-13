@@ -413,8 +413,11 @@ def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
     def mock_provision(*args, **kwargs):
         call_order.append("provision")
 
+    call_order_kwargs = {}
+
     def mock_setup_gh_token(*args, **kwargs):
         call_order.append("setup_gh_token")
+        call_order_kwargs.update(kwargs)
         return True
 
     def mock_clone(*args, **kwargs):
@@ -423,6 +426,13 @@ def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
 
     def mock_finalize(*args, **kwargs):
         call_order.append("finalize")
+
+    # Return True for github_auth but False for github_token_inject,
+    # matching the default security posture. This ensures the test exercises
+    # the auth proxy branch (the one affected by issue #221), not the
+    # token injection branch.
+    def is_enabled_side_effect(_config, setting):
+        return setting != "github_token_inject"
 
     with (
         patch("bubble.cli.load_config", return_value={}),
@@ -440,7 +450,7 @@ def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
         patch("bubble.cli.detect_and_build_image", return_value=(None, "base")),
         patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
         patch("bubble.cli.provision_container", side_effect=mock_provision),
-        patch("bubble.cli.is_enabled", return_value=True),
+        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
         patch("bubble.github_token.setup_gh_token", side_effect=mock_setup_gh_token),
         patch("bubble.cli.clone_and_checkout", side_effect=mock_clone),
         patch("bubble.cli.finalize_bubble", side_effect=mock_finalize),
@@ -463,3 +473,8 @@ def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
     assert prov_idx < auth_idx < clone_idx, (
         f"Expected provision < setup_gh_token < clone, got order: {call_order}"
     )
+
+    # Verify the proxy branch was taken (owner/repo passed, no token_inject)
+    assert call_order_kwargs["owner"] == "kim-em"
+    assert call_order_kwargs["repo"] == "bubble"
+    assert not call_order_kwargs.get("token_inject", False)
