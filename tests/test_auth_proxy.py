@@ -735,6 +735,23 @@ class TestCollectGraphqlOpTypes:
     def test_only_comments(self):
         assert _collect_graphql_op_types("# just a comment") == []
 
+    def test_string_with_braces(self):
+        """Braces inside string literals must not confuse brace counting."""
+        query = 'query { repository { issue(body: "{ }") { id } } }'
+        assert _collect_graphql_op_types(query) == ["query"]
+
+    def test_mutation_after_string_with_braces(self):
+        """A mutation following a query whose string contains braces must be detected."""
+        query = (
+            'query A { repository { issue(body: "} }") { id } } } mutation B { addComment { id } }'
+        )
+        assert _collect_graphql_op_types(query) == ["query", "mutation"]
+
+    def test_block_string_with_braces(self):
+        """Block strings (triple-quoted) with braces must be handled."""
+        query = 'query { repository { issue(body: """{ extra { nested } }""") { id } } }'
+        assert _collect_graphql_op_types(query) == ["query"]
+
 
 class TestClassifyGraphql:
     def test_valid_query(self):
