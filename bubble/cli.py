@@ -51,6 +51,7 @@ from .native import open_native
 from .provisioning import mount_overlaps, provision_container
 from .repo_registry import RepoRegistry
 from .security import (
+    get_github_level,
     is_enabled,
     is_locked_off,
     print_warnings,
@@ -329,8 +330,9 @@ def _open_remote(
     # Inject local SSH keys into the container so the chained ProxyCommand works
     inject_local_ssh_keys(remote_host, name)
 
-    # Set up GitHub auth: token injection (level 5) or tunneled proxy (levels 1-4)
-    if is_enabled(config, "github_token_inject"):
+    # Set up GitHub auth based on the unified github security level
+    gh_level = get_github_level(config)
+    if gh_level == "direct":
         from .github_token import setup_gh_token
 
         setup_gh_token(
@@ -339,7 +341,7 @@ def _open_remote(
             remote_host=remote_host,
             token_inject=True,
         )
-    elif is_enabled(config, "github_auth"):
+    elif gh_level != "off":
         from .github_token import setup_gh_token
         from .tools import resolve_tools
 
@@ -993,9 +995,10 @@ def _open_single(
         )
 
         # Set up GitHub auth BEFORE clone — network allowlisting strips
-        # github.com from allowed domains when using the auth proxy (levels
-        # 1-4), so git must be configured to route through the proxy first.
-        if is_enabled(config, "github_token_inject"):
+        # github.com from allowed domains when using the auth proxy, so
+        # git must be configured to route through the proxy first.
+        gh_level = get_github_level(config)
+        if gh_level == "direct":
             from .github_token import setup_gh_token
 
             setup_gh_token(
@@ -1004,7 +1007,7 @@ def _open_single(
                 machine_readable=machine_readable,
                 token_inject=True,
             )
-        elif is_enabled(config, "github_auth"):
+        elif gh_level != "off":
             from .github_token import setup_gh_token
             from .tools import resolve_tools
 
