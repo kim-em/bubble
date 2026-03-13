@@ -347,12 +347,21 @@ def _open_remote(
     if gh_level == "direct":
         from .github_token import setup_gh_token
 
-        setup_gh_token(
+        auth_ok = setup_gh_token(
             None,
             name,
             remote_host=remote_host,
             token_inject=True,
         )
+        if not auth_ok and network:
+            click.echo(
+                "Error: GitHub token injection failed and network allowlisting is active "
+                "(github.com is blocked).\n"
+                "Run `gh auth login` to configure GitHub authentication, "
+                "or use `--no-network` to skip network allowlisting.",
+                err=True,
+            )
+            sys.exit(1)
     elif gh_level != "off":
         from .github_token import setup_gh_token
         from .tools import resolve_tools
@@ -361,7 +370,7 @@ def _open_remote(
         if org_repo and "/" in org_repo:
             owner, repo = org_repo.split("/", 1)
         gh_enabled = "gh" in resolve_tools(config)
-        setup_gh_token(
+        auth_ok = setup_gh_token(
             None,
             name,
             owner=owner,
@@ -370,6 +379,15 @@ def _open_remote(
             gh_enabled=gh_enabled,
             config=config,
         )
+        if not auth_ok and network:
+            click.echo(
+                "Error: GitHub auth proxy setup failed and network allowlisting is active "
+                "(github.com is blocked).\n"
+                "Run `gh auth login` to configure GitHub authentication, "
+                "or use `--no-network` to skip network allowlisting.",
+                err=True,
+            )
+            sys.exit(1)
 
     # Write local SSH config with chained ProxyCommand through the remote host
     host_key = is_enabled(config, "host_key_trust")
@@ -1017,18 +1035,25 @@ def _open_single(
         if gh_level == "direct":
             from .github_token import setup_gh_token
 
-            setup_gh_token(
+            auth_ok = setup_gh_token(
                 runtime,
                 name,
                 machine_readable=machine_readable,
                 token_inject=True,
             )
+            if not auth_ok and network:
+                raise click.ClickException(
+                    "GitHub token injection failed and network allowlisting is active "
+                    "(github.com is blocked).\n"
+                    "Run `gh auth login` to configure GitHub authentication, "
+                    "or use `--no-network` to skip network allowlisting."
+                )
         elif gh_level != "off":
             from .github_token import setup_gh_token
             from .tools import resolve_tools
 
             gh_enabled = "gh" in resolve_tools(config)
-            setup_gh_token(
+            auth_ok = setup_gh_token(
                 runtime,
                 name,
                 owner=t.owner,
@@ -1037,6 +1062,13 @@ def _open_single(
                 gh_enabled=gh_enabled,
                 config=config,
             )
+            if not auth_ok and network:
+                raise click.ClickException(
+                    "GitHub auth proxy setup failed and network allowlisting is active "
+                    "(github.com is blocked).\n"
+                    "Run `gh auth login` to configure GitHub authentication, "
+                    "or use `--no-network` to skip network allowlisting."
+                )
 
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 
