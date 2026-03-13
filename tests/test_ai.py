@@ -336,6 +336,17 @@ class TestInjectAITask:
 
         assert runtime.exec.call_count == 5
 
+    def test_claude_task_command_has_required_behavior(self):
+        """Claude task command clears API key, skips permissions, and cleans up prompt."""
+        runtime = MagicMock()
+        inject_ai_task(runtime, "container-1", "/home/user/project", "Do something")
+
+        tasks_call = runtime.exec.call_args_list[2]
+        script = tasks_call[0][1][-1]  # the -c argument
+        assert "ANTHROPIC_API_KEY=" in script
+        assert "--dangerously-skip-permissions" in script
+        assert "rm -f" in script and "ai-prompt.txt" in script
+
     def test_codex_provider_uses_codex_command(self):
         """When preferred provider is codex, the task command uses codex binary."""
         runtime = MagicMock()
