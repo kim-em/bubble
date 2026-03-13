@@ -282,6 +282,7 @@ class FieldInfo:
     name: str
     alias: str | None = None
     has_args: bool = False
+    args: dict[str, str] | None = None  # argname -> "$var" or literal value
     selection_start: int | None = None  # token index of opening {
     selection_end: int | None = None  # token index after closing }
 
@@ -341,6 +342,55 @@ def _skip_parens(tokens: list[_Token], start: int) -> int:
     return i if depth == 0 else -1
 
 
+def _extract_args(tokens: list[_Token], paren_start: int) -> dict[str, str]:
+    """Extract simple keyword arguments from a field's argument list.
+
+    Parses tokens between ( and ) looking for name: value pairs.
+    Returns dict of argname -> value (e.g. "$owner" for variable refs,
+    or the literal string for inline values).
+
+    Only handles the top level — nested object values are skipped.
+    """
+    args: dict[str, str] = {}
+    i = paren_start + 1  # skip (
+    n = len(tokens)
+
+    while i < n:
+        tok = tokens[i]
+        if tok.kind == "punct" and tok.value == ")":
+            break
+
+        # Look for: argName : value
+        if tok.kind == "ident":
+            arg_name = tok.value
+            i += 1
+            # Expect ':'
+            if i < n and tokens[i].kind == "punct" and tokens[i].value == ":":
+                i += 1
+                if i < n:
+                    val_tok = tokens[i]
+                    if val_tok.kind == "ident" and val_tok.value.startswith("$"):
+                        args[arg_name] = val_tok.value
+                    elif val_tok.kind == "string":
+                        args[arg_name] = val_tok.value
+                    elif val_tok.kind == "ident":
+                        # enum value or other literal
+                        args[arg_name] = val_tok.value
+                    elif val_tok.kind == "punct" and val_tok.value == "{":
+                        # Object literal — skip it
+                        skip = _skip_braced_tokens(tokens, i)
+                        if skip != -1:
+                            args[arg_name] = "{...}"
+                            i = skip
+                            continue
+                    i += 1
+                    continue
+
+        i += 1
+
+    return args
+
+
 def _extract_fields(tokens: list[_Token], start: int, end: int) -> list[FieldInfo]:
     """Extract top-level fields from a selection set token range.
 
@@ -381,10 +431,12 @@ def _extract_fields(tokens: list[_Token], start: int, end: int) -> list[FieldInf
                     name = tokens[i].value
                     i += 1
 
-            # Skip arguments
+            # Extract arguments
             has_args = False
+            args = None
             if i < limit and tokens[i].kind == "punct" and tokens[i].value == "(":
                 has_args = True
+                args = _extract_args(tokens, i)
                 skip = _skip_parens(tokens, i)
                 if skip != -1:
                     i = skip
@@ -404,6 +456,7 @@ def _extract_fields(tokens: list[_Token], start: int, end: int) -> list[FieldInf
                     name=name,
                     alias=alias,
                     has_args=has_args,
+                    args=args,
                     selection_start=sel_start,
                     selection_end=sel_end,
                 )
@@ -728,11 +781,25 @@ def validate_read(
 
 def _validate_repository_read(parsed: ParsedGraphQL, owner: str, repo: str) -> str | None:
     """Validate a repository(...) { ... } query."""
-    v = parsed.variables
+    repo_field = parsed.top_level_fields[0]
 
-    # gh uses $owner/$repo or $owner/$name
-    v_owner = v.get("owner") or v.get("repo_owner") or ""
-    v_name = v.get("name") or v.get("repo") or ""
+    # Require variable references in arguments, not inline literals.
+    # Without this, a query could use repository(owner: "evil", name: "secret")
+    # while supplying benign variables, bypassing repo-scoping.
+    args = repo_field.args or {}
+    owner_arg = args.get("owner", "")
+    name_arg = args.get("name", "")
+
+    if not owner_arg.startswith("$") or not name_arg.startswith("$"):
+        return "repository() arguments must use $variable references, not inline literals"
+
+    # Resolve the variable names to their values
+    owner_var = owner_arg[1:]  # strip $
+    name_var = name_arg[1:]
+
+    v = parsed.variables
+    v_owner = v.get(owner_var, "")
+    v_name = v.get(name_var, "")
 
     if not v_owner or not v_name:
         return "Missing owner/name variables for repository query"
@@ -756,7 +823,15 @@ def _validate_node_read(
     preflight_fn: Callable[[str], str | None] | None,
 ) -> str | None:
     """Validate a node(id: ...) query."""
-    node_id = parsed.variables.get("id")
+    # Require variable reference for the node ID argument
+    node_field = parsed.top_level_fields[0]
+    args = node_field.args or {}
+    id_arg = args.get("id", "")
+    if not id_arg.startswith("$"):
+        return "node() id argument must use $variable reference"
+
+    id_var = id_arg[1:]
+    node_id = parsed.variables.get(id_var)
     if not node_id:
         return "Missing 'id' variable for node query"
 
@@ -795,6 +870,15 @@ def validate_write(
 
     if mutation_name not in ALLOWED_MUTATIONS:
         return f"Mutation '{mutation_name}' not in allowlist"
+
+    # Require mutation arguments use $variable references, not inline literals.
+    # Without this, a mutation could use inline {pullRequestId: "foreign"}
+    # while supplying a benign ID in variables, bypassing repo-scoping.
+    mutation_field = parsed.top_level_fields[0]
+    args = mutation_field.args or {}
+    input_arg = args.get("input", "")
+    if input_arg and not input_arg.startswith("$"):
+        return "Mutation arguments must use $variable references, not inline literals"
 
     id_param, verify_type = ALLOWED_MUTATIONS[mutation_name]
 

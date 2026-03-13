@@ -378,12 +378,22 @@ class TestReadValidation:
 
     def test_repository_missing_variables_rejected(self):
         parsed = self._parsed_query(
-            'query { repository(owner: "inline", name: "args") { name } }',
-            {},
+            "query($owner: String!) { repository(owner: $owner, name: $name) { name } }",
+            {"owner": "my-org"},
         )
         error = validate_read(parsed, "my-org", "my-repo")
         assert error is not None
         assert "Missing" in error
+
+    def test_inline_args_rejected(self):
+        """Inline string arguments must be rejected to prevent bypass."""
+        parsed = self._parsed_query(
+            'query { repository(owner: "evil-org", name: "secret") { name } }',
+            {"owner": "my-org", "repo": "my-repo"},
+        )
+        error = validate_read(parsed, "my-org", "my-repo")
+        assert error is not None
+        assert "$variable" in error
 
     def test_disallowed_second_level_field_rejected(self):
         q = (
@@ -456,12 +466,22 @@ class TestReadValidation:
 
     def test_node_query_missing_id_rejected(self):
         parsed = self._parsed_query(
-            'query { node(id: "inline") { ... on PullRequest { title } } }',
+            "query($id: ID!) { node(id: $id) { ... on PullRequest { title } } }",
             {},
         )
         error = validate_read(parsed, "o", "r")
         assert error is not None
         assert "Missing" in error
+
+    def test_node_inline_id_rejected(self):
+        """Inline node ID must be rejected to prevent bypass."""
+        parsed = self._parsed_query(
+            'query { node(id: "PR_foreign") { ... on PullRequest { title } } }',
+            {"id": "PR_mine"},
+        )
+        error = validate_read(parsed, "o", "r")
+        assert error is not None
+        assert "$variable" in error
 
     def test_unknown_top_level_field_rejected(self):
         parsed = self._parsed_query(
@@ -612,16 +632,12 @@ class TestWriteValidation:
         assert error is None
 
     def test_id_in_top_level_variables_fallback(self):
-        """ID can be in top-level variables if not in input."""
-        query = (
-            "mutation M($subjectId: ID!, $body: String!)"
-            " { addComment(input: {subjectId: $subjectId,"
-            " body: $body}) { id } }"
-        )
+        """ID can be in top-level variables if not in input object."""
+        query = "mutation M($input: AddCommentInput!) { addComment(input: $input) { id } }"
         body = json.dumps(
             {
                 "query": query,
-                "variables": {"subjectId": "PR_abc123", "body": "test"},
+                "variables": {"input": {"subjectId": "PR_abc123", "body": "test"}},
             }
         ).encode()
         parsed, error = parse_graphql(body)
@@ -633,6 +649,25 @@ class TestWriteValidation:
             preflight_fn=lambda nid: "org/repo",
         )
         assert error is None
+
+    def test_inline_input_object_rejected(self):
+        """Inline input objects must be rejected to prevent bypass."""
+        query = (
+            "mutation M($id: ID!, $body: String!)"
+            " { addComment(input: {subjectId: $id,"
+            " body: $body}) { id } }"
+        )
+        body = json.dumps(
+            {
+                "query": query,
+                "variables": {"id": "PR_abc123", "body": "test"},
+            }
+        ).encode()
+        parsed, error = parse_graphql(body)
+        assert error is None
+        error = validate_write(parsed, "org", "repo")
+        assert error is not None
+        assert "$variable" in error
 
 
 # ---------------------------------------------------------------------------
