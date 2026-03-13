@@ -29,5 +29,6 @@ chown 1001:1001 /etc/bubble/gh
 cat > /etc/bubble/gh/config.yml <<'GHCONF'
 http_unix_socket: /bubble/gh-proxy.sock
 GHCONF
+chown 1001:1001 /etc/bubble/gh/config.yml
 
 echo "gh installed: $(gh --version 2>/dev/null | head -1 || echo 'unknown version')"
