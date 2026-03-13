@@ -777,7 +777,7 @@ entry has a `remote_host` field. The command is forwarded via
 
 ### 8.1 Requirements
 
-- `HETZNER_TOKEN` environment variable (never stored)
+- `HCLOUD_TOKEN` environment variable (never stored)
 - `hcloud` Python package (optional dependency)
 
 ### 8.2 Commands

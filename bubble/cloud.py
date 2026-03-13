@@ -115,10 +115,10 @@ def _clear_state():
 
 def _get_token() -> str:
     """Get Hetzner API token from environment."""
-    token = os.environ.get("HETZNER_TOKEN", "")
+    token = os.environ.get("HCLOUD_TOKEN", "")
     if not token:
         raise click.ClickException(
-            "HETZNER_TOKEN environment variable is required.\n"
+            "HCLOUD_TOKEN environment variable is required.\n"
             "Get one from: https://console.hetzner.cloud/projects → API tokens"
         )
     return token

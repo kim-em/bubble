@@ -114,7 +114,7 @@ Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (o
 
 **Priority chain for remote host resolution:** `--local` > `--ssh HOST` > `--cloud` > `[cloud] default` > `[remote] default_host`
 
-**State:** `~/.bubble/cloud.json` tracks server ID, IP, SSH key ID. Token comes from `HETZNER_TOKEN` env var (never stored).
+**State:** `~/.bubble/cloud.json` tracks server ID, IP, SSH key ID. Token comes from `HCLOUD_TOKEN` env var (never stored).
 
 ### User Customization Script
 Users can place a `customize.sh` script at `~/.bubble/customize.sh` to run custom setup in all container images. The script runs as root as the final step when building any image (base, lean, lean-v4.X.Y). This lets users add tools, dotfiles, shell config, etc. without forking image scripts. The script's content hash is tracked in `~/.bubble/customize-hash`; on `bubble open`, if the hash differs from the stored value, a background rebuild of the base image is triggered (same pattern as VS Code commit hash drift). Code is in `builder.py` (`customize_hash()`, `_run_customize_script()`).

@@ -247,7 +247,7 @@ Run bubbles on auto-provisioned Hetzner Cloud servers. The server shuts down aut
 2. Go to your project → Security → API Tokens → Generate API Token (read/write)
 3. Set the token in your environment:
    ```bash
-   export HETZNER_TOKEN="your-token-here"
+   export HCLOUD_TOKEN="your-token-here"
    ```
 4. Install the cloud dependency:
    ```bash
@@ -327,7 +327,7 @@ location = "fsn1"            # datacenter: fsn1, nbg1, hel1, ash, hil
 idle_timeout = 900           # seconds before idle shutdown (default: 900 = 15min)
 ```
 
-The `HETZNER_TOKEN` environment variable is always required — the token is never stored on disk.
+The `HCLOUD_TOKEN` environment variable is always required — the token is never stored on disk.
 
 ## Bubble-in-Bubble
 
