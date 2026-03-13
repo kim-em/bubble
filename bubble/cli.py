@@ -362,7 +362,7 @@ def _open_remote(
                 err=True,
             )
             sys.exit(1)
-    elif is_enabled(config, "github_auth"):
+    elif gh_level != "off":
         from .github_token import setup_gh_token
         from .tools import resolve_tools
 
@@ -1048,7 +1048,7 @@ def _open_single(
                     "Run `gh auth login` to configure GitHub authentication, "
                     "or use `--no-network` to skip network allowlisting."
                 )
-        elif is_enabled(config, "github_auth"):
+        elif gh_level != "off":
             from .github_token import setup_gh_token
             from .tools import resolve_tools
 
