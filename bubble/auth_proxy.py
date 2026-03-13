@@ -326,19 +326,21 @@ def validate_api_path(
 # ---------------------------------------------------------------------------
 
 
-def _skip_braced_block(text: str, start: int) -> int:
-    """Skip a balanced { ... } block starting at position start.
+def _skip_braced_tokens(tokens: list, start: int) -> int:
+    """Skip a balanced { ... } block in a token list starting at *start*.
 
-    Returns the position after the closing brace, or -1 on error.
+    tokens[start] must be a '{' punct token.
+    Returns the index after the closing '}', or -1 on error.
     """
-    if start >= len(text) or text[start] != "{":
+    if start >= len(tokens) or tokens[start].value != "{":
         return -1
     depth = 1
     i = start + 1
-    while i < len(text) and depth > 0:
-        if text[i] == "{":
+    while i < len(tokens) and depth > 0:
+        v = tokens[i].value
+        if v == "{":
             depth += 1
-        elif text[i] == "}":
+        elif v == "}":
             depth -= 1
         i += 1
     return i if depth == 0 else -1
@@ -350,64 +352,62 @@ def _collect_graphql_op_types(query: str) -> list[str]:
     Returns a list of operation types found (e.g. ['query', 'mutation']).
     Handles line comments, fragment definitions, and anonymous queries.
     Multiple operations in a single document are all reported.
-    """
-    # Strip line comments
-    lines = []
-    for line in query.split("\n"):
-        idx = line.find("#")
-        if idx >= 0:
-            line = line[:idx]
-        lines.append(line)
-    cleaned = " ".join(lines).strip()
 
-    if not cleaned:
+    Uses the string-aware tokenizer from graphql_validator so that braces
+    inside string literals are not miscounted.
+    """
+    from .graphql_validator import _tokenize
+
+    tokens = _tokenize(query)
+    if not tokens:
         return []
 
-    ops = []
-    pos = 0
+    ops: list[str] = []
+    i = 0
 
-    while pos < len(cleaned):
-        # Skip whitespace
-        while pos < len(cleaned) and cleaned[pos] in " \t\r\n":
-            pos += 1
-        if pos >= len(cleaned):
-            break
+    while i < len(tokens):
+        tok = tokens[i]
 
         # Anonymous query starts with {
-        if cleaned[pos] == "{":
+        if tok.kind == "punct" and tok.value == "{":
             ops.append("query")
-            end = _skip_braced_block(cleaned, pos)
+            end = _skip_braced_tokens(tokens, i)
             if end == -1:
                 break
-            pos = end
+            i = end
             continue
 
-        # Skip fragment definitions: fragment Name on Type { ... }
-        if cleaned[pos:].startswith("fragment"):
-            brace_start = cleaned.find("{", pos)
-            if brace_start == -1:
-                break
-            end = _skip_braced_block(cleaned, brace_start)
-            if end == -1:
-                break
-            pos = end
-            continue
+        if tok.kind == "ident":
+            # Skip fragment definitions: fragment Name on Type { ... }
+            if tok.value == "fragment":
+                # Scan forward to the opening brace
+                j = i + 1
+                while j < len(tokens) and tokens[j].value != "{":
+                    j += 1
+                if j >= len(tokens):
+                    break
+                end = _skip_braced_tokens(tokens, j)
+                if end == -1:
+                    break
+                i = end
+                continue
 
-        # Check for operation keyword
-        match = re.match(r"(query|mutation|subscription)\b", cleaned[pos:], re.IGNORECASE)
-        if match:
-            ops.append(match.group(1).lower())
-            # Skip past the operation body
-            brace_start = cleaned.find("{", pos)
-            if brace_start == -1:
-                break
-            end = _skip_braced_block(cleaned, brace_start)
-            if end == -1:
-                break
-            pos = end
-            continue
+            # Check for operation keyword
+            if tok.value.lower() in ("query", "mutation", "subscription"):
+                ops.append(tok.value.lower())
+                # Scan forward to the opening brace
+                j = i + 1
+                while j < len(tokens) and tokens[j].value != "{":
+                    j += 1
+                if j >= len(tokens):
+                    break
+                end = _skip_braced_tokens(tokens, j)
+                if end == -1:
+                    break
+                i = end
+                continue
 
-        # Unrecognized content — stop parsing
+        # Unrecognized token — stop parsing
         break
 
     return ops
