@@ -9,7 +9,7 @@ We assume that you work using VSCode, emacs, or neovim, and that you collaborate
 
 ```bash
 # Install
-uv tool install dev-bubble
+uv tool install git+https://github.com/kim-em/bubble.git
 
 # Open a bubble for a GitHub PR — just paste the URL, and you get a containerized VSCode window!
 bubble https://github.com/leanprover-community/mathlib4/pull/35219
@@ -90,11 +90,9 @@ bubble pop mathlib4-pr-35219
 ## Development Install
 
 ```bash
-# Install from GitHub
-uv tool install git+https://github.com/kim-em/bubble.git
-
-# For development
-uv pip install -e '.[dev]'
+# Install from a local clone (editable — always uses latest code)
+git clone https://github.com/kim-em/bubble.git
+uv tool install --force --editable bubble
 ```
 
 ## How It Works
