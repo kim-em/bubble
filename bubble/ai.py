@@ -10,6 +10,7 @@ import json
 import re
 import shlex
 import subprocess
+from pathlib import Path
 
 from .config import DATA_DIR
 from .runtime.base import ContainerRuntime
@@ -291,6 +292,50 @@ def generate_pr_prompt(owner: str, repo: str, pr_num: str, branch: str) -> str |
     )
 
 
+def setup_claude_settings(
+    runtime: ContainerRuntime,
+    container: str,
+    project_dir: str,
+):
+    """Pre-populate ~/.claude.json in the container to skip the first-run wizard.
+
+    Copies relevant settings (theme, onboarding state, etc.) from the host's
+    ~/.claude.json if it exists. Always ensures hasCompletedOnboarding=True
+    and pre-trusts the project directory. This runs for ALL bubbles, not just
+    those with AI task injection.
+    """
+    host_claude_json = Path.home() / ".claude.json"
+
+    # Start with host settings if available
+    settings: dict = {}
+    if host_claude_json.is_file():
+        try:
+            settings = json.loads(host_claude_json.read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # Remove host-specific project entries (paths don't apply inside container)
+    settings.pop("projects", None)
+
+    # Ensure onboarding is marked complete
+    settings["hasCompletedOnboarding"] = True
+    n = settings.get("numStartups", 0)
+    settings["numStartups"] = (n if isinstance(n, int) else 0) + 1
+
+    # Pre-trust the project directory
+    settings.setdefault("projects", {})
+    proj = settings["projects"].setdefault(project_dir, {})
+    proj["hasTrustDialogAccepted"] = True
+    proj.setdefault("allowedTools", [])
+
+    # Write to container
+    settings_json = shlex.quote(json.dumps(settings, indent=2))
+    runtime.exec(
+        container,
+        ["su", "-", "user", "-c", f"printf '%s' {settings_json} > ~/.claude.json"],
+    )
+
+
 def inject_ai_task(
     runtime: ContainerRuntime,
     container: str,
@@ -384,24 +429,6 @@ def inject_ai_task(
         f"done"
     )
     runtime.exec(container, ["su", "-", "user", "-c", exclude_script])
-
-    # Pre-trust the project directory and skip onboarding in provider config
-    if provider == "claude":
-        trust_script = (
-            f'python3 -c "'
-            f"import json,os; "
-            f"p=os.path.expanduser('~/.claude.json'); "
-            f"d=json.load(open(p)) if os.path.exists(p) else {{}}; "
-            f"d['hasCompletedOnboarding']=True; "
-            f"n=d.get('numStartups',0); d['numStartups']=(n if isinstance(n,int) else 0)+1; "
-            f"d.setdefault('projects',{{}}); "
-            f"proj=d['projects'].setdefault({shlex.quote(project_dir)!r},{{}}); "  # noqa: E501
-            f"proj['hasTrustDialogAccepted']=True; "
-            f"proj.setdefault('allowedTools',[]); "
-            f"json.dump(d,open(p,'w'),indent=2)"
-            f'"'
-        )
-        runtime.exec(container, ["su", "-", "user", "-c", trust_script])
 
     if not quiet:
         from .output import detail
