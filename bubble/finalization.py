@@ -30,36 +30,17 @@ def finalize_bubble(
     command=None,
     claude_prompt="",
 ):
-    """Post-clone setup: hooks, SSH, registration, and attach."""
+    """Post-clone setup: hooks, SSH, registration, and attach.
+
+    Note: GitHub auth (proxy or token injection) is set up BEFORE clone
+    in _open_single(), not here. Network allowlisting strips github.com
+    when using the auth proxy, so git must be routed through the proxy
+    before any clone/fetch operations.
+    """
     q_short = shlex.quote(short)
     project_dir = f"/home/user/{short}"
     if hook:
         hook.post_clone(runtime, name, project_dir)
-
-    # Set up GitHub auth: token injection (level 5) or proxy (levels 1-4)
-    if is_enabled(config, "github_token_inject"):
-        from .github_token import setup_gh_token
-
-        setup_gh_token(
-            runtime,
-            name,
-            machine_readable=machine_readable,
-            token_inject=True,
-        )
-    elif is_enabled(config, "github_auth"):
-        from .github_token import setup_gh_token
-        from .tools import resolve_tools
-
-        gh_enabled = "gh" in resolve_tools(config)
-        setup_gh_token(
-            runtime,
-            name,
-            owner=t.owner,
-            repo=t.repo,
-            machine_readable=machine_readable,
-            gh_enabled=gh_enabled,
-            config=config,
-        )
 
     # Inject Claude Code task if prompt is provided
     if claude_prompt:
