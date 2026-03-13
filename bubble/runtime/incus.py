@@ -179,20 +179,28 @@ class IncusRuntime(ContainerRuntime):
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             stdin=subprocess.DEVNULL,
         )
         lines: list[str] = []
-        assert proc.stdout is not None
-        for raw in proc.stdout:
-            line = raw.rstrip("\n")
-            lines.append(line)
-            on_line(line)
-        rc = proc.wait()
+        stderr_output = ""
+        try:
+            assert proc.stdout is not None
+            for raw in proc.stdout:
+                line = raw.rstrip("\n")
+                lines.append(line)
+                on_line(line)
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                stderr_output = proc.stderr.read()
+                proc.stderr.close()
+            proc.wait()
         output = "\n".join(lines)
-        if rc != 0:
-            raise IncusError(rc, cmd, output, "")
+        if proc.returncode != 0:
+            raise IncusError(proc.returncode, cmd, output, stderr_output)
         return output
 
     def add_device(self, name: str, device_name: str, device_type: str, **props):
