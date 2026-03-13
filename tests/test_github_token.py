@@ -482,3 +482,155 @@ def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
     assert call_order_kwargs["owner"] == "kim-em"
     assert call_order_kwargs["repo"] == "bubble"
     assert not call_order_kwargs.get("token_inject", False)
+
+
+# --- Fail-early tests: abort when auth proxy fails + network is blocked (#224) ---
+
+
+def test_auth_proxy_failure_aborts_when_network_active(mock_runtime, tmp_data_dir, tmp_ssh_dir):
+    """When auth proxy setup fails and network allowlisting is active, abort with clear error."""
+    from bubble.target import Target
+
+    t = Target(
+        owner="kim-em",
+        repo="bubble",
+        kind="main",
+        ref="",
+        original="kim-em/bubble",
+    )
+
+    def is_enabled_side_effect(_config, setting):
+        return setting != "github_token_inject"
+
+    with (
+        patch("bubble.cli.load_config", return_value={}),
+        patch("bubble.cli.get_host_git_identity", return_value=("Test", "t@t.com")),
+        patch("bubble.cli.get_runtime", return_value=mock_runtime),
+        patch("bubble.cli.find_existing_container", return_value=None),
+        patch("bubble.cli.print_warnings"),
+        patch("bubble.cli.maybe_rebuild_base_image"),
+        patch("bubble.cli.maybe_rebuild_tools"),
+        patch("bubble.cli.maybe_rebuild_customize"),
+        patch("bubble.cli.maybe_symlink_claude_projects"),
+        patch("bubble.cli.RepoRegistry"),
+        patch("bubble.cli.parse_target", return_value=t),
+        patch("bubble.cli._resolve_ref_source", return_value=("/tmp/fake.git", "fake.git")),
+        patch("bubble.cli.detect_and_build_image", return_value=(None, "base")),
+        patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
+        patch("bubble.cli.provision_container"),
+        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
+        patch("bubble.github_token.setup_gh_token", return_value=False),
+        patch("bubble.cli.clone_and_checkout") as mock_clone,
+    ):
+        from click.testing import CliRunner
+
+        from bubble.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["kim-em/bubble", "--no-interactive"])
+
+    # Should have failed with a clear error message
+    assert result.exit_code != 0
+    output = result.output.lower()
+    assert "auth proxy setup failed" in output
+    assert "gh auth login" in result.output
+    # clone_and_checkout should NOT have been called
+    mock_clone.assert_not_called()
+
+
+def test_auth_proxy_failure_warns_when_network_disabled(mock_runtime, tmp_data_dir, tmp_ssh_dir):
+    """When auth proxy setup fails but network allowlisting is off, proceed with a warning."""
+    from bubble.target import Target
+
+    t = Target(
+        owner="kim-em",
+        repo="bubble",
+        kind="main",
+        ref="",
+        original="kim-em/bubble",
+    )
+
+    def is_enabled_side_effect(_config, setting):
+        return setting != "github_token_inject"
+
+    with (
+        patch("bubble.cli.load_config", return_value={}),
+        patch("bubble.cli.get_host_git_identity", return_value=("Test", "t@t.com")),
+        patch("bubble.cli.get_runtime", return_value=mock_runtime),
+        patch("bubble.cli.find_existing_container", return_value=None),
+        patch("bubble.cli.print_warnings"),
+        patch("bubble.cli.maybe_rebuild_base_image"),
+        patch("bubble.cli.maybe_rebuild_tools"),
+        patch("bubble.cli.maybe_rebuild_customize"),
+        patch("bubble.cli.maybe_symlink_claude_projects"),
+        patch("bubble.cli.RepoRegistry"),
+        patch("bubble.cli.parse_target", return_value=t),
+        patch("bubble.cli._resolve_ref_source", return_value=("/tmp/fake.git", "fake.git")),
+        patch("bubble.cli.detect_and_build_image", return_value=(None, "base")),
+        patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
+        patch("bubble.cli.provision_container"),
+        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
+        patch("bubble.github_token.setup_gh_token", return_value=False),
+        patch("bubble.cli.clone_and_checkout", return_value="") as mock_clone,
+        patch("bubble.cli.finalize_bubble"),
+    ):
+        from click.testing import CliRunner
+
+        from bubble.cli import main
+
+        runner = CliRunner()
+        # --no-network disables network allowlisting, so auth failure is non-fatal
+        runner.invoke(main, ["kim-em/bubble", "--no-interactive", "--no-network"])
+
+    # Should proceed (clone should be called despite auth failure)
+    mock_clone.assert_called_once()
+
+
+def test_token_inject_failure_aborts_when_network_active(mock_runtime, tmp_data_dir, tmp_ssh_dir):
+    """When token injection fails and network allowlisting is active, abort with clear error."""
+    from bubble.target import Target
+
+    t = Target(
+        owner="kim-em",
+        repo="bubble",
+        kind="main",
+        ref="",
+        original="kim-em/bubble",
+    )
+
+    def is_enabled_side_effect(_config, setting):
+        # Enable github_token_inject, disable github_auth
+        return setting == "github_token_inject"
+
+    with (
+        patch("bubble.cli.load_config", return_value={}),
+        patch("bubble.cli.get_host_git_identity", return_value=("Test", "t@t.com")),
+        patch("bubble.cli.get_runtime", return_value=mock_runtime),
+        patch("bubble.cli.find_existing_container", return_value=None),
+        patch("bubble.cli.print_warnings"),
+        patch("bubble.cli.maybe_rebuild_base_image"),
+        patch("bubble.cli.maybe_rebuild_tools"),
+        patch("bubble.cli.maybe_rebuild_customize"),
+        patch("bubble.cli.maybe_symlink_claude_projects"),
+        patch("bubble.cli.RepoRegistry"),
+        patch("bubble.cli.parse_target", return_value=t),
+        patch("bubble.cli._resolve_ref_source", return_value=("/tmp/fake.git", "fake.git")),
+        patch("bubble.cli.detect_and_build_image", return_value=(None, "base")),
+        patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
+        patch("bubble.cli.provision_container"),
+        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
+        patch("bubble.github_token.setup_gh_token", return_value=False),
+        patch("bubble.cli.clone_and_checkout") as mock_clone,
+    ):
+        from click.testing import CliRunner
+
+        from bubble.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["kim-em/bubble", "--no-interactive"])
+
+    assert result.exit_code != 0
+    output = result.output.lower()
+    assert "token injection failed" in output
+    assert "gh auth login" in result.output
+    mock_clone.assert_not_called()
