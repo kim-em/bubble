@@ -292,6 +292,19 @@ def generate_pr_prompt(owner: str, repo: str, pr_num: str, branch: str) -> str |
     )
 
 
+# Known-safe keys to copy from the host's ~/.claude.json.
+# Only cosmetic/UX settings — no credentials, MCP config, or host-specific paths.
+_CLAUDE_JSON_SAFE_KEYS = frozenset(
+    {
+        "theme",
+        "hasCompletedOnboarding",
+        "numStartups",
+        "preferredNotifChannel",
+        "autoUpdaterStatus",
+    }
+)
+
+
 def setup_claude_settings(
     runtime: ContainerRuntime,
     container: str,
@@ -299,23 +312,24 @@ def setup_claude_settings(
 ):
     """Pre-populate ~/.claude.json in the container to skip the first-run wizard.
 
-    Copies relevant settings (theme, onboarding state, etc.) from the host's
+    Copies allowlisted settings (theme, onboarding state, etc.) from the host's
     ~/.claude.json if it exists. Always ensures hasCompletedOnboarding=True
     and pre-trusts the project directory. This runs for ALL bubbles, not just
     those with AI task injection.
+
+    Best-effort: failures are logged but do not abort bubble creation.
     """
     host_claude_json = Path.home() / ".claude.json"
 
-    # Start with host settings if available
+    # Extract only allowlisted keys from host settings
     settings: dict = {}
     if host_claude_json.is_file():
         try:
-            settings = json.loads(host_claude_json.read_text())
+            host_data = json.loads(host_claude_json.read_text())
+            if isinstance(host_data, dict):
+                settings = {k: v for k, v in host_data.items() if k in _CLAUDE_JSON_SAFE_KEYS}
         except (OSError, json.JSONDecodeError):
             pass
-
-    # Remove host-specific project entries (paths don't apply inside container)
-    settings.pop("projects", None)
 
     # Ensure onboarding is marked complete
     settings["hasCompletedOnboarding"] = True
@@ -323,17 +337,21 @@ def setup_claude_settings(
     settings["numStartups"] = (n if isinstance(n, int) else 0) + 1
 
     # Pre-trust the project directory
-    settings.setdefault("projects", {})
-    proj = settings["projects"].setdefault(project_dir, {})
-    proj["hasTrustDialogAccepted"] = True
-    proj.setdefault("allowedTools", [])
+    settings["projects"] = {
+        project_dir: {"hasTrustDialogAccepted": True, "allowedTools": []},
+    }
 
-    # Write to container
+    # Write to container (best-effort — don't abort bubble creation on failure)
     settings_json = shlex.quote(json.dumps(settings, indent=2))
-    runtime.exec(
-        container,
-        ["su", "-", "user", "-c", f"printf '%s' {settings_json} > ~/.claude.json"],
-    )
+    try:
+        runtime.exec(
+            container,
+            ["su", "-", "user", "-c", f"printf '%s' {settings_json} > ~/.claude.json"],
+        )
+    except Exception:
+        from .output import detail
+
+        detail("Warning: could not pre-populate Claude Code settings.", err=True)
 
 
 def inject_ai_task(

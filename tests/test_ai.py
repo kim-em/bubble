@@ -593,8 +593,8 @@ class TestSetupClaudeSettings:
         script = runtime.exec.call_args_list[0][0][1][-1]
         assert "hasCompletedOnboarding" in script
 
-    def test_copies_host_settings(self, tmp_path):
-        """Should copy theme and other settings from host ~/.claude.json."""
+    def test_copies_allowlisted_settings(self, tmp_path):
+        """Should copy only allowlisted settings from host ~/.claude.json."""
         host_config = {"theme": "dark", "hasCompletedOnboarding": True, "numStartups": 5}
         host_file = tmp_path / ".claude.json"
         host_file.write_text(json.dumps(host_config))
@@ -607,11 +607,14 @@ class TestSetupClaudeSettings:
         # Theme should be in the written JSON
         assert "dark" in script
 
-    def test_strips_host_projects(self, tmp_path):
-        """Should NOT copy host project trust entries (paths are host-specific)."""
+    def test_excludes_non_allowlisted_keys(self, tmp_path):
+        """Should NOT copy unknown/sensitive keys from host config."""
         host_config = {
+            "theme": "dark",
             "hasCompletedOnboarding": True,
-            "projects": {"/host/path/to/project": {"hasTrustDialogAccepted": True}},
+            "mcpServers": {"dangerous": {}},
+            "secretApiKey": "sk-secret",
+            "projects": {"/host/path": {"hasTrustDialogAccepted": True}},
         }
         host_file = tmp_path / ".claude.json"
         host_file.write_text(json.dumps(host_config))
@@ -621,9 +624,14 @@ class TestSetupClaudeSettings:
             setup_claude_settings(runtime, "c1", "/home/user/myproject")
 
         script = runtime.exec.call_args_list[0][0][1][-1]
-        # Host project path should NOT appear
-        assert "/host/path/to/project" not in script
-        # Container project path SHOULD appear
+        # Allowlisted keys present
+        assert "dark" in script
+        # Non-allowlisted keys absent
+        assert "mcpServers" not in script
+        assert "secretApiKey" not in script
+        assert "sk-secret" not in script
+        # Host project paths absent, container project present
+        assert "/host/path" not in script
         assert "/home/user/myproject" in script
 
     def test_trusts_project_dir(self, tmp_path):
@@ -662,6 +670,30 @@ class TestSetupClaudeSettings:
 
         script = runtime.exec.call_args_list[0][0][1][-1]
         assert '"numStartups": 11' in script
+
+    def test_handles_non_dict_json(self, tmp_path):
+        """Should handle ~/.claude.json containing a non-dict (list, string, null)."""
+        for content in ["[]", '"hello"', "null", "42"]:
+            host_file = tmp_path / ".claude.json"
+            host_file.write_text(content)
+
+            runtime = MagicMock()
+            with patch("bubble.ai.Path.home", return_value=tmp_path):
+                setup_claude_settings(runtime, "c1", "/home/user/project")
+
+            assert runtime.exec.call_count == 1
+            script = runtime.exec.call_args_list[0][0][1][-1]
+            assert "hasCompletedOnboarding" in script
+
+    def test_exec_failure_is_best_effort(self):
+        """Should not raise if runtime.exec fails — just warn."""
+        runtime = MagicMock()
+        runtime.exec.side_effect = RuntimeError("container gone")
+
+        with patch("bubble.ai.Path.home") as mock_home:
+            mock_home.return_value = Path("/nonexistent")
+            # Should NOT raise
+            setup_claude_settings(runtime, "c1", "/home/user/project")
 
 
 class TestCustomTemplateBackcompat:
