@@ -1,6 +1,9 @@
 """Abstract container runtime interface."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -91,6 +94,25 @@ class ContainerRuntime(ABC):
     @abstractmethod
     def list_images(self) -> list[dict]:
         """List all images. Returns list of dicts with aliases, size, created_at."""
+
+    def exec_streaming(
+        self,
+        name: str,
+        command: list[str],
+        *,
+        on_line: Callable[[str], None] | None = None,
+    ) -> str:
+        """Execute a command, calling *on_line* for each stdout line.
+
+        The default implementation delegates to :meth:`exec` and replays
+        lines after completion.  Subclasses may override for true
+        line-by-line streaming.
+        """
+        output = self.exec(name, command)
+        if on_line:
+            for line in output.splitlines():
+                on_line(line)
+        return output
 
     @abstractmethod
     def push_file(self, name: str, local_path: str, remote_path: str):

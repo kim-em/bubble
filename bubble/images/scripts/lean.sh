@@ -10,9 +10,11 @@ if [ -x /home/user/.elan/bin/elan ]; then
 fi
 
 # Install dependencies for leantar download
+echo "BUBBLE_PROGRESS: Installing elan dependencies..."
 apt-get update -qq && apt-get install -y -qq python3 unzip < /dev/null
 
 # Install elan as user
+echo "BUBBLE_PROGRESS: Installing elan..."
 su - user -c 'curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | bash -s -- -y --default-toolchain none'
 
 # Add elan to PATH for all sessions
@@ -20,7 +22,7 @@ echo 'export PATH="$HOME/.elan/bin:$PATH"' >> /home/user/.bashrc
 echo 'export PATH="/home/user/.elan/bin:$PATH"' >> /etc/profile.d/elan.sh
 
 # Pre-install leantar (used by lake exe cache get for mathlib)
-echo "Installing leantar..."
+echo "BUBBLE_PROGRESS: Installing leantar..."
 ARCH=$(uname -m)
 [ "$ARCH" = "arm64" ] && ARCH="aarch64"
 LEANTAR_VERSION=$(curl -sSf https://api.github.com/repos/digama0/leangz/releases/latest \

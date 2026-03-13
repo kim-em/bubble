@@ -4,16 +4,19 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Install system packages
+echo "BUBBLE_PROGRESS: Installing system packages..."
 apt-get update -qq
 apt-get install -y -qq \
     git curl build-essential cmake openssh-server \
     ca-certificates netcat-openbsd iptables < /dev/null
 
 # Create user (no sudo, no password)
+echo "BUBBLE_PROGRESS: Creating user account..."
 useradd -m -s /bin/bash user
 passwd -l user
 
 # Configure SSH (key-based auth only)
+echo "BUBBLE_PROGRESS: Configuring SSH..."
 mkdir -p /run/sshd
 sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
@@ -30,6 +33,7 @@ chown user:user /shared/git
 # Create mount point for relay socket
 mkdir -p /bubble
 
+echo "BUBBLE_PROGRESS: Installing relay client..."
 # Install bubble-in-bubble relay client
 cat > /usr/local/lib/bubble-relay-client.py << 'PYEOF'
 """Relay client for bubble-in-bubble. Sends a target to the host relay daemon."""
@@ -123,6 +127,7 @@ PROFILEEOF
 chown user:user /home/user/.profile
 
 # Clean up
+echo "BUBBLE_PROGRESS: Cleaning up..."
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
