@@ -34,6 +34,7 @@ On macOS (Colima): TCP listener, port saved to ~/.bubble/auth-proxy.port.
 On Linux: TCP listener on 127.0.0.1 (Incus proxy needs TCP for HTTP).
 """
 
+import base64
 import json
 import logging
 import os
@@ -582,7 +583,7 @@ class GitHubTokenRefresher:
         # Run outside the lock — subprocess may block
         try:
             new_token = _get_github_token()
-        except RuntimeError:
+        except Exception:
             return self._token
 
         with self._lock:
@@ -795,6 +796,14 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
     ):
         """Forward a validated request to GitHub and return the response."""
         github_token = self.token_refresher.token
+        b64_cred = base64.b64encode(f"x-access-token:{github_token}".encode()).decode()
+
+        def _redact(msg: str) -> str:
+            """Strip both raw token and base64 credential from a message."""
+            msg = msg.replace(github_token, "[REDACTED]")
+            msg = msg.replace(b64_cred, "[REDACTED]")
+            return msg
+
         req = Request(upstream_url, data=body, method=method)
 
         # Copy relevant headers, strip auth/proxy headers
@@ -808,10 +817,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         # Git smart HTTP on github.com requires Basic auth for OAuth tokens;
         # the API (api.github.com) accepts "token <token>" directly.
         if host == GITHUB_HOST:
-            import base64
-
-            cred = base64.b64encode(f"x-access-token:{github_token}".encode()).decode()
-            req.add_header("Authorization", f"Basic {cred}")
+            req.add_header("Authorization", f"Basic {b64_cred}")
         else:
             req.add_header("Authorization", f"token {github_token}")
         req.add_header("Host", host)
@@ -899,22 +905,18 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                     e.code,
                 )
                 return
-            error_msg = str(e)
-            if github_token in error_msg:
-                error_msg = error_msg.replace(github_token, "[REDACTED]")
+            error_msg = _redact(str(e))
             self._send_error(502, f"Upstream error: {error_msg}")
             logger.info(
                 "UPSTREAM_ERROR %s %s container=%s error=%s",
                 method,
                 log_path,
                 container,
-                e,
+                error_msg,
             )
             return
         except Exception as e:
-            error_msg = str(e)
-            if github_token in error_msg:
-                error_msg = error_msg.replace(github_token, "[REDACTED]")
+            error_msg = _redact(str(e))
             self._send_error(502, f"Upstream error: {error_msg}")
             logger.info(
                 "UPSTREAM_ERROR %s %s container=%s error=%s",
@@ -945,19 +947,25 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
     def _handle_redirect(self, location, container, log_path, method="GET"):
         """Follow a redirect from a GitHub API response with hardened rules."""
+        current_token = self.token_refresher.token
+        b64_cred = base64.b64encode(f"x-access-token:{current_token}".encode()).decode()
+
+        def _redact_redirect(msg: str) -> str:
+            msg = msg.replace(current_token, "[REDACTED]")
+            msg = msg.replace(b64_cred, "[REDACTED]")
+            return msg
+
         try:
             status, headers, body = _follow_redirect(location, MAX_REDIRECT_HOPS, method=method)
         except (ValueError, HTTPError) as e:
-            error_msg = str(e)
-            current_token = self.token_refresher.token
-            if current_token in error_msg:
-                error_msg = error_msg.replace(current_token, "[REDACTED]")
+            error_msg = _redact_redirect(str(e))
             self._send_error(502, f"Redirect error: {error_msg}")
             logger.info("REDIRECT_ERROR %s container=%s error=%s", log_path, container, error_msg)
             return
         except Exception as e:
-            self._send_error(502, f"Redirect error: {e}")
-            logger.info("REDIRECT_ERROR %s container=%s error=%s", log_path, container, e)
+            error_msg = _redact_redirect(str(e))
+            self._send_error(502, f"Redirect error: {error_msg}")
+            logger.info("REDIRECT_ERROR %s container=%s error=%s", log_path, container, error_msg)
             return
 
         self.send_response(status)
@@ -1079,11 +1087,14 @@ def _get_github_token() -> str:
     import subprocess
 
     # Trigger OAuth refresh (gh auth token alone returns the stale token)
-    subprocess.run(
-        ["gh", "auth", "status"],
-        capture_output=True,
-        timeout=15,
-    )
+    try:
+        subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass  # Best-effort; get_host_gh_token may still succeed
 
     from .github_token import get_host_gh_token
 
