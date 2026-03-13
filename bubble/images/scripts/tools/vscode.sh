@@ -18,24 +18,22 @@ if [ -n "${VSCODE_COMMIT:-}" ]; then
         || echo "Warning: failed to pre-install VS Code Server"
 fi
 
-# If elan is installed, this is a Lean image — install Lean VS Code extensions
-if [ -d /home/user/.elan ]; then
-
-echo "Installing VS Code extensions for Lean 4..."
-python3 -c '
+# Shared helper: install VS Code extensions from the marketplace.
+# Usage: python3 "$_VSCODE_EXT_HELPER" ext.id1 ext.id2 ...
+# Reads/updates extensions.json cooperatively (safe to call multiple times).
+_VSCODE_EXT_HELPER=$(mktemp)
+cat > "$_VSCODE_EXT_HELPER" << 'PYEOF'
 import json, urllib.request, os, sys, subprocess, tempfile, glob, shutil
 
 EXTENSIONS_DIR = "/home/user/.vscode-server/extensions"
-EXTENSIONS = ["leanprover.lean4", "tamasfe.even-better-toml"]
 
 # Determine VS Code target platform from container architecture
 _arch = subprocess.check_output(["dpkg", "--print-architecture"]).decode().strip()
 TARGET_PLATFORM = {"amd64": "linux-x64", "arm64": "linux-arm64"}.get(_arch, "")
 
-manifest_entries = []
 
-for ext_id in EXTENSIONS:
-    # Query marketplace for the latest VSIX download URL
+def query_and_install(ext_id):
+    """Query marketplace, download, extract, and return a manifest entry or None."""
     # Query by extension ID only — do NOT add filterType 8 (target platform).
     # The marketplace returns 0 results for extensions without platform-specific
     # builds matching the filter, silently hiding universal extensions on ARM64.
@@ -56,7 +54,7 @@ for ext_id in EXTENSIONS:
             data = json.loads(resp.read())
     except Exception as e:
         print(f"Warning: could not query marketplace for {ext_id}: {e}", file=sys.stderr)
-        continue
+        return None
 
     # Find the VSIX URL and version, preferring our target platform
     vsix_url = None
@@ -89,7 +87,7 @@ for ext_id in EXTENSIONS:
 
     if not vsix_url:
         print(f"Warning: could not find VSIX download URL for {ext_id}", file=sys.stderr)
-        continue
+        return None
 
     # Remove any old versions
     for old in glob.glob(os.path.join(EXTENSIONS_DIR, f"{ext_id}-*")):
@@ -118,7 +116,7 @@ for ext_id in EXTENSIONS:
         print(f"  Installed to {ext_dir}")
 
         rel_location = f"{ext_id}-{version}"
-        manifest_entries.append({
+        return {
             "identifier": {"id": ext_id},
             "version": version,
             "location": {
@@ -128,17 +126,49 @@ for ext_id in EXTENSIONS:
             },
             "relativeLocation": rel_location,
             "metadata": {},
-        })
+        }
     finally:
         os.unlink(tmp_path)
 
-# Write extensions.json with all installed extensions
-if manifest_entries:
-    os.makedirs(EXTENSIONS_DIR, exist_ok=True)
-    with open(os.path.join(EXTENSIONS_DIR, "extensions.json"), "w") as mf:
-        json.dump(manifest_entries, mf)
-    print(f"  Registered {len(manifest_entries)} extensions in extensions.json")
-'
+
+def main():
+    ext_ids = sys.argv[1:]
+    if not ext_ids:
+        return
+
+    manifest_path = os.path.join(EXTENSIONS_DIR, "extensions.json")
+
+    # Load existing manifest entries
+    entries = []
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            entries = json.load(f)
+
+    installed = 0
+    for ext_id in ext_ids:
+        entry = query_and_install(ext_id)
+        if entry:
+            # Remove any stale entries for this extension
+            entries = [e for e in entries if e.get("identifier", {}).get("id") != ext_id]
+            entries.append(entry)
+            installed += 1
+
+    if installed:
+        os.makedirs(EXTENSIONS_DIR, exist_ok=True)
+        with open(manifest_path, "w") as f:
+            json.dump(entries, f)
+        print(f"  Registered {installed} extension(s) in extensions.json")
+
+
+if __name__ == "__main__":
+    main()
+PYEOF
+
+# If elan is installed, this is a Lean image — install Lean VS Code extensions
+if [ -d /home/user/.elan ]; then
+
+echo "Installing VS Code extensions for Lean 4..."
+python3 "$_VSCODE_EXT_HELPER" leanprover.lean4 tamasfe.even-better-toml
 
 # Create bubble-lean-cache extension: opens a terminal to run build commands
 BUBBLE_EXT_DIR="/home/user/.vscode-server/extensions/bubble.lean-cache-0.1.0"
@@ -213,125 +243,11 @@ fi  # end of Lean extensions conditional
 if command -v claude &>/dev/null; then
 
 echo "Installing Claude Code VS Code extension..."
-python3 -c '
-import json, urllib.request, os, sys, subprocess, tempfile, glob, shutil
-
-EXTENSIONS_DIR = "/home/user/.vscode-server/extensions"
-EXT_ID = "anthropic.claude-code"
-
-# Determine VS Code target platform from container architecture
-_arch = subprocess.check_output(["dpkg", "--print-architecture"]).decode().strip()
-TARGET_PLATFORM = {"amd64": "linux-x64", "arm64": "linux-arm64"}.get(_arch, "")
-
-# Query by extension ID only — do NOT add filterType 8 (target platform).
-# The marketplace returns 0 results for extensions without platform-specific
-# builds matching the filter, silently hiding universal extensions on ARM64.
-query = json.dumps({
-    "filters": [{"criteria": [{"filterType": 7, "value": EXT_ID}]}],
-    "flags": 914,
-}).encode()
-req = urllib.request.Request(
-    "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery",
-    data=query,
-    headers={
-        "Content-Type": "application/json",
-        "Accept": "application/json;api-version=3.0-preview.1",
-    },
-)
-try:
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read())
-except Exception as e:
-    print(f"Warning: could not query marketplace for {EXT_ID}: {e}", file=sys.stderr)
-    sys.exit(0)
-
-# Find the VSIX URL and version, preferring our target platform
-vsix_url = None
-version = None
-for ext in data["results"][0]["extensions"]:
-    best_ver = None
-    for ver in ext["versions"]:
-        tp = ver.get("targetPlatform", "")
-        if tp == TARGET_PLATFORM:
-            best_ver = ver
-            break
-        if best_ver is None and (not tp or tp == "universal"):
-            best_ver = ver
-    if best_ver is None and ext.get("versions"):
-        # Only fall back to versions[0] if it is not a platform-specific
-        # build for a different architecture (e.g. linux-x64 on arm64).
-        candidate = ext["versions"][0]
-        ctp = candidate.get("targetPlatform", "")
-        if not ctp or ctp == "universal" or ctp == TARGET_PLATFORM:
-            best_ver = candidate
-        elif TARGET_PLATFORM:
-            print(f"  Skipping {EXT_ID}: no build for {TARGET_PLATFORM} "
-                  f"(only {ctp} available)", file=sys.stderr)
-    if best_ver:
-        version = best_ver["version"]
-        for f in best_ver["files"]:
-            if f["assetType"] == "Microsoft.VisualStudio.Services.VSIXPackage":
-                vsix_url = f["source"]
-                break
-
-if not vsix_url:
-    print(f"Warning: could not find VSIX download URL for {EXT_ID}", file=sys.stderr)
-    sys.exit(0)
-
-# Remove any old versions
-for old in glob.glob(os.path.join(EXTENSIONS_DIR, f"{EXT_ID}-*")):
-    shutil.rmtree(old)
-
-# Download and extract
-ext_dir = os.path.join(EXTENSIONS_DIR, f"{EXT_ID}-{version}")
-os.makedirs(ext_dir, exist_ok=True)
-
-with tempfile.NamedTemporaryFile(suffix=".vsix", delete=False) as tmp:
-    tmp_path = tmp.name
-
-try:
-    print(f"  Downloading {EXT_ID} v{version}...")
-    urllib.request.urlretrieve(vsix_url, tmp_path)
-    subprocess.run(
-        ["unzip", "-q", "-o", tmp_path, "extension/*", "-d", ext_dir],
-        check=True,
-    )
-    # Move contents from extension/ subdirectory up to ext_dir
-    nested = os.path.join(ext_dir, "extension")
-    if os.path.isdir(nested):
-        for item in os.listdir(nested):
-            os.rename(os.path.join(nested, item), os.path.join(ext_dir, item))
-        os.rmdir(nested)
-    print(f"  Installed to {ext_dir}")
-
-    # Append to extensions.json manifest (remove any stale entries first)
-    manifest_path = os.path.join(EXTENSIONS_DIR, "extensions.json")
-    entries = []
-    if os.path.exists(manifest_path):
-        with open(manifest_path) as mf:
-            entries = json.load(mf)
-    entries = [e for e in entries if e.get("identifier", {}).get("id") != EXT_ID]
-    rel_location = f"{EXT_ID}-{version}"
-    entries.append({
-        "identifier": {"id": EXT_ID},
-        "version": version,
-        "location": {
-            "$mid": 1,
-            "path": os.path.join(EXTENSIONS_DIR, rel_location),
-            "scheme": "file",
-        },
-        "relativeLocation": rel_location,
-        "metadata": {},
-    })
-    os.makedirs(EXTENSIONS_DIR, exist_ok=True)
-    with open(manifest_path, "w") as mf:
-        json.dump(entries, mf)
-    print(f"  Registered {EXT_ID} in extensions.json")
-finally:
-    os.unlink(tmp_path)
-'
+python3 "$_VSCODE_EXT_HELPER" anthropic.claude-code
 
 fi  # end of Claude Code extension conditional
+
+rm -f "$_VSCODE_EXT_HELPER"
 
 # Fix ownership (script runs as root, extension dir must be owned by user)
 if [ -d /home/user/.vscode-server ]; then
