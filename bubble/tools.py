@@ -33,7 +33,12 @@ TOOLS = {
         "script": "codex.sh",
         "host_cmd": "codex",
         "network_domains": ["registry.npmjs.org", "nodejs.org"],
-        "runtime_domains": ["api.openai.com"],
+        "runtime_domains": [
+            "api.openai.com",
+            "auth0.openai.com",
+            "auth.openai.com",
+            "chatgpt.com",
+        ],
         "priority": 50,
     },
     "elan": {
