@@ -60,6 +60,10 @@ DEFAULT_CONFIG = {
         "server_name": "bubble-cloud",
         "default": False,
     },
+    "ai": {
+        "preferred": "claude",
+        "second_opinion": "codex",
+    },
     "claude": {
         "credentials": True,
     },
@@ -433,7 +437,7 @@ def codex_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
     return CODEX_CONFIG.config_mounts(include_credentials)
 
 
-CLAUDE_PROJECTS_DIR = DATA_DIR / "claude-projects"
+AI_PROJECTS_DIR = DATA_DIR / "ai-projects"
 
 
 def _is_inside_git_repo(path: Path) -> bool:
@@ -449,21 +453,22 @@ def _is_inside_git_repo(path: Path) -> bool:
         return False
 
 
-def maybe_symlink_claude_projects(config: dict | None = None, notices=None) -> None:
-    """Print an informational message if claude-projects could be symlinked.
+def maybe_symlink_ai_projects(config: dict | None = None, notices=None) -> None:
+    """Print an informational message if ai-projects could be symlinked.
 
-    If ~/.claude/projects/ is inside a git repo and ~/.bubble/claude-projects/ is a real
+    If ~/.claude/projects/ is inside a git repo and ~/.bubble/ai-projects/ is a real
     directory (not already a symlink), print a one-time hint about the
-    ``bubble config symlink-claude-projects`` command. Never prompts interactively.
+    ``bubble config symlink-ai-projects`` command. Never prompts interactively.
 
-    Suppressed when ``claude_projects_symlink = "no"`` is set in config.
+    Suppressed when ``ai_projects_symlink = "no"`` is set in config.
     """
     # Respect opt-out config
-    if config and config.get("claude_projects_symlink") == "no":
-        return
+    if config:
+        if config.get("ai_projects_symlink") == "no":
+            return
 
     claude_projects = CLAUDE_CONFIG_DIR / "projects"
-    bubble_projects = CLAUDE_PROJECTS_DIR
+    bubble_projects = AI_PROJECTS_DIR
 
     # Nothing to do if ~/.claude/projects/ doesn't exist or isn't in a git repo
     if not claude_projects.is_dir() or not _is_inside_git_repo(claude_projects):
@@ -473,7 +478,7 @@ def maybe_symlink_claude_projects(config: dict | None = None, notices=None) -> N
     if bubble_projects.is_symlink():
         return
 
-    # If ~/.bubble/claude-projects/ doesn't exist yet, just create the symlink
+    # If ~/.bubble/ai-projects/ doesn't exist yet, just create the symlink
     if not bubble_projects.exists():
         bubble_projects.parent.mkdir(parents=True, exist_ok=True)
         bubble_projects.symlink_to(claude_projects)
@@ -485,20 +490,20 @@ def maybe_symlink_claude_projects(config: dict | None = None, notices=None) -> N
     if notices:
         notices.begin()
     click.echo(
-        "~/.claude/projects is git-tracked. Claude sessions within bubbles are stored\n"
-        "in ~/.bubble/claude-projects. To link that directory into the git-tracked\n"
+        "~/.claude/projects is git-tracked. AI sessions within bubbles are stored\n"
+        "in ~/.bubble/ai-projects. To link that directory into the git-tracked\n"
         "location (existing data is merged, not overwritten), run:\n"
         "\n"
-        "  bubble config symlink-claude-projects\n"
+        "  bubble config symlink-ai-projects\n"
         "\n"
-        'To suppress this message, set claude_projects_symlink = "no" in '
+        'To suppress this message, set ai_projects_symlink = "no" in '
         "~/.bubble/config.toml.",
         err=True,
     )
 
 
-def do_symlink_claude_projects() -> bool:
-    """Link ~/.bubble/claude-projects/ to ~/.claude/projects/ via symlink.
+def do_symlink_ai_projects() -> bool:
+    """Link ~/.bubble/ai-projects/ to ~/.claude/projects/ via symlink.
 
     Merges existing contents from bubble-projects into claude-projects before
     creating the symlink. Aborts if any files conflict (exist in both locations).
@@ -507,7 +512,7 @@ def do_symlink_claude_projects() -> bool:
     import click
 
     claude_projects = CLAUDE_CONFIG_DIR / "projects"
-    bubble_projects = CLAUDE_PROJECTS_DIR
+    bubble_projects = AI_PROJECTS_DIR
 
     if not claude_projects.is_dir():
         click.echo(f"{claude_projects} does not exist.", err=True)

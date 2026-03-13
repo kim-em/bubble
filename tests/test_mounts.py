@@ -633,7 +633,7 @@ class TestClaudeConfigProvisioning:
         assert projects_calls[0][5] is False  # read-write
 
         # Host directory created with per-bubble subdirectory
-        projects_dir = tmp_data_dir / "claude-projects" / "test-container"
+        projects_dir = tmp_data_dir / "ai-projects" / "test-container"
         assert projects_dir.is_dir()
         assert projects_dir.stat().st_mode & 0o770 == 0o770
 
@@ -976,11 +976,11 @@ class TestMountOverlaps:
         )
 
 
-class TestRemoteClaudeConfig:
-    """Test that --no-claude-config is forwarded to remote opens."""
+class TestRemoteAIConfig:
+    """Test that --no-ai-config is forwarded to remote opens."""
 
-    def test_no_claude_config_forwarded(self):
-        """remote_open appends --no-claude-config when disabled."""
+    def test_no_ai_config_forwarded(self):
+        """remote_open appends --no-ai-config when disabled."""
         from unittest.mock import MagicMock, patch
 
         from bubble.remote import RemoteHost, remote_open
@@ -1003,15 +1003,15 @@ class TestRemoteClaudeConfig:
             mock_popen.return_value = proc
 
             try:
-                remote_open(host, "target", claude_config=False)
+                remote_open(host, "target", ai_config=False)
             except Exception:
                 pass  # May fail on JSON parsing, that's fine
 
-            # Check that --no-claude-config was in the command
+            # Check that --no-ai-config was in the command
             call_args = mock_popen.call_args
             cmd = call_args[0][0] if call_args[0] else call_args[1].get("args", [])
             cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
-            assert "--no-claude-config" in cmd_str
+            assert "--no-ai-config" in cmd_str
 
 
 class TestEditorConfigMounts:

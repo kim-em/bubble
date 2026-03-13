@@ -450,7 +450,7 @@ def test_auth_proxy_setup_before_clone(mock_runtime, tmp_data_dir, tmp_ssh_dir):
         patch("bubble.cli.maybe_rebuild_base_image"),
         patch("bubble.cli.maybe_rebuild_tools"),
         patch("bubble.cli.maybe_rebuild_customize"),
-        patch("bubble.cli.maybe_symlink_claude_projects"),
+        patch("bubble.cli.maybe_symlink_ai_projects"),
         patch("bubble.cli.RepoRegistry"),
         patch("bubble.cli.parse_target", return_value=t),
         patch("bubble.cli._resolve_ref_source", return_value=("/tmp/fake.git", "fake.git")),

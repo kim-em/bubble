@@ -43,7 +43,7 @@ def _apply_open_patches(stack, parse_side_effect=None):
     stack.enter_context(patch("bubble.cli.maybe_rebuild_base_image"))
     stack.enter_context(patch("bubble.cli.maybe_rebuild_tools"))
     stack.enter_context(patch("bubble.cli.maybe_rebuild_customize"))
-    stack.enter_context(patch("bubble.cli.maybe_symlink_claude_projects"))
+    stack.enter_context(patch("bubble.cli.maybe_symlink_ai_projects"))
     stack.enter_context(patch("bubble.cli.RepoRegistry"))
     stack.enter_context(patch("bubble.cli.parse_target", side_effect=parse_side_effect))
     # Stop execution right after parse_target succeeds

@@ -1,4 +1,10 @@
-"""Claude Code integration for bubble containers."""
+"""AI provider integration for bubble containers.
+
+Handles prompt generation and task injection for the configured preferred
+AI provider (default: Claude Code). Provider-neutral where possible;
+provider-specific details (binary names, env vars, prompt file paths)
+are dispatched via the ``[ai] preferred`` config key.
+"""
 
 import json
 import re
@@ -8,13 +14,31 @@ import subprocess
 from .config import DATA_DIR
 from .runtime.base import ContainerRuntime
 
-# Claude task command: reads prompt from file, runs Claude with skip-permissions,
-# then deletes the prompt file so reopening is clean.
-CLAUDE_TASK_COMMAND = (
-    "test -f .vscode/claude-prompt.txt && ANTHROPIC_API_KEY= CLAUDECODE="
-    ' claude --dangerously-skip-permissions "$(cat .vscode/claude-prompt.txt)"'
-    " && rm -f .vscode/claude-prompt.txt"
-)
+# Provider-specific task commands.
+# Each reads the prompt from .vscode/ai-prompt.txt, runs the AI tool
+# with autonomous permissions, then deletes the prompt file.
+_TASK_COMMANDS = {
+    "claude": (
+        "test -f .vscode/ai-prompt.txt && ANTHROPIC_API_KEY= CLAUDECODE="
+        ' claude --dangerously-skip-permissions "$(cat .vscode/ai-prompt.txt)"'
+        " && rm -f .vscode/ai-prompt.txt"
+    ),
+    "codex": (
+        "test -f .vscode/ai-prompt.txt &&"
+        ' codex --approval-mode full-auto "$(cat .vscode/ai-prompt.txt)"'
+        " && rm -f .vscode/ai-prompt.txt"
+    ),
+}
+
+
+def _task_command_for(provider: str) -> str:
+    """Return the VS Code task shell command for the given AI provider."""
+    return _TASK_COMMANDS.get(provider, _TASK_COMMANDS["claude"])
+
+
+# Backward compat: expose the Claude command as the module-level constant
+# that existing tests may reference.
+AI_TASK_COMMAND = _TASK_COMMANDS["claude"]
 
 TEMPLATES_DIR = DATA_DIR / "templates"
 
@@ -106,7 +130,7 @@ def _fetch_github_item(owner: str, repo: str, endpoint: str, jq: str) -> str | N
 
 
 def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) -> str | None:
-    """Fetch GitHub issue details and generate a Claude prompt.
+    """Fetch GitHub issue details and generate an AI prompt.
 
     Returns the prompt string, or None if the issue can't be fetched.
     Uses a custom template from ~/.bubble/templates/issue.txt if present,
@@ -144,7 +168,7 @@ def generate_issue_prompt(owner: str, repo: str, issue_num: str, branch: str) ->
 
 
 def generate_pr_prompt(owner: str, repo: str, pr_num: str, branch: str) -> str | None:
-    """Fetch GitHub PR details and generate a Claude prompt.
+    """Fetch GitHub PR details and generate an AI prompt.
 
     Returns the prompt string, or None if the PR can't be fetched.
     Uses a custom template from ~/.bubble/templates/pr.txt if present,
@@ -169,17 +193,30 @@ def generate_pr_prompt(owner: str, repo: str, pr_num: str, branch: str) -> str |
     )
 
 
-def inject_claude_task(
-    runtime: ContainerRuntime, container: str, project_dir: str, prompt: str, quiet: bool = False
+def inject_ai_task(
+    runtime: ContainerRuntime,
+    container: str,
+    project_dir: str,
+    prompt: str,
+    config: dict | None = None,
+    quiet: bool = False,
 ):
-    """Inject Claude auto-start task into a container's VS Code configuration.
+    """Inject AI auto-start task into a container's VS Code configuration.
 
-    - Writes prompt to .vscode/claude-prompt.txt
-    - Creates/updates .vscode/tasks.json with Claude task (runOn: folderOpen)
+    Dispatches to the configured preferred AI provider (default: Claude).
+
+    - Writes prompt to .vscode/ai-prompt.txt
+    - Creates/updates .vscode/tasks.json with AI task (runOn: folderOpen)
     - Configures .vscode/settings.json for automatic tasks
     - Adds generated files to git exclude
-    - Pre-trusts the project directory in .claude.json
+    - Pre-trusts the project directory in the preferred provider's config
     """
+    provider = "claude"
+    if config:
+        provider = config.get("ai", {}).get("preferred", "claude")
+
+    task_command = _task_command_for(provider)
+
     q_dir = shlex.quote(project_dir)
     q_prompt = shlex.quote(prompt)
 
@@ -189,20 +226,21 @@ def inject_claude_task(
     # Write prompt to file
     runtime.exec(
         container,
-        ["su", "-", "user", "-c", f"printf '%s' {q_prompt} > {q_dir}/.vscode/claude-prompt.txt"],
+        ["su", "-", "user", "-c", f"printf '%s' {q_prompt} > {q_dir}/.vscode/ai-prompt.txt"],
     )
 
-    # Create or update tasks.json with Claude task
-    claude_task = {
-        "label": "Claude",
+    # Create or update tasks.json with AI task
+    ai_task = {
+        "label": "AI",
         "type": "shell",
-        "command": CLAUDE_TASK_COMMAND,
+        "command": task_command,
         "runOptions": {"runOn": "folderOpen"},
         "presentation": {"reveal": "always", "panel": "dedicated"},
     }
-    tasks_json_str = shlex.quote(json.dumps(claude_task))
+    tasks_json_str = shlex.quote(json.dumps(ai_task))
 
-    # Script: if tasks.json exists, add Claude task; otherwise create new file
+    # Script: if tasks.json exists, add AI task (removing old Claude and AI labels);
+    # otherwise create new file
     script = (
         f"cd {q_dir} && "
         f"if [ -f .vscode/tasks.json ]; then "
@@ -210,7 +248,7 @@ def inject_claude_task(
         f"import json,sys; "
         f"t=json.load(open('.vscode/tasks.json')); "
         f"t['tasks']=[x for x in t.get('tasks',[])"
-        f" if x.get('label')!='Claude']+[json.loads(sys.argv[1])]; "
+        f" if x.get('label') not in ('Claude','AI')]+[json.loads(sys.argv[1])]; "
         f"json.dump(t,open('.vscode/tasks.json','w'),indent=2)"
         f'" {tasks_json_str}; '
         f"else "
@@ -241,31 +279,34 @@ def inject_claude_task(
         f"cd {q_dir} && "
         f"GIT_DIR=$(git rev-parse --git-dir) && "
         f"mkdir -p $GIT_DIR/info && "
-        f"for f in .vscode/claude-prompt.txt .vscode/settings.json .vscode/tasks.json; do "
+        f"for f in .vscode/ai-prompt.txt .vscode/claude-prompt.txt"
+        f" .vscode/settings.json .vscode/tasks.json; do "
         f'  grep -qxF "$f" $GIT_DIR/info/exclude 2>/dev/null'
         f' || echo "$f" >> $GIT_DIR/info/exclude; '
         f"done"
     )
     runtime.exec(container, ["su", "-", "user", "-c", exclude_script])
 
-    # Pre-trust the project directory and skip onboarding in .claude.json
-    trust_script = (
-        f'python3 -c "'
-        f"import json,os; "
-        f"p=os.path.expanduser('~/.claude.json'); "
-        f"d=json.load(open(p)) if os.path.exists(p) else {{}}; "
-        f"d['hasCompletedOnboarding']=True; "
-        f"n=d.get('numStartups',0); d['numStartups']=(n if isinstance(n,int) else 0)+1; "
-        f"d.setdefault('projects',{{}}); "
-        f"proj=d['projects'].setdefault({shlex.quote(project_dir)!r},{{}}); "  # noqa: E501
-        f"proj['hasTrustDialogAccepted']=True; "
-        f"proj.setdefault('allowedTools',[]); "
-        f"json.dump(d,open(p,'w'),indent=2)"
-        f'"'
-    )
-    runtime.exec(container, ["su", "-", "user", "-c", trust_script])
+    # Pre-trust the project directory and skip onboarding in provider config
+    if provider == "claude":
+        trust_script = (
+            f'python3 -c "'
+            f"import json,os; "
+            f"p=os.path.expanduser('~/.claude.json'); "
+            f"d=json.load(open(p)) if os.path.exists(p) else {{}}; "
+            f"d['hasCompletedOnboarding']=True; "
+            f"n=d.get('numStartups',0); d['numStartups']=(n if isinstance(n,int) else 0)+1; "
+            f"d.setdefault('projects',{{}}); "
+            f"proj=d['projects'].setdefault({shlex.quote(project_dir)!r},{{}}); "  # noqa: E501
+            f"proj['hasTrustDialogAccepted']=True; "
+            f"proj.setdefault('allowedTools',[]); "
+            f"json.dump(d,open(p,'w'),indent=2)"
+            f'"'
+        )
+        runtime.exec(container, ["su", "-", "user", "-c", trust_script])
 
     if not quiet:
         from .output import detail
 
-        detail("Claude Code task injected (will start on VS Code folder open).")
+        label = provider.capitalize()
+        detail(f"{label} task injected (will start on VS Code folder open).")

@@ -57,7 +57,7 @@ def _format_value(value) -> str:
 
 
 def register_settings_commands(main):
-    """Register skill, claude, tools, gh, and config command groups on the main CLI group."""
+    """Register skill, ai, tools, gh, and config command groups."""
 
     # --- skill ---
 
@@ -121,91 +121,68 @@ def register_settings_commands(main):
             click.echo("Bubble skill is installed but outdated.")
             click.echo("  Update with: bubble skill install")
 
-    # --- claude ---
+    # --- ai ---
 
-    @main.group("claude", hidden=True)
-    def claude_group():
-        """Manage Claude Code settings."""
+    @main.group("ai")
+    def ai_group():
+        """Manage AI provider settings."""
 
-    @claude_group.command("credentials")
+    @ai_group.command("credentials")
     @click.argument("setting", required=False, type=click.Choice(["on", "off"]))
-    def claude_credentials_cmd(setting):
-        """Set whether Claude credentials are mounted into bubbles.
+    @click.option(
+        "--provider",
+        type=str,
+        default=None,
+        help="Provider to configure (default: preferred provider from config)",
+    )
+    def ai_credentials_cmd(setting, provider):
+        """Set whether AI credentials are mounted into bubbles.
 
-        When on, ~/.claude credentials (.credentials.json) are mounted
-        read-only into containers by default. Override per-bubble with
-        --no-claude-credentials.
+        Controls the preferred AI provider's credentials by default.
+        Use --provider to target a specific provider (e.g. claude, codex).
 
         Shows current setting if no argument given.
         """
         config = load_config()
+        if provider is None:
+            provider = config.get("ai", {}).get("preferred", "claude")
+
         if setting is None:
-            current = config.get("claude", {}).get("credentials", True)
+            current = config.get(provider, {}).get("credentials", True)
             state = "on" if current else "off"
-            click.echo(f"Claude credentials: {state}")
+            label = provider.capitalize()
+            click.echo(f"{label} credentials: {state}")
             if current:
                 click.echo("Credentials are mounted into bubbles by default.")
-                click.echo("Override with: bubble open --no-claude-credentials <target>")
+                click.echo(f"Override with: bubble open --no-{provider}-credentials <target>")
             else:
-                click.echo("Use --claude-credentials flag or: bubble claude credentials on")
+                click.echo(
+                    f"Use --{provider}-credentials flag or: bubble ai credentials on"
+                    f" --provider {provider}"
+                )
             return
-        config.setdefault("claude", {})["credentials"] = setting == "on"
+        config.setdefault(provider, {})["credentials"] = setting == "on"
         save_config(config)
+        label = provider.capitalize()
         if setting == "on":
-            click.echo("Claude credentials enabled. Mounted into all new bubbles by default.")
-            click.echo("Override with: bubble open --no-claude-credentials <target>")
+            click.echo(f"{label} credentials enabled. Mounted into all new bubbles by default.")
+            click.echo(f"Override with: bubble open --no-{provider}-credentials <target>")
         else:
-            click.echo("Claude credentials disabled.")
+            click.echo(f"{label} credentials disabled.")
 
-    @claude_group.command("status")
-    def claude_status_cmd():
-        """Show current Claude Code settings."""
+    @ai_group.command("status")
+    def ai_status_cmd():
+        """Show current AI provider settings."""
         config = load_config()
-        creds = config.get("claude", {}).get("credentials", True)
-        click.echo(f"  credentials: {'on' if creds else 'off'}")
-
-    # --- codex ---
-
-    @main.group("codex", hidden=True)
-    def codex_group():
-        """Manage Codex/OpenAI settings."""
-
-    @codex_group.command("credentials")
-    @click.argument("setting", required=False, type=click.Choice(["on", "off"]))
-    def codex_credentials_cmd(setting):
-        """Set whether Codex credentials are mounted into bubbles.
-
-        When on, ~/.codex credentials (auth.json) are mounted
-        read-only into containers by default. Override per-bubble with
-        --no-codex-credentials.
-
-        Shows current setting if no argument given.
-        """
-        config = load_config()
-        if setting is None:
-            current = config.get("codex", {}).get("credentials", True)
-            state = "on" if current else "off"
-            click.echo(f"Codex credentials: {state}")
-            if current:
-                click.echo("Credentials are mounted into bubbles by default.")
-                click.echo("Override with: bubble open --no-codex-credentials <target>")
-            else:
-                click.echo("Use --codex-credentials flag or: bubble codex credentials on")
-            return
-        config.setdefault("codex", {})["credentials"] = setting == "on"
-        save_config(config)
-        if setting == "on":
-            click.echo("Codex credentials enabled. Mounted into all new bubbles by default.")
-            click.echo("Override with: bubble open --no-codex-credentials <target>")
-        else:
-            click.echo("Codex credentials disabled.")
-
-    @codex_group.command("status")
-    def codex_status_cmd():
-        """Show current Codex settings."""
-        config = load_config()
-        creds = config.get("codex", {}).get("credentials", True)
-        click.echo(f"  credentials: {'on' if creds else 'off'}")
+        preferred = config.get("ai", {}).get("preferred", "claude")
+        second = config.get("ai", {}).get("second_opinion", "codex")
+        click.echo(f"  preferred: {preferred}")
+        click.echo(f"  second_opinion: {second}")
+        click.echo()
+        for provider in dict.fromkeys([preferred, second]):
+            creds = config.get(provider, {}).get("credentials", True)
+            click.echo(f"  [{provider}]")
+            click.echo(f"    credentials: {'on' if creds else 'off'}")
 
     # --- tools ---
 
@@ -415,6 +392,7 @@ def register_settings_commands(main):
             ("relay", "section"),
             ("remote", "section"),
             ("cloud", "section"),
+            ("ai", "section"),
             ("claude", "section"),
             ("codex", "section"),
             ("tools", "section"),
@@ -506,18 +484,18 @@ def register_settings_commands(main):
         save_config(config)
         click.echo(f"Set security.{display_setting_name(name)} = {value}")
 
-    @config_group.command("symlink-claude-projects")
-    def config_symlink_claude_projects():
-        """Link ~/.bubble/claude-projects/ to ~/.claude/projects/ via symlink.
+    @config_group.command("symlink-ai-projects")
+    def config_symlink_ai_projects():
+        """Link ~/.bubble/ai-projects/ to ~/.claude/projects/ via symlink.
 
         If ~/.claude/projects/ is inside a git repo, this command merges any
-        existing session data from ~/.bubble/claude-projects/ into
+        existing session data from ~/.bubble/ai-projects/ into
         ~/.claude/projects/ and creates a symlink in its place.
 
         This lets bubble session state live inside the git-tracked directory
         and get synced across machines automatically.
         """
-        from ..config import do_symlink_claude_projects
+        from ..config import do_symlink_ai_projects
 
-        if not do_symlink_claude_projects():
+        if not do_symlink_ai_projects():
             raise SystemExit(1)

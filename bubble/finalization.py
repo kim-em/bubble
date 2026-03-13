@@ -28,7 +28,7 @@ def finalize_bubble(
     git_name="",
     git_email="",
     command=None,
-    claude_prompt="",
+    ai_prompt="",
 ):
     """Post-clone setup: hooks, SSH, registration, and attach.
 
@@ -42,11 +42,11 @@ def finalize_bubble(
     if hook:
         hook.post_clone(runtime, name, project_dir)
 
-    # Inject Claude Code task if prompt is provided
-    if claude_prompt:
-        from .claude import inject_claude_task
+    # Inject AI task if prompt is provided
+    if ai_prompt:
+        from .ai import inject_ai_task
 
-        inject_claude_task(runtime, name, project_dir, claude_prompt, quiet=machine_readable)
+        inject_ai_task(runtime, name, project_dir, ai_prompt, config=config, quiet=machine_readable)
 
     if not machine_readable:
         from .output import step
