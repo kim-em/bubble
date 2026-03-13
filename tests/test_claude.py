@@ -120,9 +120,7 @@ class TestGenerateIssuePrompt:
 
             mock_run.side_effect = [issue_result, comments_result]
 
-            prompt = generate_issue_prompt(
-                "acme", "widgets", "7", "issue-7", second_opinion="off"
-            )
+            prompt = generate_issue_prompt("acme", "widgets", "7", "issue-7", second_opinion="off")
 
             assert prompt is not None
             assert prompt.startswith("Issue #7 by acme: Bug report\nSomething broke.")
