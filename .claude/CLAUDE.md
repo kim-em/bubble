@@ -121,14 +121,19 @@ Bubbles can run on a remote machine instead of locally. The `--ssh HOST` flag (o
 Users can place a `customize.sh` script at `~/.bubble/customize.sh` to run custom setup in all container images. The script runs as root as the final step when building any image (base, lean, lean-v4.X.Y). This lets users add tools, dotfiles, shell config, etc. without forking image scripts. The script's content hash is tracked in `~/.bubble/customize-hash`; on `bubble open`, if the hash differs from the stored value, a background rebuild of the base image is triggered (same pattern as VS Code commit hash drift). Code is in `builder.py` (`customize_hash()`, `_run_customize_script()`).
 
 ### GitHub Auth Proxy
-The auth proxy (`auth_proxy.py`) provides repo-scoped GitHub authentication without injecting the host's token into containers. It's an HTTP reverse proxy that runs on the host with graduated access levels:
+The auth proxy (`auth_proxy.py`) provides repo-scoped GitHub authentication without injecting the host's token into containers. It's an HTTP reverse proxy that runs on the host. The access level is controlled by the unified `github` security setting (`security.py`), which picks one level from a graduated escalation ladder:
 
-| Level | Description | Routes |
-|-------|-------------|--------|
-| 1 | Git only | `/git/{owner}/{repo}/...` (smart HTTP) |
-| 2 | Git + REST read | + `GET /repos/{owner}/{repo}/...` |
-| 3 | Git + gh read-only (default) | + `POST /graphql` (queries only, mutations blocked) |
-| 4 | Git + gh read-write | + mutations + REST POST/PATCH/DELETE |
+| `github` level | Behavior |
+|----------------|----------|
+| `off` | no GitHub access at all |
+| `basic` | git push/pull only (proxy rewrites, repo-scoped) |
+| `rest` | + repo-scoped REST API |
+| `allowlist-read-graphql` | + allowlisted GraphQL queries |
+| `allowlist-write-graphql` | + allowlisted GraphQL mutations (default) |
+| `write-graphql` | + arbitrary GraphQL, no allowlist filtering |
+| `direct` | inject the raw token, no proxy |
+
+`auto` defaults to `allowlist-write-graphql`. The old `github-auth`, `github-api`, and `github-token-inject` settings are deprecated but migrated automatically.
 
 **Git flow:** Container git → `url.insteadOf` rewrites to `http://127.0.0.1:7654/git/...` → proxy validates `X-Bubble-Token` header → checks path matches allowed `owner/repo` → adds `Authorization: token <real-token>` → forwards to `https://github.com` → returns response.
 

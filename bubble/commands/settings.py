@@ -321,34 +321,30 @@ def register_settings_commands(main):
         """Show GitHub integration status."""
         from ..automation import is_auth_proxy_installed
         from ..github_token import has_gh_auth
-        from ..security import is_enabled as sec_is_enabled
+        from ..security import get_github_level
 
         config = load_config()
-        github_auth = get_setting(config, "github_auth")
-        enabled = sec_is_enabled(config, "github_auth")
+        gh_level = get_github_level(config)
+        raw_value = get_setting(config, "github")
         host_auth = has_gh_auth()
         proxy_installed = is_auth_proxy_installed()
 
-        token_inject = get_setting(config, "github_token_inject")
-        inject_enabled = sec_is_enabled(config, "github_token_inject")
-
-        click.echo(f"GitHub auth:      {github_auth} (effectively {'on' if enabled else 'off'})")
-        click.echo(
-            f"Token injection:  {token_inject} (effectively {'on' if inject_enabled else 'off'})"
-        )
+        if raw_value == "auto":
+            click.echo(f"GitHub level:     auto (effectively {gh_level})")
+        else:
+            click.echo(f"GitHub level:     {gh_level}")
         click.echo(f"Host gh auth:     {'authenticated' if host_auth else 'not authenticated'}")
         click.echo(f"Auth proxy:       {'installed' if proxy_installed else 'not installed'}")
-        if inject_enabled:
+        if gh_level == "direct":
             click.echo(
-                "\nWarning: token injection is enabled. Containers get your full GitHub token."
-                "\nDisable: bubble security set github-token-inject off"
+                "\nWarning: direct token injection is enabled."
+                " Containers get your full GitHub token."
+                "\nChange: bubble security set github allowlist-write-graphql"
             )
+        elif gh_level == "off":
+            click.echo("\nGitHub access is disabled. Enable: bubble security set github auto")
         elif not host_auth:
             click.echo("\nRun 'gh auth login' to authenticate on the host first.")
-        elif not enabled:
-            click.echo(
-                "\nRun 'bubble security set github-auth on' to enable GitHub auth in bubbles."
-            )
 
     @gh_group.group("proxy")
     def gh_proxy_group():
@@ -479,7 +475,7 @@ def register_settings_commands(main):
         """Set a security setting: bubble config set security.<name> <value>.
 
         Alias for `bubble security set <name> <value>`.
-        Setting names use hyphens (e.g. github-auth, claude-credentials).
+        Setting names use hyphens (e.g. github, claude-credentials).
         Underscores are also accepted as permanent aliases.
         """
         # Accept both "security.X" and bare "X", normalize hyphens to underscores

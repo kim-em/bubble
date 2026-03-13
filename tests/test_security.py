@@ -4,12 +4,15 @@ from click.testing import CliRunner
 
 from bubble.security import (
     CATEGORIES,
+    GITHUB_AUTO_DEFAULT,
+    GITHUB_LEVELS,
     SETTINGS,
     apply_preset_default,
     apply_preset_lockdown,
     apply_preset_permissive,
     display_setting_name,
     filter_github_domains,
+    get_github_level,
     get_setting,
     github_domains_for_allowlist,
     has_auto_settings,
@@ -25,18 +28,16 @@ from bubble.security import (
 
 
 def test_normalize_setting_name_hyphens():
-    assert normalize_setting_name("github-auth") == "github_auth"
     assert normalize_setting_name("claude-credentials") == "claude_credentials"
     assert normalize_setting_name("host-key-trust") == "host_key_trust"
 
 
 def test_normalize_setting_name_underscores_unchanged():
-    assert normalize_setting_name("github_auth") == "github_auth"
+    assert normalize_setting_name("github") == "github"
     assert normalize_setting_name("relay") == "relay"
 
 
 def test_display_setting_name():
-    assert display_setting_name("github_auth") == "github-auth"
     assert display_setting_name("claude_credentials") == "claude-credentials"
     assert display_setting_name("relay") == "relay"
 
@@ -74,19 +75,8 @@ def test_is_enabled_auto_on():
     assert is_enabled(config, "host_key_trust") is True
     assert is_enabled(config, "git_manifest_trust") is True
     assert is_enabled(config, "user_mounts") is True
-    assert is_enabled(config, "github_auth") is True
+    assert is_enabled(config, "github") is True
     assert is_enabled(config, "relay") is True
-
-
-def test_is_enabled_auto_off():
-    """github_token_inject defaults to off (auto_default=off)."""
-    config = {}
-    assert is_enabled(config, "github_token_inject") is False
-
-
-def test_is_enabled_github_token_inject_explicit_on():
-    config = {"security": {"github_token_inject": "on"}}
-    assert is_enabled(config, "github_token_inject") is True
 
 
 def test_is_enabled_auto_on_credentials():
@@ -104,6 +94,16 @@ def test_is_enabled_explicit_off():
     assert is_enabled(config, "shared_cache") is False
 
 
+def test_is_enabled_github_levels():
+    """All non-off github levels count as enabled."""
+    for level in GITHUB_LEVELS:
+        config = {"security": {"github": level}}
+        if level == "off":
+            assert is_enabled(config, "github") is False
+        else:
+            assert is_enabled(config, "github") is True, f"level {level} should be enabled"
+
+
 def test_is_locked_off():
     config = {"security": {"user_mounts": "off"}}
     assert is_locked_off(config, "user_mounts") is True
@@ -119,6 +119,94 @@ def test_is_locked_off_auto_is_not_locked():
 def test_is_locked_off_on_is_not_locked():
     config = {"security": {"relay": "on"}}
     assert is_locked_off(config, "relay") is False
+
+
+# --- GitHub level tests ---
+
+
+def test_get_github_level_auto_default():
+    """auto resolves to allowlist-write-graphql."""
+    config = {}
+    assert get_github_level(config) == "allowlist-write-graphql"
+
+
+def test_get_github_level_explicit_levels():
+    """Each explicit level returns itself."""
+    for level in GITHUB_LEVELS:
+        config = {"security": {"github": level}}
+        assert get_github_level(config) == level
+
+
+def test_get_github_level_on_treated_as_default():
+    """'on' is treated as the auto default."""
+    config = {"security": {"github": "on"}}
+    assert get_github_level(config) == GITHUB_AUTO_DEFAULT
+
+
+def test_get_github_level_typo_falls_back():
+    """Typos in the github setting fall back to auto (the default level)."""
+    config = {"security": {"github": "readwrtie"}}
+    assert get_github_level(config) == GITHUB_AUTO_DEFAULT
+
+
+# --- Legacy migration tests ---
+
+
+def test_get_github_level_migration_auth_off():
+    """Old github_auth=off maps to off."""
+    config = {"security": {"github_auth": "off"}}
+    assert get_github_level(config) == "off"
+
+
+def test_get_github_level_migration_inject_on():
+    """Old github_token_inject=on maps to direct."""
+    config = {"security": {"github_token_inject": "on"}}
+    assert get_github_level(config) == "direct"
+
+
+def test_get_github_level_migration_api_off():
+    """Old github_api=off (with auth on) maps to basic."""
+    config = {"security": {"github_api": "off"}}
+    assert get_github_level(config) == "basic"
+
+
+def test_get_github_level_migration_api_read_write():
+    """Old github_api=read-write maps to write-graphql."""
+    config = {"security": {"github_api": "read-write"}}
+    assert get_github_level(config) == "write-graphql"
+
+
+def test_get_github_level_migration_default():
+    """Old defaults (all auto) map to allowlist-write-graphql."""
+    config = {"security": {"github_auth": "auto"}}
+    assert get_github_level(config) == "allowlist-write-graphql"
+
+
+def test_get_github_level_new_overrides_legacy():
+    """New 'github' key takes precedence over legacy keys."""
+    config = {"security": {"github": "basic", "github_auth": "off"}}
+    assert get_github_level(config) == "basic"
+
+
+def test_warn_legacy_github_settings(capsys):
+    """Legacy keys trigger a deprecation warning."""
+    from bubble.security import warn_legacy_github_settings
+
+    config = {"security": {"github_auth": "on", "github_api": "off"}}
+    warn_legacy_github_settings(config)
+    captured = capsys.readouterr()
+    assert "Deprecated" in captured.err
+    assert "github = basic" in captured.err
+
+
+def test_warn_legacy_no_warning_for_new_config(capsys):
+    """No warning when only new-style github key is present."""
+    from bubble.security import warn_legacy_github_settings
+
+    config = {"security": {"github": "rest"}}
+    warn_legacy_github_settings(config)
+    captured = capsys.readouterr()
+    assert captured.err == ""
 
 
 # --- Warning tests ---
@@ -244,6 +332,9 @@ def test_security_cli_shows_posture(tmp_data_dir):
     # Display should use hyphenated forms
     assert "shared-cache" in result.output
     assert "relay" in result.output
+    # The github setting should show level descriptions
+    assert "Levels" in result.output
+    assert "allowlist-write-graphql" in result.output
     # No underscore setting names should appear in display output
     for name in SETTINGS:
         if "_" in name:
@@ -274,7 +365,10 @@ def test_security_permissive_cli(tmp_data_dir):
 
     config = load_config()
     for name in SETTINGS:
-        assert config["security"][name] == "on"
+        if name == "github":
+            assert config["security"][name] == "direct"
+        else:
+            assert config["security"][name] == "on"
 
 
 def test_security_lockdown_cli(tmp_data_dir):
@@ -295,7 +389,7 @@ def test_security_default_cli(tmp_data_dir):
     from bubble.cli import main
 
     runner = CliRunner()
-    # First set everything to on
+    # First set everything
     runner.invoke(main, ["security", "permissive"])
     # Then reset
     result = runner.invoke(main, ["security", "default"])
@@ -334,34 +428,29 @@ def test_security_set_cli_hyphenated(tmp_data_dir):
     assert config["security"]["shared_cache"] == "on"
 
 
-def test_security_set_cli_hyphenated_compound(tmp_data_dir):
-    """Multi-word hyphenated names like github-auth work."""
+def test_security_set_github_level(tmp_data_dir):
+    """Setting github to a specific level works."""
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["security", "set", "github-auth", "off"])
+    result = runner.invoke(main, ["security", "set", "github", "basic"])
     assert result.exit_code == 0
-    assert "Set security.github-auth = off" in result.output
+    assert "Set security.github = basic" in result.output
 
     from bubble.config import load_config
 
     config = load_config()
-    assert config["security"]["github_auth"] == "off"
+    assert config["security"]["github"] == "basic"
 
 
-def test_security_set_cli_prefixed_hyphenated(tmp_data_dir):
-    """security.github-auth (prefix + hyphen) works in security set."""
+def test_security_set_github_all_levels(tmp_data_dir):
+    """All github levels are accepted."""
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["security", "set", "security.github-auth", "on"])
-    assert result.exit_code == 0
-    assert "Set security.github-auth = on" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["security"]["github_auth"] == "on"
+    for level in GITHUB_LEVELS:
+        result = runner.invoke(main, ["security", "set", "github", level])
+        assert result.exit_code == 0, f"Failed to set github to {level}: {result.output}"
 
 
 def test_security_set_unknown(tmp_data_dir):
@@ -402,19 +491,19 @@ def test_config_set_cli_hyphenated(tmp_data_dir):
     assert config["security"]["shared_cache"] == "off"
 
 
-def test_config_set_cli_prefixed_hyphenated_compound(tmp_data_dir):
-    """security.github-auth (prefix + compound hyphen) works in config set."""
+def test_config_set_github_level(tmp_data_dir):
+    """config set also accepts github levels."""
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["config", "set", "security.github-auth", "on"])
+    result = runner.invoke(main, ["config", "set", "github", "rest"])
     assert result.exit_code == 0
-    assert "Set security.github-auth = on" in result.output
+    assert "Set security.github = rest" in result.output
 
     from bubble.config import load_config
 
     config = load_config()
-    assert config["security"]["github_auth"] == "on"
+    assert config["security"]["github"] == "rest"
 
 
 def test_config_set_bare_name(tmp_data_dir):
@@ -425,21 +514,6 @@ def test_config_set_bare_name(tmp_data_dir):
     result = runner.invoke(main, ["config", "set", "relay", "on"])
     assert result.exit_code == 0
     assert "Set security.relay = on" in result.output
-
-
-def test_config_set_bare_name_hyphenated(tmp_data_dir):
-    """Accepts bare hyphenated name without security. prefix."""
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["config", "set", "github-auth", "on"])
-    assert result.exit_code == 0
-    assert "Set security.github-auth = on" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["security"]["github_auth"] == "on"
 
 
 def test_config_set_unknown(tmp_data_dir):
@@ -467,7 +541,10 @@ def test_apply_preset_permissive():
     changed = apply_preset_permissive(config)
     assert len(changed) == len(SETTINGS)
     for name in SETTINGS:
-        assert config["security"][name] == "on"
+        if name == "github":
+            assert config["security"][name] == "direct"
+        else:
+            assert config["security"][name] == "on"
 
 
 def test_apply_preset_lockdown():
@@ -502,13 +579,21 @@ def test_apply_preset_default_restores_relay():
     assert is_enabled(config, "relay") is True
 
 
+def test_apply_preset_default_cleans_legacy_keys():
+    """default preset removes old github_auth/github_api/github_token_inject keys."""
+    config = {"security": {"github_auth": "on", "github_api": "read-write"}}
+    apply_preset_default(config)
+    assert "github_auth" not in config["security"]
+    assert "github_api" not in config["security"]
+
+
 def test_all_settings_have_valid_category():
     valid_cats = {name for name, _ in CATEGORIES}
     for name, defn in SETTINGS.items():
         assert defn.category in valid_cats, f"{name} has unknown category '{defn.category}'"
 
 
-# --- github_api read-write tests ---
+# --- github level with access level/graphql resolution ---
 
 
 def test_valid_values_for_normal_setting():
@@ -525,171 +610,166 @@ def test_valid_values_for_shared_cache():
     assert "overlay" in vals
 
 
-def test_valid_values_for_github_api():
-    """github_api also accepts read-write."""
-    vals = valid_values_for("github_api")
+def test_valid_values_for_github():
+    """github accepts all graduated levels."""
+    vals = valid_values_for("github")
     assert "auto" in vals
     assert "on" in vals
     assert "off" in vals
-    assert "read-write" in vals
+    for level in GITHUB_LEVELS:
+        assert level in vals
 
 
-def test_get_setting_github_api_read_write():
-    config = {"security": {"github_api": "read-write"}}
-    assert get_setting(config, "github_api") == "read-write"
-
-
-def test_is_enabled_github_api_read_write():
-    """read-write counts as enabled."""
-    config = {"security": {"github_api": "read-write"}}
-    assert is_enabled(config, "github_api") is True
-
-
-def test_is_locked_off_github_api_read_write():
-    """read-write is not locked off."""
-    config = {"security": {"github_api": "read-write"}}
-    assert is_locked_off(config, "github_api") is False
-
-
-def test_has_auto_settings_with_read_write():
-    """read-write is an explicit value, not auto."""
-    config = {"security": {name: "on" for name in SETTINGS}}
-    config["security"]["github_api"] = "read-write"
-    assert has_auto_settings(config) is False
-
-
-def test_resolve_access_level_read_write():
-    """read-write config returns LEVEL_GH_READWRITE (4)."""
+def test_resolve_access_level_allowlist_write_graphql():
+    """allowlist-write-graphql returns LEVEL_GH_READWRITE."""
     from bubble.auth_proxy import LEVEL_GH_READWRITE
     from bubble.github_token import _resolve_access_level
 
-    config = {"security": {"github_api": "read-write"}}
+    config = {"security": {"github": "allowlist-write-graphql"}}
     assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
 
 
-def test_resolve_access_level_on_returns_readwrite():
-    """on config returns LEVEL_GH_READWRITE (REST is repo-scoped, so writes are safe)."""
-    from bubble.auth_proxy import LEVEL_GH_READWRITE
-    from bubble.github_token import _resolve_access_level
-
-    config = {"security": {"github_api": "on"}}
-    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
-
-
-def test_resolve_graphql_config_on_returns_whitelisted():
-    """on config returns whitelisted GraphQL for both read and write."""
-    from bubble.github_token import _resolve_graphql_config
-
-    config = {"security": {"github_api": "on"}}
-    assert _resolve_graphql_config(config, gh_enabled=True) == ("whitelisted", "whitelisted")
-
-
-def test_resolve_graphql_config_read_write():
-    """read-write config returns unrestricted GraphQL."""
-    from bubble.github_token import _resolve_graphql_config
-
-    config = {"security": {"github_api": "read-write"}}
-    assert _resolve_graphql_config(config, gh_enabled=True) == ("unrestricted", "unrestricted")
-
-
-def test_resolve_graphql_config_off():
-    """off config returns none for both."""
-    from bubble.github_token import _resolve_graphql_config
-
-    config = {"security": {"github_api": "off"}}
-    assert _resolve_graphql_config(config, gh_enabled=True) == ("none", "none")
-
-
-def test_resolve_graphql_config_gh_disabled():
-    """gh not enabled returns none regardless of config."""
-    from bubble.github_token import _resolve_graphql_config
-
-    config = {"security": {"github_api": "read-write"}}
-    assert _resolve_graphql_config(config, gh_enabled=False) == ("none", "none")
-
-
-def test_resolve_access_level_off_returns_git_only():
-    """off config returns LEVEL_GIT_ONLY (1)."""
+def test_resolve_access_level_basic():
+    """basic returns LEVEL_GIT_ONLY."""
     from bubble.auth_proxy import LEVEL_GIT_ONLY
     from bubble.github_token import _resolve_access_level
 
-    config = {"security": {"github_api": "off"}}
+    config = {"security": {"github": "basic"}}
+    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GIT_ONLY
+
+
+def test_resolve_access_level_rest():
+    """rest returns LEVEL_GH_READWRITE (REST is repo-scoped, writes are safe)."""
+    from bubble.auth_proxy import LEVEL_GH_READWRITE
+    from bubble.github_token import _resolve_access_level
+
+    config = {"security": {"github": "rest"}}
+    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
+
+
+def test_resolve_access_level_off():
+    """off returns LEVEL_GIT_ONLY."""
+    from bubble.auth_proxy import LEVEL_GIT_ONLY
+    from bubble.github_token import _resolve_access_level
+
+    config = {"security": {"github": "off"}}
     assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GIT_ONLY
 
 
 def test_resolve_access_level_gh_disabled():
-    """gh not enabled returns LEVEL_GIT_ONLY regardless of config."""
+    """gh not enabled returns LEVEL_GIT_ONLY regardless of level."""
     from bubble.auth_proxy import LEVEL_GIT_ONLY
     from bubble.github_token import _resolve_access_level
 
-    config = {"security": {"github_api": "read-write"}}
+    config = {"security": {"github": "write-graphql"}}
     assert _resolve_access_level(config, gh_enabled=False) == LEVEL_GIT_ONLY
 
 
-def test_security_set_github_api_read_write(tmp_data_dir):
+def test_resolve_graphql_config_allowlist_write_graphql():
+    """allowlist-write-graphql returns whitelisted for both."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github": "allowlist-write-graphql"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("whitelisted", "whitelisted")
+
+
+def test_resolve_graphql_config_allowlist_read_graphql():
+    """allowlist-read-graphql returns whitelisted read, none write."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github": "allowlist-read-graphql"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("whitelisted", "none")
+
+
+def test_resolve_graphql_config_write_graphql():
+    """write-graphql returns unrestricted for both."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github": "write-graphql"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("unrestricted", "unrestricted")
+
+
+def test_resolve_graphql_config_rest():
+    """rest returns none for both (no GraphQL)."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github": "rest"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("none", "none")
+
+
+def test_resolve_graphql_config_basic():
+    """basic returns none for both."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github": "basic"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("none", "none")
+
+
+def test_resolve_graphql_config_off():
+    """off returns none for both."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github": "off"}}
+    assert _resolve_graphql_config(config, gh_enabled=True) == ("none", "none")
+
+
+def test_resolve_graphql_config_gh_disabled():
+    """gh not enabled returns none regardless of level."""
+    from bubble.github_token import _resolve_graphql_config
+
+    config = {"security": {"github": "write-graphql"}}
+    assert _resolve_graphql_config(config, gh_enabled=False) == ("none", "none")
+
+
+def test_security_set_github_level_via_cli(tmp_data_dir):
+    """Setting github to a graduated level via CLI works."""
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["security", "set", "github-api", "read-write"])
+    result = runner.invoke(main, ["security", "set", "github", "write-graphql"])
     assert result.exit_code == 0
-    assert "Set security.github-api = read-write" in result.output
+    assert "Set security.github = write-graphql" in result.output
 
     from bubble.config import load_config
 
     config = load_config()
-    assert config["security"]["github_api"] == "read-write"
+    assert config["security"]["github"] == "write-graphql"
 
 
-def test_security_set_read_write_rejected_for_other_settings(tmp_data_dir):
-    """read-write is only valid for github_api, not other settings."""
+def test_security_set_level_rejected_for_other_settings(tmp_data_dir):
+    """GitHub levels are only valid for github, not other settings."""
     from bubble.cli import main
 
     runner = CliRunner()
-    result = runner.invoke(main, ["security", "set", "relay", "read-write"])
+    result = runner.invoke(main, ["security", "set", "relay", "basic"])
     assert result.exit_code != 0
     assert "Invalid value" in result.output
 
 
-def test_config_set_github_api_read_write(tmp_data_dir):
-    """config set also accepts read-write for github-api."""
-    from bubble.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["config", "set", "github-api", "read-write"])
-    assert result.exit_code == 0
-    assert "Set security.github-api = read-write" in result.output
-
-    from bubble.config import load_config
-
-    config = load_config()
-    assert config["security"]["github_api"] == "read-write"
-
-
-def test_security_posture_shows_read_write(tmp_data_dir, capsys):
-    """security posture display shows read-write hint for github-api."""
+def test_security_posture_shows_github_levels(tmp_data_dir, capsys):
+    """security posture display shows the graduated levels for github."""
     from bubble.security import print_security_posture
 
-    config = {"security": {"github_api": "read-write"}}
+    config = {"security": {"github": "rest"}}
     print_security_posture(config)
     captured = capsys.readouterr()
-    assert "read-write" in captured.out
-    assert "mutations" in captured.out
+    assert "rest" in captured.out
+    assert "Levels" in captured.out
+    assert "direct" in captured.out  # all levels shown
 
 
 def test_invalid_raw_config_falls_back_to_auto():
     """Typos in hand-edited config.toml are treated as auto (fail-closed)."""
-    config = {"security": {"github_api": "readwrtie"}}
-    assert get_setting(config, "github_api") == "auto"
-    # auto_default is "on", so it's enabled but at the default level (not read-write)
-    assert is_enabled(config, "github_api") is True
+    config = {"security": {"github": "readwrtie"}}
+    assert get_setting(config, "github") == "auto"
+    # auto resolves to the default level
+    assert get_github_level(config) == GITHUB_AUTO_DEFAULT
 
     from bubble.auth_proxy import LEVEL_GH_READWRITE
     from bubble.github_token import _resolve_access_level
 
-    # Typo falls back to auto, which is "on" → LEVEL_GH_READWRITE for REST
     assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
 
-    # GraphQL should be whitelisted (the safe default)
     from bubble.github_token import _resolve_graphql_config
 
     assert _resolve_graphql_config(config, gh_enabled=True) == ("whitelisted", "whitelisted")
@@ -701,23 +781,36 @@ def test_invalid_raw_config_other_setting():
     assert get_setting(config, "relay") == "auto"
 
 
-def test_permissive_preserves_read_write():
-    """permissive does not downgrade github_api from read-write to on."""
-    config = {"security": {"github_api": "read-write"}}
+def test_permissive_preserves_direct():
+    """permissive does not downgrade github from direct."""
+    config = {"security": {"github": "direct"}}
     changed = apply_preset_permissive(config)
-    # github_api should NOT be in the changed list
-    assert "github_api" not in changed
-    # Value should still be read-write
-    assert config["security"]["github_api"] == "read-write"
+    assert "github" not in changed
+    assert config["security"]["github"] == "direct"
+
+
+def test_permissive_sets_github_to_direct():
+    """permissive sets github to direct from auto."""
+    config = {}
+    changed = apply_preset_permissive(config)
+    assert "github" in changed
+    assert config["security"]["github"] == "direct"
 
 
 def test_permissive_still_sets_non_explicit():
-    """permissive sets auto settings to on even when github_api is read-write."""
-    config = {"security": {"github_api": "read-write"}}
+    """permissive sets auto settings to on even when github is already set."""
+    config = {"security": {"github": "direct"}}
     changed = apply_preset_permissive(config)
     # Other settings should be changed to "on"
     assert "relay" in changed
     assert config["security"]["relay"] == "on"
+
+
+def test_has_auto_settings_with_github_level():
+    """Explicit github level is not auto."""
+    config = {"security": {name: "on" for name in SETTINGS}}
+    config["security"]["github"] = "basic"
+    assert has_auto_settings(config) is False
 
 
 # --- SSH config tests ---
