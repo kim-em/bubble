@@ -982,17 +982,10 @@ allowlist validation) → adds real token → forwards to `https://api.github.co
     "container": "name",
     "owner": "owner",
     "repo": "repo",
-    "level": 4,
     "graphql_read": "whitelisted",
     "graphql_write": "whitelisted"
   }
 }
-```
-
-The `level` field is a legacy integer (1–4) retained for backward
-compatibility. Old tokens without `graphql_*` fields derive policies from
-`level`; new tokens always include both `graphql_*` fields and the named
-`github` level determines behavior.
 
 **Allowed paths (git smart HTTP only):**
 - `GET /git/{owner}/{repo}[.git]/info/refs?service=git-upload-pack`
