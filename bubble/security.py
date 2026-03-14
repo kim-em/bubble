@@ -46,9 +46,6 @@ GITHUB_LEVEL_DESCRIPTIONS = {
 # The default GitHub level when set to "auto"
 GITHUB_AUTO_DEFAULT = "allowlist-write-graphql"
 
-# Legacy setting names that were replaced by the unified `github` setting
-_LEGACY_GITHUB_KEYS = ("github_auth", "github_api", "github_token_inject")
-
 
 def valid_values_for(name: str) -> tuple[str, ...]:
     """Return the valid values for a security setting.
@@ -195,87 +192,18 @@ def is_locked_off(config: dict, name: str) -> bool:
     return get_setting(config, name) == "off"
 
 
-def _migrate_legacy_github(security: dict) -> str:
-    """Map old github_auth/github_api/github_token_inject to a unified level.
-
-    Called when old keys are present in the security section but the new
-    'github' key has not been set.
-    """
-    auth = security.get("github_auth", "auto")
-    api = security.get("github_api", "auto")
-    inject = security.get("github_token_inject", "auto")
-
-    # Token injection overrides everything — in the old code, token
-    # injection was checked independently of github_auth, so
-    # {github_auth=off, github_token_inject=on} meant "direct".
-    if inject == "on":
-        return "direct"
-
-    # If auth is off, nothing works
-    if auth == "off":
-        return "off"
-
-    # Auth is on/auto (effectively on). Check API level.
-    if api == "off":
-        return "basic"
-    if api == "read-write":
-        return "write-graphql"
-    # api == "on" or "auto" (default)
-    return "allowlist-write-graphql"
-
-
 def get_github_level(config: dict) -> str:
     """Resolve the effective GitHub access level.
 
     Returns one of the GITHUB_LEVELS values (never "auto" or "on").
-    Handles migration from old github_auth/github_api/github_token_inject keys.
     """
     value = get_setting(config, "github")
 
-    if value == "auto":
-        # Check for legacy settings and migrate
-        security = config.get("security", {})
-        if any(k in security for k in _LEGACY_GITHUB_KEYS):
-            return _migrate_legacy_github(security)
-        return GITHUB_AUTO_DEFAULT
-
-    if value == "on":
-        # Treat "on" the same as auto default
+    if value in ("auto", "on"):
         return GITHUB_AUTO_DEFAULT
 
     # Explicit level (off, basic, rest, ..., direct)
     return value
-
-
-def warn_legacy_github_settings(config: dict, notices=None):
-    """Print deprecation warnings if old github_auth/api/inject keys are found."""
-    security = config.get("security", {})
-    old_keys = [k for k in _LEGACY_GITHUB_KEYS if k in security]
-    if not old_keys:
-        return
-
-    # If the user has already set the new 'github' key explicitly,
-    # the legacy keys are inert — skip the warning to avoid suggesting
-    # overwriting the user's explicit new setting with a legacy-derived value.
-    if "github" in security:
-        return
-
-    migrated = _migrate_legacy_github(security)
-    names = ", ".join(display_setting_name(k) for k in old_keys)
-    if notices:
-        notices.begin()
-    click.echo(
-        f"Deprecated: {names} replaced by unified 'github' setting.",
-        err=True,
-    )
-    click.echo(
-        f"  Current mapping: github = {migrated}",
-        err=True,
-    )
-    click.echo(
-        f"  Migrate: bubble security set github {migrated}",
-        err=True,
-    )
 
 
 def should_include_credentials(requested: bool, config: dict, setting_name: str) -> bool:
@@ -299,12 +227,9 @@ def print_warnings(config: dict, notices=None):
 
     Suppressed by BUBBLE_QUIET_SECURITY=1 environment variable.
     Once every setting is explicitly configured, no message is shown.
-    Also prints deprecation warnings for legacy github settings.
     """
     if os.environ.get("BUBBLE_QUIET_SECURITY") == "1":
         return
-
-    warn_legacy_github_settings(config, notices=notices)
 
     if not has_auto_settings(config):
         return
@@ -415,8 +340,6 @@ def apply_preset_permissive(config: dict) -> list[str]:
             continue
         config["security"][name] = "on"
         changed.append(name)
-    # Clean up any legacy keys
-    _remove_legacy_keys(config)
     return changed
 
 
@@ -428,12 +351,6 @@ def apply_preset_default(config: dict) -> list[str]:
         if security.get(name) is not None:
             del security[name]
             changed.append(name)
-    # Also clean up legacy keys
-    for key in _LEGACY_GITHUB_KEYS:
-        if security.get(key) is not None:
-            del security[key]
-            if key not in changed:
-                changed.append(key)
     if "security" not in config:
         config["security"] = security
     return changed
@@ -447,16 +364,7 @@ def apply_preset_lockdown(config: dict) -> list[str]:
         if get_setting(config, name) != "off":
             config["security"][name] = "off"
             changed.append(name)
-    # Clean up any legacy keys
-    _remove_legacy_keys(config)
     return changed
-
-
-def _remove_legacy_keys(config: dict):
-    """Remove old github_auth/github_api/github_token_inject keys from config."""
-    security = config.get("security", {})
-    for key in _LEGACY_GITHUB_KEYS:
-        security.pop(key, None)
 
 
 def github_domains_for_allowlist(domains: list[str]) -> list[str]:
