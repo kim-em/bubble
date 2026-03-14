@@ -10,10 +10,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from bubble.auth_proxy import (
-    LEVEL_GH_READ,
-    LEVEL_GH_READWRITE,
-    LEVEL_GIT_ONLY,
-    LEVEL_REST_READ,
     AuthProxyHandler,
     AuthTokenRegistry,
     GitHubTokenRefresher,
@@ -43,16 +39,16 @@ class TestAuthTokenManagement:
         assert tokens[token]["container"] == "my-container"
         assert tokens[token]["owner"] == "owner"
         assert tokens[token]["repo"] == "repo"
-        assert tokens[token]["level"] == LEVEL_GH_READ  # default
+        assert tokens[token]["rest_api"] is True  # default
         assert tokens[token]["graphql_read"] == "whitelisted"
         assert tokens[token]["graphql_write"] == "whitelisted"
 
-    def test_generate_token_with_level(self, auth_proxy_env):
+    def test_generate_token_git_only(self, auth_proxy_env):
         import bubble.auth_proxy
 
-        token = bubble.auth_proxy.generate_auth_token("c1", "o", "r", level=LEVEL_GIT_ONLY)
+        token = bubble.auth_proxy.generate_auth_token("c1", "o", "r", rest_api=False)
         tokens = bubble.auth_proxy._load_tokens()
-        assert tokens[token]["level"] == LEVEL_GIT_ONLY
+        assert tokens[token]["rest_api"] is False
 
     def test_generate_multiple_tokens(self, auth_proxy_env):
         import bubble.auth_proxy
@@ -510,102 +506,65 @@ class TestValidateApiPath:
     # --- Allowed patterns ---
 
     def test_get_pulls(self):
-        err = validate_api_path(
-            "/repos/owner/repo/pulls/123", "", "GET", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/owner/repo/pulls/123", "", "GET", "owner", "repo")
         assert err is None
 
     def test_get_actions_runs(self):
-        err = validate_api_path(
-            "/repos/owner/repo/actions/runs", "", "GET", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/owner/repo/actions/runs", "", "GET", "owner", "repo")
         assert err is None
 
     def test_get_issues(self):
-        err = validate_api_path(
-            "/repos/owner/repo/issues", "state=open", "GET", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/owner/repo/issues", "state=open", "GET", "owner", "repo")
         assert err is None
 
     def test_head_allowed(self):
-        err = validate_api_path(
-            "/repos/owner/repo/pulls", "", "HEAD", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/owner/repo/pulls", "", "HEAD", "owner", "repo")
         assert err is None
 
     def test_get_repo_root(self):
-        err = validate_api_path("/repos/owner/repo", "", "GET", "owner", "repo", LEVEL_REST_READ)
+        err = validate_api_path("/repos/owner/repo", "", "GET", "owner", "repo")
         assert err is None
 
     def test_case_insensitive(self):
-        err = validate_api_path(
-            "/repos/Owner/Repo/pulls", "", "GET", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/Owner/Repo/pulls", "", "GET", "owner", "repo")
         assert err is None
 
-    # --- Write methods ---
+    # --- Write methods (all allowed — REST is repo-scoped by path) ---
 
-    def test_post_blocked_at_level_2(self):
-        err = validate_api_path(
-            "/repos/owner/repo/issues/1/comments", "", "POST", "owner", "repo", LEVEL_REST_READ
-        )
-        assert err is not None
-        assert "not allowed" in err.lower()
-
-    def test_post_blocked_at_level_3(self):
-        err = validate_api_path(
-            "/repos/owner/repo/issues/1/comments", "", "POST", "owner", "repo", LEVEL_GH_READ
-        )
-        assert err is not None
-
-    def test_post_allowed_at_level_4(self):
-        err = validate_api_path(
-            "/repos/owner/repo/issues/1/comments", "", "POST", "owner", "repo", LEVEL_GH_READWRITE
-        )
+    def test_post_allowed(self):
+        err = validate_api_path("/repos/owner/repo/issues/1/comments", "", "POST", "owner", "repo")
         assert err is None
 
-    def test_patch_allowed_at_level_4(self):
-        err = validate_api_path(
-            "/repos/owner/repo/pulls/1", "", "PATCH", "owner", "repo", LEVEL_GH_READWRITE
-        )
+    def test_patch_allowed(self):
+        err = validate_api_path("/repos/owner/repo/pulls/1", "", "PATCH", "owner", "repo")
         assert err is None
 
-    def test_delete_allowed_at_level_4(self):
-        err = validate_api_path(
-            "/repos/owner/repo/comments/1", "", "DELETE", "owner", "repo", LEVEL_GH_READWRITE
-        )
+    def test_delete_allowed(self):
+        err = validate_api_path("/repos/owner/repo/comments/1", "", "DELETE", "owner", "repo")
         assert err is None
 
     # --- Blocked patterns ---
 
     def test_wrong_repo(self):
-        err = validate_api_path(
-            "/repos/owner/other/pulls", "", "GET", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/owner/other/pulls", "", "GET", "owner", "repo")
         assert err is not None
         assert "mismatch" in err.lower()
 
     def test_wrong_owner(self):
-        err = validate_api_path(
-            "/repos/hacker/repo/pulls", "", "GET", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/hacker/repo/pulls", "", "GET", "owner", "repo")
         assert err is not None
 
     def test_non_repo_path(self):
-        err = validate_api_path("/user", "", "GET", "owner", "repo", LEVEL_REST_READ)
+        err = validate_api_path("/user", "", "GET", "owner", "repo")
         assert err is not None
         assert "pattern" in err.lower()
 
     def test_encoded_slash(self):
-        err = validate_api_path(
-            "/repos/owner%2frepo/pulls", "", "GET", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/owner%2frepo/pulls", "", "GET", "owner", "repo")
         assert err is not None
 
     def test_dot_segment(self):
-        err = validate_api_path(
-            "/repos/owner/repo/../../etc/passwd", "", "GET", "owner", "repo", LEVEL_REST_READ
-        )
+        err = validate_api_path("/repos/owner/repo/../../etc/passwd", "", "GET", "owner", "repo")
         assert err is not None
 
 
@@ -897,12 +856,14 @@ class TestAuthorizationHeaderAuth:
 
 class TestAccessLevelRouting:
     @staticmethod
-    def _tinfo(level):
+    def _tinfo(rest_api=False, graphql_read="none", graphql_write="none"):
         return {
             "container": "c1",
             "owner": "owner",
             "repo": "repo",
-            "level": level,
+            "rest_api": rest_api,
+            "graphql_read": graphql_read,
+            "graphql_write": graphql_write,
         }
 
     def _make_handler(self, method, path, headers=None, body=None, token_info=None):
@@ -940,37 +901,37 @@ class TestAccessLevelRouting:
 
         return handler
 
-    def test_git_request_allowed_at_level_1(self):
+    def test_git_request_allowed_git_only(self):
         handler = self._make_handler(
             "GET",
             "/git/owner/repo/info/refs?service=git-upload-pack",
             headers={"X-Bubble-Token": "valid-token"},
-            token_info=self._tinfo(LEVEL_GIT_ONLY),
+            token_info=self._tinfo(rest_api=False),
         )
         handler._proxy_request("GET")
         assert 403 not in handler._responses
 
-    def test_api_request_blocked_at_level_1(self):
+    def test_api_request_blocked_when_rest_disabled(self):
         handler = self._make_handler(
             "GET",
             "/repos/owner/repo/pulls",
             headers={"X-Bubble-Token": "valid-token"},
-            token_info=self._tinfo(LEVEL_GIT_ONLY),
+            token_info=self._tinfo(rest_api=False),
         )
         handler._proxy_request("GET")
         assert 403 in handler._responses
 
-    def test_api_request_allowed_at_level_2(self):
+    def test_api_request_allowed_when_rest_enabled(self):
         handler = self._make_handler(
             "GET",
             "/repos/owner/repo/pulls",
             headers={"X-Bubble-Token": "valid-token"},
-            token_info=self._tinfo(LEVEL_REST_READ),
+            token_info=self._tinfo(rest_api=True),
         )
         handler._proxy_request("GET")
         assert 403 not in handler._responses
 
-    def test_graphql_blocked_at_level_2(self):
+    def test_graphql_blocked_when_none(self):
         body = json.dumps({"query": "{ repository { name } }"}).encode()
         handler = self._make_handler(
             "POST",
@@ -980,12 +941,12 @@ class TestAccessLevelRouting:
                 "Content-Length": str(len(body)),
             },
             body=body,
-            token_info=self._tinfo(LEVEL_REST_READ),
+            token_info=self._tinfo(rest_api=True, graphql_read="none", graphql_write="none"),
         )
         handler._proxy_request("POST")
         assert 403 in handler._responses
 
-    def test_graphql_query_allowed_at_level_3(self):
+    def test_graphql_query_allowed_unrestricted_read(self):
         body = json.dumps({"query": "query { repository { name } }"}).encode()
         handler = self._make_handler(
             "POST",
@@ -995,12 +956,14 @@ class TestAccessLevelRouting:
                 "Content-Length": str(len(body)),
             },
             body=body,
-            token_info=self._tinfo(LEVEL_GH_READ),
+            token_info=self._tinfo(
+                rest_api=True, graphql_read="unrestricted", graphql_write="none"
+            ),
         )
         handler._proxy_request("POST")
         assert 403 not in handler._responses
 
-    def test_graphql_mutation_blocked_at_level_3(self):
+    def test_graphql_mutation_blocked_read_only(self):
         body = json.dumps({"query": "mutation { addComment { id } }"}).encode()
         handler = self._make_handler(
             "POST",
@@ -1010,12 +973,14 @@ class TestAccessLevelRouting:
                 "Content-Length": str(len(body)),
             },
             body=body,
-            token_info=self._tinfo(LEVEL_GH_READ),
+            token_info=self._tinfo(
+                rest_api=True, graphql_read="unrestricted", graphql_write="none"
+            ),
         )
         handler._proxy_request("POST")
         assert 403 in handler._responses
 
-    def test_graphql_mutation_allowed_at_level_4(self):
+    def test_graphql_mutation_allowed_unrestricted_write(self):
         body = json.dumps({"query": "mutation { addComment { id } }"}).encode()
         handler = self._make_handler(
             "POST",
@@ -1025,7 +990,9 @@ class TestAccessLevelRouting:
                 "Content-Length": str(len(body)),
             },
             body=body,
-            token_info=self._tinfo(LEVEL_GH_READWRITE),
+            token_info=self._tinfo(
+                rest_api=True, graphql_read="unrestricted", graphql_write="unrestricted"
+            ),
         )
         handler._proxy_request("POST")
         assert 403 not in handler._responses
@@ -1035,7 +1002,7 @@ class TestAccessLevelRouting:
             "GET",
             "/user",
             headers={"X-Bubble-Token": "valid-token"},
-            token_info=self._tinfo(LEVEL_GH_READ),
+            token_info=self._tinfo(rest_api=True),
         )
         handler._proxy_request("GET")
         assert 403 in handler._responses
@@ -1049,11 +1016,16 @@ class TestAccessLevelRouting:
 class TestApiProxyIntegration:
     @pytest.fixture
     def api_proxy_server(self, auth_proxy_env):
-        """Start a real auth proxy server with level 3 token."""
+        """Start a real auth proxy server with whitelisted read-only GraphQL."""
         import bubble.auth_proxy
 
         token = bubble.auth_proxy.generate_auth_token(
-            "test-container", "owner", "repo", level=LEVEL_GH_READ
+            "test-container",
+            "owner",
+            "repo",
+            rest_api=True,
+            graphql_read="whitelisted",
+            graphql_write="none",
         )
         registry = bubble.auth_proxy.AuthTokenRegistry()
         rate_limiter = bubble.auth_proxy.ProxyRateLimiter()
@@ -1104,7 +1076,9 @@ class TestApiProxyIntegration:
         except urllib.error.HTTPError as e:
             assert e.code == 403
 
-    def test_api_post_blocked_at_level_3(self, api_proxy_server):
+    def test_api_post_allowed_when_rest_enabled(self, api_proxy_server):
+        """REST POST is allowed — path validation constrains access to the scoped repo."""
+        import urllib.error
         import urllib.request
 
         port = api_proxy_server["port"]
@@ -1118,10 +1092,13 @@ class TestApiProxyIntegration:
         req.add_header("Authorization", f"token {token}")
         req.add_header("Content-Type", "application/json")
         try:
-            urllib.request.urlopen(req)
-            pytest.fail("Expected HTTP error")
+            urllib.request.urlopen(req, timeout=5)
         except urllib.error.HTTPError as e:
-            assert e.code == 403
+            # 401/404 = GitHub rejected fake token or repo
+            # 502 = proxy couldn't reach GitHub
+            assert e.code in (401, 404, 502)
+        except urllib.error.URLError:
+            pass  # Network timeout is fine
 
     def test_graphql_query_proxied(self, api_proxy_server):
         """GraphQL query passes validation and reaches upstream."""
