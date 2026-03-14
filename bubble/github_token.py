@@ -626,7 +626,7 @@ def setup_gh_token(
     Both proxy paths provide repo-scoped auth — the host token never enters
     the container.
 
-    When gh_enabled is True and github_api security is on, also sets up
+    When gh_enabled is True and the github security level includes API access, also sets up
     gh CLI access via Unix socket proxy device and configures gh to use
     the auth proxy.
 

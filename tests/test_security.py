@@ -149,82 +149,6 @@ def test_get_github_level_typo_falls_back():
     assert get_github_level(config) == GITHUB_AUTO_DEFAULT
 
 
-# --- Legacy migration tests ---
-
-
-def test_get_github_level_migration_auth_off():
-    """Old github_auth=off maps to off."""
-    config = {"security": {"github_auth": "off"}}
-    assert get_github_level(config) == "off"
-
-
-def test_get_github_level_migration_inject_on():
-    """Old github_token_inject=on maps to direct."""
-    config = {"security": {"github_token_inject": "on"}}
-    assert get_github_level(config) == "direct"
-
-
-def test_get_github_level_migration_inject_overrides_auth_off():
-    """Token injection wins even when github_auth=off (matches old runtime behavior)."""
-    config = {"security": {"github_auth": "off", "github_token_inject": "on"}}
-    assert get_github_level(config) == "direct"
-
-
-def test_get_github_level_migration_api_off():
-    """Old github_api=off (with auth on) maps to basic."""
-    config = {"security": {"github_api": "off"}}
-    assert get_github_level(config) == "basic"
-
-
-def test_get_github_level_migration_api_read_write():
-    """Old github_api=read-write maps to write-graphql."""
-    config = {"security": {"github_api": "read-write"}}
-    assert get_github_level(config) == "write-graphql"
-
-
-def test_get_github_level_migration_default():
-    """Old defaults (all auto) map to allowlist-write-graphql."""
-    config = {"security": {"github_auth": "auto"}}
-    assert get_github_level(config) == "allowlist-write-graphql"
-
-
-def test_get_github_level_new_overrides_legacy():
-    """New 'github' key takes precedence over legacy keys."""
-    config = {"security": {"github": "basic", "github_auth": "off"}}
-    assert get_github_level(config) == "basic"
-
-
-def test_warn_legacy_github_settings(capsys):
-    """Legacy keys trigger a deprecation warning."""
-    from bubble.security import warn_legacy_github_settings
-
-    config = {"security": {"github_auth": "on", "github_api": "off"}}
-    warn_legacy_github_settings(config)
-    captured = capsys.readouterr()
-    assert "Deprecated" in captured.err
-    assert "github = basic" in captured.err
-
-
-def test_warn_legacy_no_warning_for_new_config(capsys):
-    """No warning when only new-style github key is present."""
-    from bubble.security import warn_legacy_github_settings
-
-    config = {"security": {"github": "rest"}}
-    warn_legacy_github_settings(config)
-    captured = capsys.readouterr()
-    assert captured.err == ""
-
-
-def test_warn_legacy_suppressed_when_new_key_set(capsys):
-    """No warning when both legacy and new keys are present (partially migrated)."""
-    from bubble.security import warn_legacy_github_settings
-
-    config = {"security": {"github": "rest", "github_auth": "on"}}
-    warn_legacy_github_settings(config)
-    captured = capsys.readouterr()
-    assert captured.err == ""
-
-
 # --- Warning tests ---
 
 
@@ -593,14 +517,6 @@ def test_apply_preset_default_restores_relay():
     apply_preset_default(config)
     assert get_setting(config, "relay") == "auto"
     assert is_enabled(config, "relay") is True
-
-
-def test_apply_preset_default_cleans_legacy_keys():
-    """default preset removes old github_auth/github_api/github_token_inject keys."""
-    config = {"security": {"github_auth": "on", "github_api": "read-write"}}
-    apply_preset_default(config)
-    assert "github_auth" not in config["security"]
-    assert "github_api" not in config["security"]
 
 
 def test_all_settings_have_valid_category():

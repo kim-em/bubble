@@ -485,9 +485,6 @@ def test_auth_proxy_failure_aborts_when_network_active(mock_runtime, tmp_data_di
         original="kim-em/bubble",
     )
 
-    def is_enabled_side_effect(_config, setting):
-        return setting != "github_token_inject"
-
     with (
         patch("bubble.cli.load_config", return_value={}),
         patch("bubble.cli.get_host_git_identity", return_value=("Test", "t@t.com")),
@@ -505,7 +502,7 @@ def test_auth_proxy_failure_aborts_when_network_active(mock_runtime, tmp_data_di
         patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
         patch("bubble.cli.provision_container"),
         patch("bubble.cli.get_github_level", return_value="allowlist-write-graphql"),
-        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
+        patch("bubble.cli.is_enabled", return_value=True),
         patch("bubble.github_token.setup_gh_token", return_value=False),
         patch("bubble.cli.clone_and_checkout") as mock_clone,
     ):
@@ -537,9 +534,6 @@ def test_auth_proxy_failure_warns_when_network_disabled(mock_runtime, tmp_data_d
         original="kim-em/bubble",
     )
 
-    def is_enabled_side_effect(_config, setting):
-        return setting != "github_token_inject"
-
     with (
         patch("bubble.cli.load_config", return_value={}),
         patch("bubble.cli.get_host_git_identity", return_value=("Test", "t@t.com")),
@@ -557,7 +551,7 @@ def test_auth_proxy_failure_warns_when_network_disabled(mock_runtime, tmp_data_d
         patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
         patch("bubble.cli.provision_container"),
         patch("bubble.cli.get_github_level", return_value="allowlist-write-graphql"),
-        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
+        patch("bubble.cli.is_enabled", return_value=True),
         patch("bubble.github_token.setup_gh_token", return_value=False),
         patch("bubble.cli.clone_and_checkout", return_value="") as mock_clone,
         patch("bubble.cli.finalize_bubble"),
@@ -586,10 +580,6 @@ def test_token_inject_failure_aborts_when_network_active(mock_runtime, tmp_data_
         original="kim-em/bubble",
     )
 
-    def is_enabled_side_effect(_config, setting):
-        # Enable github_token_inject, disable github_auth
-        return setting == "github_token_inject"
-
     with (
         patch("bubble.cli.load_config", return_value={}),
         patch("bubble.cli.get_host_git_identity", return_value=("Test", "t@t.com")),
@@ -607,7 +597,7 @@ def test_token_inject_failure_aborts_when_network_active(mock_runtime, tmp_data_
         patch("bubble.cli.deduplicate_name", return_value="bubble-main"),
         patch("bubble.cli.provision_container"),
         patch("bubble.cli.get_github_level", return_value="direct"),
-        patch("bubble.cli.is_enabled", side_effect=is_enabled_side_effect),
+        patch("bubble.cli.is_enabled", return_value=True),
         patch("bubble.github_token.setup_gh_token", return_value=False),
         patch("bubble.cli.clone_and_checkout") as mock_clone,
     ):
