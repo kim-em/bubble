@@ -27,6 +27,7 @@ chown 1001:1001 /etc/bubble/gh
 # Pre-populate config.yml with http_unix_socket pointing to the
 # auth proxy socket exposed by Incus proxy device.
 cat > /etc/bubble/gh/config.yml <<'GHCONF'
+version: "1"
 http_unix_socket: /bubble/gh-proxy.sock
 GHCONF
 chown 1001:1001 /etc/bubble/gh/config.yml

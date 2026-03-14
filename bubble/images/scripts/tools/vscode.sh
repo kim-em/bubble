@@ -248,6 +248,21 @@ python3 "$_VSCODE_EXT_HELPER" anthropic.claude-code
 
 fi  # end of Claude Code extension conditional
 
+# Tell VS Code not to auto-forward bubble's internal ports.
+# Port 7654 is the auth proxy (Incus proxy device, not a real listener).
+# Auto-forwarding it to localhost on the host shadows the real auth proxy.
+MACHINE_SETTINGS_DIR="/home/user/.vscode-server/data/Machine"
+mkdir -p "$MACHINE_SETTINGS_DIR"
+cat > "$MACHINE_SETTINGS_DIR/settings.json" << 'SETTINGSJSON'
+{
+    "remote.portsAttributes": {
+        "7654": {
+            "onAutoForward": "ignore"
+        }
+    }
+}
+SETTINGSJSON
+
 # Fix ownership (script runs as root, extension dir must be owned by user)
 if [ -d /home/user/.vscode-server ]; then
     chown -R user:user /home/user/.vscode-server
