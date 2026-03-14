@@ -301,6 +301,7 @@ _CLAUDE_JSON_SAFE_KEYS = frozenset(
         "numStartups",
         "preferredNotifChannel",
         "autoUpdaterStatus",
+        "effortCalloutV2Dismissed",
     }
 )
 
