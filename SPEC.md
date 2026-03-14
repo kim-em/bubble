@@ -989,8 +989,10 @@ allowlist validation) → adds real token → forwards to `https://api.github.co
 }
 ```
 
-Old tokens without `graphql_*` fields derive policies from the legacy `level`
-field for backward compatibility.
+The `level` field is a legacy integer (1–4) retained for backward
+compatibility. Old tokens without `graphql_*` fields derive policies from
+`level`; new tokens always include both `graphql_*` fields and the named
+`github` level determines behavior.
 
 **Allowed paths (git smart HTTP only):**
 - `GET /git/{owner}/{repo}[.git]/info/refs?service=git-upload-pack`
@@ -1005,10 +1007,15 @@ field for backward compatibility.
 | `off` | No GitHub access at all |
 | `basic` | Git push/pull only (proxy rewrites, repo-scoped) |
 | `rest` | + repo-scoped REST API |
-| `allowlist-read-graphql` | + allowlisted GraphQL queries (repo-scoped via validation) |
+| `allowlist-read-graphql` | + allowlisted read-only GraphQL queries |
 | `allowlist-write-graphql` (default) | + allowlisted GraphQL mutations |
 | `write-graphql` | + arbitrary GraphQL, no allowlist filtering |
-| `direct` | Inject the raw token, no proxy |
+| `direct` | Inject the raw token into the container, no proxy |
+
+**`direct` mode:** The host's `GH_TOKEN` and `GITHUB_TOKEN` environment
+variables are injected into the container via `/etc/profile.d`. No proxy is
+used — git and `gh` connect directly to GitHub. Network allowlisting permits
+direct GitHub access (iptables allows `github.com`).
 
 **GraphQL validation** (`allowlist-read-graphql` and `allowlist-write-graphql`
 levels): GraphQL access is controlled by two independent axes — `graphql_read`
@@ -1168,7 +1175,7 @@ user to `bubble security`. Suppressed by `BUBBLE_QUIET_SECURITY=1`.
 
 **Commands:**
 - `bubble security` — show full security posture
-- `bubble security set NAME on|off|auto` — set individual setting
+- `bubble security set NAME VALUE` — set individual setting (most accept `on|off|auto`; `github` accepts named levels; `shared-cache` also accepts `overlay`)
 - `bubble security permissive` — set all to `on`
 - `bubble security lockdown` — set all to `off`
 - `bubble security default` — reset all to `auto`
@@ -1176,7 +1183,7 @@ user to `bubble security`. Suppressed by `BUBBLE_QUIET_SECURITY=1`.
 **GitHub network access:** Direct GitHub network access (via iptables) is only
 allowed when `github` is set to `direct`. At all other levels, iptables blocks
 direct GitHub traffic and forces it through the auth proxy on loopback, which
-enforces repo-scoping and rate limits.
+enforces rate limits and (for levels below `write-graphql`) repo-scoping.
 
 ---
 
