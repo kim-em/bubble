@@ -38,7 +38,7 @@ import subprocess
 
 from .output import detail
 from .runtime.base import ContainerRuntime
-from .runtime.colima import colima_host_ip
+from .runtime.colima import colima_bind_ip
 
 # Port inside the container where the auth proxy is exposed (TCP, for git)
 _CONTAINER_PROXY_PORT = 7654
@@ -237,9 +237,11 @@ def setup_auth_proxy(
     )
 
     # Add Incus proxy device: expose host TCP port into container
-    # On macOS (Colima), need to use the host IP from the VM's perspective
+    # On macOS (Colima), need to use the bridge IP where the auth proxy
+    # actually listens (colima_bind_ip), not host.lima.internal which may
+    # resolve to a different interface (vz NAT) that the proxy doesn't bind to.
     if platform.system() == "Darwin":
-        host_ip = colima_host_ip()
+        host_ip = colima_bind_ip()
     else:
         host_ip = "127.0.0.1"
 

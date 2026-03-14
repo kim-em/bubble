@@ -282,14 +282,15 @@ def provision_container(
 
     if is_enabled(config, "relay"):
         from .relay import RELAY_PORT_FILE, RELAY_SOCK
-        from .runtime.colima import colima_host_ip
+        from .runtime.colima import colima_bind_ip
 
         # macOS/Colima: Unix sockets can't traverse virtio-fs, use TCP.
-        # incus proxy needs an IP (not hostname), so resolve host.lima.internal
-        # from the VM — this is the host's IP as seen from incusd.
+        # Use the bridge IP where the relay daemon actually listens
+        # (colima_bind_ip), not host.lima.internal which may resolve to
+        # a different interface.
         if platform.system() == "Darwin" and RELAY_PORT_FILE.exists():
             port = RELAY_PORT_FILE.read_text().strip()
-            host_ip = colima_host_ip()
+            host_ip = colima_bind_ip()
             connect_addr = f"tcp:{host_ip}:{port}"
         elif RELAY_SOCK.exists():
             connect_addr = f"unix:{RELAY_SOCK}"

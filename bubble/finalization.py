@@ -42,6 +42,20 @@ def finalize_bubble(
     if hook:
         hook.post_clone(runtime, name, project_dir)
 
+    # Add a "github" remote with SSH-format URL for gh CLI host discovery.
+    # The global url.insteadOf rewrites HTTPS github.com URLs to the proxy,
+    # so `git remote -v` shows proxy URLs that gh can't match to github.com.
+    # SSH-format URLs (git@github.com:...) bypass the HTTPS insteadOf rule,
+    # letting gh discover the host without needing to actually use the remote.
+    if t.owner and t.repo:
+        q_repo = shlex.quote(f"git@github.com:{t.owner}/{t.repo}.git")
+        q_dir = shlex.quote(project_dir)
+        add_cmd = f"cd {q_dir} && git remote add github {q_repo} 2>/dev/null || true"
+        try:
+            runtime.exec(name, ["su", "-", "user", "-c", add_cmd])
+        except Exception:
+            pass
+
     # Pre-populate Claude Code settings to skip the first-run wizard
     from .ai import setup_claude_settings
 
