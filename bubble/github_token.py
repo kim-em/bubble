@@ -1,6 +1,6 @@
 """GitHub authentication for containers via auth proxy or direct injection.
 
-Most github levels use an HTTP reverse proxy on the host:
+Most github settings use an HTTP reverse proxy on the host:
 1. Receives plain HTTP git requests from the container
 2. Validates the request targets only the allowed repository
 3. Adds the real Authorization header
@@ -9,7 +9,7 @@ Most github levels use an HTTP reverse proxy on the host:
 The host GitHub token never enters the container. Each container
 gets a per-container bearer token scoped to one repository.
 
-The "direct" level bypasses the proxy entirely: the host's actual
+The "direct" setting bypasses the proxy entirely: the host's actual
 GitHub token is injected into the container as GH_TOKEN and
 GITHUB_TOKEN environment variables, giving unrestricted access.
 
@@ -18,7 +18,7 @@ For remote/cloud containers, an SSH reverse tunnel forwards the
 local proxy port to the remote host, then an Incus proxy device
 on the remote exposes it into the container.
 
-GitHub levels (each a strict superset of the one above):
+GitHub settings (each a strict superset of the one above):
   off:                      no GitHub access
   basic:                    git push/pull only
   rest:                     + repo-scoped REST API
@@ -27,7 +27,7 @@ GitHub levels (each a strict superset of the one above):
   write-graphql:            + arbitrary GraphQL
   direct:                   raw token injection, no proxy
 
-When gh is installed and the github level includes REST or higher,
+When gh is installed and the github setting includes REST or higher,
 the proxy is also exposed as a Unix socket at /bubble/gh-proxy.sock
 and gh is configured to route through it via http_unix_socket.
 """
@@ -109,30 +109,29 @@ def _ensure_auth_proxy_running() -> int | None:
     return None
 
 
-def _resolve_access_level(config: dict, gh_enabled: bool) -> int:
-    """Determine the auth proxy REST access level for a container.
+def _resolve_rest_api(config: dict, gh_enabled: bool) -> bool:
+    """Determine whether REST API access is enabled for a container.
 
-    Returns the REST access level (1 or 4) based on the unified github
-    security level and tool availability.  GraphQL policies are resolved
-    separately by _resolve_graphql_config().
+    Returns True if REST API access should be allowed, based on the
+    unified github security level and tool availability.  GraphQL
+    policies are resolved separately by _resolve_graphql_config().
     """
-    from .auth_proxy import LEVEL_GH_READWRITE, LEVEL_GIT_ONLY
     from .security import get_github_level
 
     level = get_github_level(config)
 
     # basic = git only; off/direct shouldn't reach here but return git-only
     if level in ("off", "basic", "direct"):
-        return LEVEL_GIT_ONLY
+        return False
 
     if not gh_enabled:
-        return LEVEL_GIT_ONLY
+        return False
 
     # rest, allowlist-read-graphql, allowlist-write-graphql, write-graphql
     # REST is already repo-scoped by path validation, so read-write is
     # safe by default.  This enables REST POST operations like
     # gh run rerun (/repos/{owner}/{repo}/actions/runs/{id}/rerun).
-    return LEVEL_GH_READWRITE
+    return True
 
 
 def _resolve_graphql_config(config: dict, gh_enabled: bool) -> tuple[str, str]:
@@ -217,7 +216,7 @@ def setup_auth_proxy(
     """
     from .auth_proxy import generate_auth_token
 
-    level = _resolve_access_level(config or {}, gh_enabled)
+    rest_api = _resolve_rest_api(config or {}, gh_enabled)
     graphql_read, graphql_write = _resolve_graphql_config(config or {}, gh_enabled)
 
     port = _ensure_auth_proxy_running()
@@ -227,12 +226,12 @@ def setup_auth_proxy(
             detail("Run 'bubble gh proxy start' to diagnose.")
         return False
 
-    # Generate per-container token with appropriate access level
+    # Generate per-container token with appropriate access policy
     token = generate_auth_token(
         container,
         owner,
         repo,
-        level=level,
+        rest_api=rest_api,
         graphql_read=graphql_read,
         graphql_write=graphql_write,
     )
@@ -288,7 +287,7 @@ def setup_auth_proxy(
         return False
 
     # Set up gh CLI access via Unix socket proxy device
-    if gh_enabled and level >= 2:
+    if gh_enabled and rest_api:
         _setup_gh_proxy(runtime, container, token, connect_addr, machine_readable)
 
     if not machine_readable:
@@ -370,7 +369,7 @@ def setup_auth_proxy_remote(
     from .remote import _ssh_run
     from .tunnel import start_tunnel
 
-    level = _resolve_access_level(config or {}, gh_enabled)
+    rest_api = _resolve_rest_api(config or {}, gh_enabled)
     graphql_read, graphql_write = _resolve_graphql_config(config or {}, gh_enabled)
 
     port = _ensure_auth_proxy_running()
@@ -386,12 +385,12 @@ def setup_auth_proxy_remote(
             detail("Warning: SSH tunnel to remote failed. No GitHub auth configured.")
         return False
 
-    # Generate per-container token with appropriate access level
+    # Generate per-container token with appropriate access policy
     token = generate_auth_token(
         container,
         owner,
         repo,
-        level=level,
+        rest_api=rest_api,
         graphql_read=graphql_read,
         graphql_write=graphql_write,
     )
@@ -457,7 +456,7 @@ def setup_auth_proxy_remote(
         return False
 
     # Set up gh CLI access via Unix socket proxy device on remote
-    if gh_enabled and level >= 2:
+    if gh_enabled and rest_api:
         _setup_gh_proxy_remote(remote_host, container, token, connect_addr, machine_readable)
 
     if not machine_readable:

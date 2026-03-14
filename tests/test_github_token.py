@@ -110,7 +110,6 @@ def test_setup_gh_token_remote_calls_proxy_remote():
 
 def test_setup_auth_proxy_remote_starts_tunnel():
     """setup_auth_proxy_remote starts a tunnel and configures the container."""
-    from bubble.auth_proxy import LEVEL_GIT_ONLY
     from bubble.github_token import setup_auth_proxy_remote
 
     remote_host = MagicMock()
@@ -128,12 +127,12 @@ def test_setup_auth_proxy_remote_starts_tunnel():
         # Tunnel started with local port
         mock_tunnel.assert_called_once_with(remote_host, local_port=7654)
 
-        # Token generated for the container with access level and graphql policies
+        # Token generated for the container with rest_api and graphql policies
         mock_gen.assert_called_once_with(
             "my-container",
             "kim-em",
             "bubble",
-            level=LEVEL_GIT_ONLY,
+            rest_api=False,
             graphql_read="none",
             graphql_write="none",
         )

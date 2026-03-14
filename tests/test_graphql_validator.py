@@ -694,44 +694,6 @@ class TestPreflightExtraction:
 
 
 # ---------------------------------------------------------------------------
-# Backward compat: _resolve_graphql_policies
-# ---------------------------------------------------------------------------
-
-
-class TestResolveGraphqlPolicies:
-    def test_explicit_policies_used(self):
-        from bubble.auth_proxy import _resolve_graphql_policies
-
-        info = {"level": 1, "graphql_read": "whitelisted", "graphql_write": "whitelisted"}
-        assert _resolve_graphql_policies(info) == ("whitelisted", "whitelisted")
-
-    def test_level_1_backward_compat(self):
-        from bubble.auth_proxy import _resolve_graphql_policies
-
-        info = {"level": 1}
-        assert _resolve_graphql_policies(info) == ("none", "none")
-
-    def test_level_3_backward_compat(self):
-        from bubble.auth_proxy import _resolve_graphql_policies
-
-        info = {"level": 3}
-        assert _resolve_graphql_policies(info) == ("unrestricted", "none")
-
-    def test_level_4_backward_compat(self):
-        from bubble.auth_proxy import _resolve_graphql_policies
-
-        info = {"level": 4}
-        assert _resolve_graphql_policies(info) == ("unrestricted", "unrestricted")
-
-    def test_invalid_policy_falls_back_to_level(self):
-        from bubble.auth_proxy import _resolve_graphql_policies
-
-        info = {"level": 3, "graphql_read": "invalid", "graphql_write": "typo"}
-        # Invalid policies should fall back to level-based derivation
-        assert _resolve_graphql_policies(info) == ("unrestricted", "none")
-
-
-# ---------------------------------------------------------------------------
 # Real-world gh CLI queries
 # ---------------------------------------------------------------------------
 

@@ -9,17 +9,15 @@ The host GitHub token never enters the container. Each container
 gets a per-container bearer token that only works against this
 proxy and is scoped to a single repository.
 
-Access levels (per-container):
-  1 = git smart HTTP only (push/pull)
-  2 = git + REST API read-only (GET /repos/{owner}/{repo}/...)
-  3 = git + gh read-only (REST read + GraphQL queries, no mutations)
-  4 = git + gh read-write (REST read-write + GraphQL queries + mutations)
+Access policies (per-container):
+  rest_api:       whether repo-scoped REST API access is allowed
+  graphql_read:   "whitelisted", "unrestricted", or "none"
+  graphql_write:  "whitelisted", "unrestricted", or "none"
 
 Security model:
 - Git: strict 4-pattern allowlist (git smart HTTP protocol only)
 - REST API: path-validated against /repos/{owner}/{repo}/...
-- GraphQL: parsed operation type, mutations rejected at level 3
-  (NOT repo-scoped — queries can access any data the host token can read)
+- GraphQL: controlled by graphql_read/graphql_write policies
 - Path canonicalization rejects encoded separators, dot-segments,
   duplicate slashes
 - Redirect following for API responses (CI logs) with hardened rules:
@@ -77,18 +75,6 @@ RATE_LIMIT_PER_HOUR = 600
 MAX_TRACKED_CONTAINERS = 100
 
 # ---------------------------------------------------------------------------
-# Access levels
-# ---------------------------------------------------------------------------
-
-LEVEL_GIT_ONLY = 1
-LEVEL_REST_READ = 2
-LEVEL_GH_READ = 3
-LEVEL_GH_READWRITE = 4
-LEVEL_TOKEN_INJECT = 5
-
-DEFAULT_LEVEL = LEVEL_GH_READ
-
-# ---------------------------------------------------------------------------
 # Path patterns
 # ---------------------------------------------------------------------------
 
@@ -144,13 +130,13 @@ def generate_auth_token(
     container_name: str,
     owner: str,
     repo: str,
-    level: int = DEFAULT_LEVEL,
+    rest_api: bool = True,
     graphql_read: str = "whitelisted",
     graphql_write: str = "whitelisted",
 ) -> str:
     """Generate an auth proxy token for a container.
 
-    The token maps to (container_name, owner, repo, level, graphql_read,
+    The token maps to (container_name, owner, repo, rest_api, graphql_read,
     graphql_write) — the proxy uses this to validate requests and enforce
     the access policy.
     Uses file locking to prevent read-modify-write races.
@@ -160,7 +146,7 @@ def generate_auth_token(
             "container": container_name,
             "owner": owner,
             "repo": repo,
-            "level": level,
+            "rest_api": rest_api,
             "graphql_read": graphql_read,
             "graphql_write": graphql_write,
         }
@@ -278,14 +264,15 @@ def _build_api_url(path: str, query: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# API path validation (levels 2+)
+# API path validation
 # ---------------------------------------------------------------------------
 
 
-def validate_api_path(
-    path: str, query: str, method: str, owner: str, repo: str, level: int
-) -> str | None:
-    """Validate a REST API request path against the access level.
+def validate_api_path(path: str, query: str, method: str, owner: str, repo: str) -> str | None:
+    """Validate a REST API request path.
+
+    REST is always repo-scoped by path validation, so all HTTP methods
+    are allowed when REST access is enabled.
 
     Returns an error message string, or None if the path is valid.
     """
@@ -312,11 +299,6 @@ def validate_api_path(
 
     if path_owner.lower() != owner.lower() or path_repo.lower() != repo.lower():
         return f"Repository mismatch: {path_owner}/{path_repo} != {owner}/{repo}"
-
-    # Method checks: levels 1-3 are read-only REST, level 4 allows writes
-    if level < LEVEL_GH_READWRITE:
-        if method not in ("GET", "HEAD"):
-            return f"Method {method} not allowed at access level {level}"
 
     return None
 
@@ -431,31 +413,6 @@ def _parse_graphql_op_type(query: str) -> str | None:
     if "mutation" in ops:
         return "mutation"
     return "query"
-
-
-def _resolve_graphql_policies(info: dict) -> tuple[str, str]:
-    """Extract GraphQL policies from token info, with backward compat.
-
-    Returns (graphql_read, graphql_write).
-    For tokens created before the graphql_read/graphql_write fields
-    existed, derives policies from the legacy level field.
-    """
-    from .graphql_validator import VALID_GRAPHQL_POLICIES
-
-    graphql_read = info.get("graphql_read")
-    graphql_write = info.get("graphql_write")
-
-    if graphql_read in VALID_GRAPHQL_POLICIES and graphql_write in VALID_GRAPHQL_POLICIES:
-        return graphql_read, graphql_write
-
-    # Backward compat: derive from level
-    level = info.get("level", LEVEL_GIT_ONLY)
-    if level < LEVEL_GH_READ:
-        return "none", "none"
-    elif level < LEVEL_GH_READWRITE:
-        return "unrestricted", "none"
-    else:
-        return "unrestricted", "unrestricted"
 
 
 def classify_graphql(body: bytes) -> tuple[str | None, str | None]:
@@ -704,8 +661,9 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         container = info["container"]
         owner = info["owner"]
         repo = info["repo"]
-        level = info.get("level", LEVEL_GIT_ONLY)
-        graphql_read, graphql_write = _resolve_graphql_policies(info)
+        rest_api = info.get("rest_api", False)
+        graphql_read = info.get("graphql_read", "none")
+        graphql_write = info.get("graphql_write", "none")
 
         # Rate limit
         if not self.rate_limiter.check(container):
@@ -727,7 +685,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         # Route: git smart HTTP (/git/...)
         if path.startswith("/git/"):
-            self._handle_git_request(method, path, query, body, container, owner, repo, level)
+            self._handle_git_request(method, path, query, body, container, owner, repo)
             return
 
         # Route: GraphQL (/graphql)
@@ -737,7 +695,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         # Route: REST API (/repos/{owner}/{repo}/...)
         if path.startswith("/repos/"):
-            self._handle_api_request(method, path, query, body, container, owner, repo, level)
+            self._handle_api_request(method, path, query, body, container, owner, repo, rest_api)
             return
 
         self._send_error(403, "Path not recognized")
@@ -759,8 +717,8 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             return self._read_chunked()
         return b""
 
-    def _handle_git_request(self, method, path, query, body, container, owner, repo, level):
-        """Handle git smart HTTP requests (level 1+)."""
+    def _handle_git_request(self, method, path, query, body, container, owner, repo):
+        """Handle git smart HTTP requests (always allowed for valid tokens)."""
         error = validate_path(path, query, owner, repo)
         if error:
             self._send_error(403, error)
@@ -772,16 +730,14 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             method, upstream_url, body, container, path, host=GITHUB_HOST, follow_redirects=False
         )
 
-    def _handle_api_request(self, method, path, query, body, container, owner, repo, level):
-        """Handle REST API requests (level 2+)."""
-        if level < LEVEL_REST_READ:
-            self._send_error(403, "REST API access not enabled at this access level")
-            logger.info(
-                "BLOCKED %s %s container=%s reason=level_%d", method, path, container, level
-            )
+    def _handle_api_request(self, method, path, query, body, container, owner, repo, rest_api):
+        """Handle REST API requests (requires rest_api=True)."""
+        if not rest_api:
+            self._send_error(403, "REST API access not enabled")
+            logger.info("BLOCKED %s %s container=%s reason=rest_disabled", method, path, container)
             return
 
-        error = validate_api_path(path, query, method, owner, repo, level)
+        error = validate_api_path(path, query, method, owner, repo)
         if error:
             self._send_error(403, error)
             logger.info("BLOCKED %s %s container=%s reason=%s", method, path, container, error)

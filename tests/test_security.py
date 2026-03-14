@@ -636,49 +636,44 @@ def test_valid_values_for_github():
         assert level in vals
 
 
-def test_resolve_access_level_allowlist_write_graphql():
-    """allowlist-write-graphql returns LEVEL_GH_READWRITE."""
-    from bubble.auth_proxy import LEVEL_GH_READWRITE
-    from bubble.github_token import _resolve_access_level
+def test_resolve_rest_api_allowlist_write_graphql():
+    """allowlist-write-graphql enables REST API."""
+    from bubble.github_token import _resolve_rest_api
 
     config = {"security": {"github": "allowlist-write-graphql"}}
-    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
+    assert _resolve_rest_api(config, gh_enabled=True) is True
 
 
-def test_resolve_access_level_basic():
-    """basic returns LEVEL_GIT_ONLY."""
-    from bubble.auth_proxy import LEVEL_GIT_ONLY
-    from bubble.github_token import _resolve_access_level
+def test_resolve_rest_api_basic():
+    """basic disables REST API."""
+    from bubble.github_token import _resolve_rest_api
 
     config = {"security": {"github": "basic"}}
-    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GIT_ONLY
+    assert _resolve_rest_api(config, gh_enabled=True) is False
 
 
-def test_resolve_access_level_rest():
-    """rest returns LEVEL_GH_READWRITE (REST is repo-scoped, writes are safe)."""
-    from bubble.auth_proxy import LEVEL_GH_READWRITE
-    from bubble.github_token import _resolve_access_level
+def test_resolve_rest_api_rest():
+    """rest enables REST API."""
+    from bubble.github_token import _resolve_rest_api
 
     config = {"security": {"github": "rest"}}
-    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
+    assert _resolve_rest_api(config, gh_enabled=True) is True
 
 
-def test_resolve_access_level_off():
-    """off returns LEVEL_GIT_ONLY."""
-    from bubble.auth_proxy import LEVEL_GIT_ONLY
-    from bubble.github_token import _resolve_access_level
+def test_resolve_rest_api_off():
+    """off disables REST API."""
+    from bubble.github_token import _resolve_rest_api
 
     config = {"security": {"github": "off"}}
-    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GIT_ONLY
+    assert _resolve_rest_api(config, gh_enabled=True) is False
 
 
-def test_resolve_access_level_gh_disabled():
-    """gh not enabled returns LEVEL_GIT_ONLY regardless of level."""
-    from bubble.auth_proxy import LEVEL_GIT_ONLY
-    from bubble.github_token import _resolve_access_level
+def test_resolve_rest_api_gh_disabled():
+    """gh not enabled disables REST API regardless of setting."""
+    from bubble.github_token import _resolve_rest_api
 
     config = {"security": {"github": "write-graphql"}}
-    assert _resolve_access_level(config, gh_enabled=False) == LEVEL_GIT_ONLY
+    assert _resolve_rest_api(config, gh_enabled=False) is False
 
 
 def test_resolve_graphql_config_allowlist_write_graphql():
@@ -781,10 +776,9 @@ def test_invalid_raw_config_falls_back_to_auto():
     # auto resolves to the default level
     assert get_github_level(config) == GITHUB_AUTO_DEFAULT
 
-    from bubble.auth_proxy import LEVEL_GH_READWRITE
-    from bubble.github_token import _resolve_access_level
+    from bubble.github_token import _resolve_rest_api
 
-    assert _resolve_access_level(config, gh_enabled=True) == LEVEL_GH_READWRITE
+    assert _resolve_rest_api(config, gh_enabled=True) is True
 
     from bubble.github_token import _resolve_graphql_config
 
