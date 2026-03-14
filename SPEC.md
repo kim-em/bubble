@@ -339,9 +339,16 @@ of the versioned image for next time.
 > compromised container could write poisoned `.olean` files that subsequent
 > containers would pick up via `lake exe cache get`. The cache is *not* shared
 > with `lake exe cache` run on the host — only bubble containers are affected.
-> Set `shared-cache` to `off` (via `bubble security set shared-cache off`) to
-> mount the cache read-only and prevent future poisoning. If you suspect the
-> cache has already been compromised, delete `~/.bubble/mathlib-cache/`.
+> Three modes are available via `bubble security set shared-cache`:
+> - `on` (default): shared read-write — fastest, but vulnerable to cache
+>   poisoning across containers
+> - `overlay`: shared cache mounted read-only with a per-container writable
+>   overlayfs layer — fast reads from the shared cache with isolated writes
+>   that don't affect other containers (recommended for security-conscious use)
+> - `off`: shared cache mounted read-only — prevents future poisoning
+>
+> If you suspect the cache has already been compromised, delete
+> `~/.bubble/mathlib-cache/`.
 
 **Post-clone behavior:**
 - Pre-populate Lake dependencies from `lake-manifest.json` (see 2.4)
@@ -670,6 +677,7 @@ Each tool has:
 | `elan` | 10 | `elan` | — |
 | `claude` | 50 | `claude` | `api.anthropic.com` |
 | `codex` | 50 | `codex` | `api.openai.com` |
+| `gh` | 50 | `gh` | — |
 | `vscode` | 90 | `code` | VS Code marketplace domains |
 | `emacs` | 90 | `emacs` | — |
 | `neovim` | 90 | `nvim` | — |
@@ -700,6 +708,10 @@ Tools are installed into the `base` image during build, in priority order
 versions from a `pins.json` file.
 
 **`bubble tools set TOOL yes|no|auto`** — configure a tool.
+
+**VS Code extension auto-install:** When both `claude` and `vscode` tools are
+enabled, the Claude Code VS Code extension (`anthropic.claude-code`) is
+pre-installed in the base image.
 
 ### 6.4 Drift detection
 
@@ -922,6 +934,12 @@ Credential files (`.credentials.json`) are mounted by default. Disable with
 **Symlink safety:** Reject symlinks that escape `~/.claude/` to prevent
 exposing arbitrary host files.
 
+**Settings pre-population:** During container finalization, `~/.claude.json` is
+written in all containers (not just those with AI task injection). Allowlisted
+settings (theme, onboarding state) are copied from the host, project trust is
+pre-configured for the container's project directory, and
+`hasCompletedOnboarding` is set to skip the first-run wizard.
+
 ### 10.2 Codex config mounting
 
 Similar to Claude. Config: `config.toml` (read-only). Credentials: `auth.json`
@@ -941,27 +959,33 @@ Similar to Claude. Config: `config.toml` (read-only). Credentials: `auth.json`
 ### 10.4 GitHub auth proxy
 
 An HTTP reverse proxy on the host provides GitHub authentication without
-exposing the host's token. Git and REST API requests are repo-scoped;
-GraphQL requests are operation-validated (queries vs mutations) but not
-repo-scoped — see access levels below.
+exposing the host's token. The access level is controlled by the unified
+`github` security setting, which picks one level from a graduated escalation
+ladder (see Security section).
 
 **Port:** 7654 (default, configurable).
 
-**Flow:**
-1. Container git is configured with `url.insteadOf` to route HTTPS through the proxy
-2. Container sends request with `X-Bubble-Token` header
-3. Proxy validates token against `~/.bubble/auth-tokens.json` (mode 0600)
-4. For git/REST: proxy checks path matches the allowed `owner/repo`. For GraphQL: proxy validates operation type (queries allowed at level 3, mutations require level 4) but does not scope to a specific repo
-5. Proxy adds `Authorization: token <real-token>` header
-6. Proxy forwards to `https://github.com`
-7. Response returned to container
+**Git flow:** Container git → `url.insteadOf` rewrites to
+`http://127.0.0.1:7654/git/...` → proxy validates `X-Bubble-Token` header →
+checks path matches allowed `owner/repo` → adds `Authorization` header →
+forwards to `https://github.com` → returns response.
+
+**gh CLI flow:** `gh` configured with `http_unix_socket: /bubble/gh-proxy.sock`
+(via `GH_CONFIG_DIR=/etc/bubble/gh`) → sends requests through Unix socket →
+proxy validates token → enforces access level (REST repo-scoping, GraphQL
+allowlist validation) → adds real token → forwards to `https://api.github.com`.
 
 **Token format:** `~/.bubble/auth-tokens.json`
 ```json
 {
-  "hex_token": {"container": "name", "owner": "owner", "repo": "repo"}
+  "hex_token": {
+    "container": "name",
+    "owner": "owner",
+    "repo": "repo",
+    "graphql_read": "whitelisted",
+    "graphql_write": "whitelisted"
+  }
 }
-```
 
 **Allowed paths (git smart HTTP only):**
 - `GET /git/{owner}/{repo}[.git]/info/refs?service=git-upload-pack`
@@ -969,33 +993,53 @@ repo-scoped — see access levels below.
 - `POST /git/{owner}/{repo}[.git]/git-upload-pack`
 - `POST /git/{owner}/{repo}[.git]/git-receive-pack`
 
-**Access levels (per-container):**
-| Level | Description | Scope |
-|-------|-------------|-------|
-| 1 | Git smart HTTP only (push/pull) | Repo-scoped |
-| 2 | Git + REST API read-only | Repo-scoped (REST paths validated against `/repos/{owner}/{repo}/...`) |
-| 3 (default) | Git + gh read-only (REST read + GraphQL queries) | Git and REST are repo-scoped; **GraphQL is account-wide** — queries can read any data the host token can access |
-| 4 | Git + gh read-write (REST + GraphQL + mutations) | Git and REST are repo-scoped; **GraphQL queries and mutations are account-wide** |
+**Access levels** (set via `bubble security set github <level>`):
 
-> **Note:** GitHub's GraphQL API does not support path-based scoping.
-> At the default level 3, a container can query any repository, org membership,
-> or user data readable by the host token. To restrict containers to git-only
-> access, use `bubble security set github-api off`.
+| `github` level | Behavior |
+|----------------|----------|
+| `off` | No GitHub access at all |
+| `basic` | Git push/pull only (proxy rewrites, repo-scoped) |
+| `rest` | + repo-scoped REST API |
+| `allowlist-read-graphql` | + allowlisted read-only GraphQL queries |
+| `allowlist-write-graphql` (default) | + allowlisted GraphQL mutations |
+| `write-graphql` | + arbitrary GraphQL, no allowlist filtering |
+| `direct` | Inject the raw token into the container, no proxy |
+
+**`direct` mode:** The host's `GH_TOKEN` and `GITHUB_TOKEN` environment
+variables are injected into the container via `/etc/profile.d`. No proxy is
+used — git and `gh` connect directly to GitHub. Network allowlisting permits
+direct GitHub access (iptables allows `github.com`).
+
+**GraphQL validation** (`allowlist-read-graphql` and `allowlist-write-graphql`
+levels): GraphQL access is controlled by two independent axes — `graphql_read`
+and `graphql_write` — each supporting `whitelisted`, `unrestricted`, or `none`
+modes. In whitelisted mode, a lightweight tokenizer/parser validates structure
+(single operation, single top-level field, no aliases/directives, no fragments
+in mutations) and semantics. Read validation repo-scopes `repository` queries
+via variables and verifies `node` queries via pre-flight ownership checks.
+Write validation checks mutations against an allowlist with repo-scoping via
+repositoryId comparison or pre-flight node ownership verification.
+
+**REST security:** REST paths validated against `/repos/{owner}/{repo}/...`
+(repo-scoped). API redirects (e.g., CI log downloads) followed with hardened
+rules: GET/HEAD only, HTTPS only, allowlisted hosts
+(`*.blob.core.windows.net`, `*.githubusercontent.com`), max 2 hops, auth
+headers stripped. GitHub 4xx errors are passed through to clients.
 
 **Security:**
 - Path canonicalization: reject encoded separators, dot-segments, duplicate slashes
-- No redirect following (returns redirects as-is to prevent token leakage)
 - Pinned to `github.com:443` with TLS verification
 - Ignores `HTTPS_PROXY`/`ALL_PROXY` environment variables
 - Rate limited: 60/minute, 600/hour per container
 - Maximum request body: 256 MB
 
-**Local containers:** Exposed via Incus proxy device connecting host TCP port to
-container `127.0.0.1:7654`.
+**Local containers:** Exposed via Incus proxy devices — TCP for git, Unix
+socket for gh (`listen=unix:/bubble/gh-proxy.sock`).
 
-**Remote containers:** SSH reverse tunnel (`ssh -R 7654:127.0.0.1:7654 remote`)
-forwards the local proxy port to the remote host. Tunnel PID files in
-`~/.bubble/tunnels/`. One tunnel per remote host (shared across containers).
+**Remote containers:** SSH reverse tunnel forwards the local proxy port to the
+remote host. Incus proxy devices on the remote expose both TCP and Unix socket
+endpoints. Tunnel PID files in `~/.bubble/tunnels/`. One tunnel per remote
+host (shared across containers).
 
 **Daemon management:** launchd (`com.bubble.auth-proxy`) or systemd
 (`bubble-auth-proxy.service`).
@@ -1067,6 +1111,12 @@ location = "fsn1"
 server_name = "bubble-cloud"
 default = false
 
+[ai]
+preferred = "claude"
+autonomy = "plan"
+second_opinion = "auto"
+second_opinion_provider = "codex"
+
 [claude]
 credentials = true
 
@@ -1098,19 +1148,18 @@ get/set interface:
 
 ### Security settings
 
-Every isolation-weakening feature is individually configurable with three
-values: `auto`, `on`, `off`.
+Most settings are individually configurable with three values: `auto`, `on`,
+`off`. The `github` setting uses graduated named levels (see auth proxy
+section) and `shared-cache` accepts an additional `overlay` value.
 
 | Setting | Auto default | Description |
 |---------|-------------|-------------|
-| `shared-cache` | on | Writable shared mounts (mathlib cache) — see [Lean 4 hook](#22-lean-4-hook) security note |
+| `shared-cache` | on | Writable shared mounts (mathlib cache) — `on`, `off`, or `overlay`. See [Lean 4 hook](#22-lean-4-hook) security note |
 | `user-mounts` | on | `--mount` flag support |
 | `git-manifest-trust` | on | Auto-clone Lake manifest dependencies |
 | `claude-credentials` | on | Mount Claude credentials into containers |
 | `codex-credentials` | on | Mount Codex credentials into containers |
-| `github-auth` | on | Repo-scoped GitHub auth via proxy (git push/pull) |
-| `github-api` | on | GitHub API access via auth proxy: REST is repo-scoped; **GraphQL queries are read-only but account-wide** (can read any repo the host token can access). Set to `off` for git-only, or `read-write` for mutations |
-| `github-token-inject` | off | Direct GitHub token injection (bypasses proxy) |
+| `github` | allowlist-write-graphql | Unified GitHub access level — graduated from `off` through `basic`, `rest`, `allowlist-read-graphql`, `allowlist-write-graphql`, `write-graphql`, to `direct` (see [auth proxy](#104-github-auth-proxy)) |
 | `relay` | on | Bubble-in-bubble relay |
 | `host-key-trust` | on | Disable SSH StrictHostKeyChecking |
 
@@ -1119,15 +1168,15 @@ user to `bubble security`. Suppressed by `BUBBLE_QUIET_SECURITY=1`.
 
 **Commands:**
 - `bubble security` — show full security posture
-- `bubble security set NAME on|off|auto` — set individual setting
+- `bubble security set NAME VALUE` — set individual setting (most accept `on|off|auto`; `github` accepts named levels; `shared-cache` also accepts `overlay`)
 - `bubble security permissive` — set all to `on`
 - `bubble security lockdown` — set all to `off`
 - `bubble security default` — reset all to `auto`
 
 **GitHub network access:** Direct GitHub network access (via iptables) is only
-allowed when `github-token-inject` is enabled (level 5). At all other auth
-levels (0–4), iptables blocks direct GitHub traffic and forces it through the
-auth proxy on loopback, which enforces repo-scoping and rate limits.
+allowed when `github` is set to `direct`. At all other levels, iptables blocks
+direct GitHub traffic and forces it through the auth proxy on loopback, which
+enforces rate limits and (for levels below `write-graphql`) repo-scoping.
 
 ---
 
@@ -1159,6 +1208,10 @@ container lifecycle, but a complete implementation should include them:
 - `bubble remote clear-default` — clear default remote host
 - `bubble remote status` — show remote configuration and list remote bubbles
 - `bubble gh status` — show GitHub authentication status
+- `bubble completion <shell>` — output shell completion script (`bash`, `zsh`, `fish`); `--install` writes to a persistent location
+- `bubble ai set autonomy read|plan|implement|pr|merge` — set AI autonomy level
+- `bubble ai set second-opinion auto|on|off` — toggle second-opinion provider
+- `bubble ai status` — show AI provider settings and credential status
 
 ---
 
@@ -1189,7 +1242,7 @@ container lifecycle, but a complete implementation should include them:
 | `~/.bubble/cloud_key` | SSH private key for cloud (ed25519, mode 0600) |
 | `~/.bubble/cloud_key.pub` | SSH public key for cloud |
 | `~/.bubble/known_hosts` | SSH known_hosts for cloud |
-| `~/.bubble/claude-projects/` | Claude session state for containers |
+| `~/.bubble/ai-projects/` | AI provider session state for containers |
 | `~/.ssh/config.d/bubble` | Auto-managed SSH config entries |
 
 ---
