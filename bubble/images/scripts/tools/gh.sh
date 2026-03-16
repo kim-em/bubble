@@ -42,4 +42,24 @@ github.com:
 GHHOSTS
 chown 1001:1001 /etc/bubble/gh/hosts.yml
 
-echo "gh installed: $(gh --version 2>/dev/null | head -1 || echo 'unknown version')"
+# Install a wrapper at /usr/local/bin/gh that ensures the bubble gh
+# environment is set even in non-login shells where /etc/profile.d/
+# isn't sourced.  GH_REPO tells gh which repo to target (bypassing
+# remote URL parsing which fails due to url.insteadOf), and
+# GH_CONFIG_DIR + GH_TOKEN configure proxy auth.
+cat > /usr/local/bin/gh <<'WRAPPER'
+#!/bin/bash
+# Source the bubble gh environment if not already set.
+# Non-login shells skip /etc/profile.d/, so we source it here.
+if [ -z "$GH_CONFIG_DIR" ] && [ -f /etc/profile.d/bubble-gh.sh ]; then
+    . /etc/profile.d/bubble-gh.sh
+fi
+# Fallback: read GH_REPO from file if still unset
+if [ -z "$GH_REPO" ] && [ -f /etc/bubble/gh/repo ]; then
+    export GH_REPO="$(cat /etc/bubble/gh/repo)"
+fi
+exec /usr/bin/gh "$@"
+WRAPPER
+chmod 755 /usr/local/bin/gh
+
+echo "gh installed: $(/usr/bin/gh --version 2>/dev/null | head -1 || echo 'unknown version')"

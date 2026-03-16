@@ -44,7 +44,8 @@ def finalize_bubble(
 
     # Add a "github" remote with SSH-format URL for gh CLI host discovery.
     # The global url.insteadOf rewrites HTTPS github.com URLs to the proxy,
-    # so `git remote -v` shows proxy URLs that gh can't match to github.com.
+    # and git remote -v applies insteadOf when displaying URLs, so gh sees
+    # only proxy URLs and can't match any HTTPS remote to github.com.
     # SSH-format URLs (git@github.com:...) bypass the HTTPS insteadOf rule,
     # letting gh discover the host without needing to actually use the remote.
     if t.owner and t.repo:

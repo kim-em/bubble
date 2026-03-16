@@ -340,14 +340,18 @@ def _setup_gh_proxy(
     # GH_REPO tells gh which repo to use, bypassing remote URL parsing.
     # Without this, gh can't match the proxy URL (127.0.0.1:7654) to github.com.
     gh_repo_line = ""
+    repo_file_line = ""
     if owner and repo:
         q_repo = shlex.quote(f"{owner}/{repo}")
         gh_repo_line = f" && echo 'export GH_REPO={q_repo}' >> /etc/profile.d/bubble-gh.sh"
+        # Also write to a file for the gh wrapper to read in non-login shells
+        repo_file_line = f" && echo {q_repo} > /etc/bubble/gh/repo"
     profile_script = (
         f'echo "export GH_CONFIG_DIR=/etc/bubble/gh" > /etc/profile.d/bubble-gh.sh'
         f" && echo 'export GH_TOKEN={q_token}' >> /etc/profile.d/bubble-gh.sh"
         f"{gh_repo_line}"
         f" && chmod 644 /etc/profile.d/bubble-gh.sh"
+        f"{repo_file_line}"
     )
 
     try:
@@ -522,14 +526,18 @@ def _setup_gh_proxy_remote(
     # Configure gh environment via profile.d
     q_token = shlex.quote(token)
     gh_repo_line = ""
+    repo_file_line = ""
     if owner and repo:
         q_repo = shlex.quote(f"{owner}/{repo}")
         gh_repo_line = f" && echo 'export GH_REPO={q_repo}' >> /etc/profile.d/bubble-gh.sh"
+        # Also write to a file for the gh wrapper to read in non-login shells
+        repo_file_line = f" && echo {q_repo} > /etc/bubble/gh/repo"
     profile_cmd = (
         f'echo "export GH_CONFIG_DIR=/etc/bubble/gh" > /etc/profile.d/bubble-gh.sh'
         f" && echo 'export GH_TOKEN={q_token}' >> /etc/profile.d/bubble-gh.sh"
         f"{gh_repo_line}"
         f" && chmod 644 /etc/profile.d/bubble-gh.sh"
+        f"{repo_file_line}"
     )
 
     try:
