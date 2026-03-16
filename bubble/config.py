@@ -366,16 +366,19 @@ def _safe_editor_path(host_path: Path) -> Path | None:
     return None
 
 
-def editor_config_mounts(editor: str) -> list[MountSpec]:
+def editor_config_mounts(editor: str, config: dict | None = None) -> list[MountSpec]:
     """Return mounts for editor config directories that exist on the host.
 
     Config directories are mounted read-only (with exclusions for known
     writable subdirectories). Data/state/cache directories are mounted
-    read-write so plugin managers and caches can function.
+    read-write by default so plugin managers and caches can function,
+    but can be made read-only via security.editor_data_write = off.
 
     Only returns mounts for directories that actually exist on the host.
     Data dirs are only mounted if a config dir was found.
     """
+    from .security import is_enabled
+
     spec = _EDITOR_CONFIG.get(editor)
     if not spec:
         return []
@@ -397,11 +400,14 @@ def editor_config_mounts(editor: str) -> list[MountSpec]:
             break  # Only mount the first matching config location
     if not config_found:
         return []
-    # Mount data dirs read-write (all that exist, only if config was found)
+    # Mount data dirs (read-write unless editor_data_write is off)
+    data_writable = is_enabled(config or {}, "editor_data_write")
     for host_path, container_path in spec["data"]:
         resolved = _safe_editor_path(host_path)
         if resolved is not None:
-            mounts.append(MountSpec(source=str(resolved), target=container_path, readonly=False))
+            mounts.append(
+                MountSpec(source=str(resolved), target=container_path, readonly=not data_writable)
+            )
     return mounts
 
 

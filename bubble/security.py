@@ -140,6 +140,15 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         warning="relay allows containers to create new bubbles on the host",
         category="Authentication",
     ),
+    "editor_data_write": SecuritySettingDef(
+        description="Editor plugin data/cache dirs mounted read-write",
+        auto_default="on",
+        warning=(
+            "neovim/emacs data dirs (~/.local/share/nvim, ~/.cache/nvim, etc.) are"
+            " writable; a compromised container could modify host plugin data"
+        ),
+        category="Filesystem",
+    ),
     "host_key_trust": SecuritySettingDef(
         description="StrictHostKeyChecking disabled for container SSH",
         auto_default="on",

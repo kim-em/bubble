@@ -899,7 +899,7 @@ def _open_single(
             cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
     # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
-    ec_mounts = editor_config_mounts(editor)
+    ec_mounts = editor_config_mounts(editor, config)
     if ec_mounts:
         ec_mounts = [m for m in ec_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
