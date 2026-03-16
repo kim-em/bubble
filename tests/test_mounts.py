@@ -1209,6 +1209,56 @@ class TestEditorConfigMounts:
         assert mounts[0].readonly is True  # config
         assert all(not m.readonly for m in mounts[1:])  # data dirs writable
 
+    def test_neovim_data_dirs_readonly_when_setting_off(self, tmp_path, monkeypatch):
+        """Neovim data dirs are read-only when editor_data_write is off."""
+        nvim_dir = tmp_path / ".config" / "nvim"
+        nvim_dir.mkdir(parents=True)
+        share_dir = tmp_path / ".local" / "share" / "nvim"
+        share_dir.mkdir(parents=True)
+
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
+            {
+                "neovim": {
+                    "config": [(nvim_dir, "/home/user/.config/nvim")],
+                    "data": [(share_dir, "/home/user/.local/share/nvim")],
+                    "config_writable_subdirs": [],
+                },
+            },
+        )
+
+        config = {"security": {"editor_data_write": "off"}}
+        mounts = editor_config_mounts("neovim", config)
+        assert len(mounts) == 2
+        assert mounts[0].readonly is True  # config
+        assert mounts[1].readonly is True  # data dir also readonly when off
+
+    def test_editor_data_write_on_explicit(self, tmp_path, monkeypatch):
+        """Neovim data dirs are writable when editor_data_write is explicitly on."""
+        nvim_dir = tmp_path / ".config" / "nvim"
+        nvim_dir.mkdir(parents=True)
+        share_dir = tmp_path / ".local" / "share" / "nvim"
+        share_dir.mkdir(parents=True)
+
+        self._patch_editor(
+            monkeypatch,
+            tmp_path,
+            {
+                "neovim": {
+                    "config": [(nvim_dir, "/home/user/.config/nvim")],
+                    "data": [(share_dir, "/home/user/.local/share/nvim")],
+                    "config_writable_subdirs": [],
+                },
+            },
+        )
+
+        config = {"security": {"editor_data_write": "on"}}
+        mounts = editor_config_mounts("neovim", config)
+        assert len(mounts) == 2
+        assert mounts[0].readonly is True   # config
+        assert mounts[1].readonly is False  # data dir writable when on
+
     def test_skips_missing_data_dirs(self, tmp_path, monkeypatch):
         """Only existing data directories are mounted."""
         nvim_dir = tmp_path / ".config" / "nvim"
