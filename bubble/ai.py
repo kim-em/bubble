@@ -10,6 +10,7 @@ import json
 import re
 import shlex
 import subprocess
+import textwrap
 from pathlib import Path
 
 from .config import DATA_DIR
@@ -422,18 +423,27 @@ def inject_ai_task(
     )
     runtime.exec(container, ["su", "-", "user", "-c", script])
 
-    # Configure settings.json for automatic tasks
-    settings_script = (
-        f"cd {q_dir} && "
-        f'python3 -c "'
-        f"import json,os; "
-        f"p='.vscode/settings.json'; "
-        f"s=json.load(open(p)) if os.path.exists(p) else {{}}; "
-        f"s['terminal.integrated.defaultLocation']='editor'; "
-        f"s['task.allowAutomaticTasks']='on'; "
-        f"json.dump(s,open(p,'w'),indent=2)"
-        f'"'
-    )
+    # Configure settings.json for automatic tasks.
+    # The existing file may be JSONC (comments, trailing commas), so we
+    # strip those before parsing and fall back to an empty dict on failure.
+    settings_py = textwrap.dedent("""\
+        import json, re, os
+        p = '.vscode/settings.json'
+        s = {}
+        if os.path.exists(p):
+            t = open(p).read()
+            t = re.sub(r'//[^\\n]*', '', t)
+            t = re.sub(r'/\\*.*?\\*/', '', t, flags=re.DOTALL)
+            t = re.sub(r',\\s*([}\\]])', r'\\1', t)
+            try:
+                s = json.loads(t)
+            except Exception:
+                pass
+        s['terminal.integrated.defaultLocation'] = 'editor'
+        s['task.allowAutomaticTasks'] = 'on'
+        json.dump(s, open(p, 'w'), indent=2)
+    """)
+    settings_script = f"cd {q_dir} && python3 -c {shlex.quote(settings_py)}"
     runtime.exec(container, ["su", "-", "user", "-c", settings_script])
 
     # Add generated files to git exclude
