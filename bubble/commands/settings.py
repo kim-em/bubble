@@ -287,7 +287,7 @@ def register_settings_commands(main):
     @tools_group.command("list")
     def tools_list():
         """List available tools and their current settings."""
-        from ..tools import available_tools
+        from ..tools import TOOLS, available_tools
 
         config = load_config()
         tools_config = config.get("tools", {})
@@ -295,7 +295,8 @@ def register_settings_commands(main):
         click.echo(f"{'TOOL':<20} {'SETTING':<10}")
         click.echo("-" * 30)
         for name in available_tools():
-            setting = tools_config.get(name, "auto")
+            default = TOOLS[name].get("default", "auto")
+            setting = tools_config.get(name, default)
             click.echo(f"{name:<20} {setting:<10}")
 
     @tools_group.command("set")
