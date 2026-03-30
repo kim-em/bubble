@@ -59,6 +59,14 @@ TOOLS = {
         "runtime_domains": [],
         "priority": 50,
     },
+    "uv": {
+        "script": "uv.sh",
+        "host_cmd": "uv",
+        "default": "no",
+        "network_domains": ["astral.sh"],
+        "runtime_domains": ["pypi.org", "files.pythonhosted.org"],
+        "priority": 20,
+    },
     "emacs": {
         "script": "emacs.sh",
         "host_cmd": "emacs",
@@ -134,7 +142,8 @@ def resolve_tools(config: dict) -> list[str]:
     """Resolve which tools should be installed based on config.
 
     Returns list of tool names sorted by priority.
-    Each tool's config value is "yes", "no", or "auto" (default).
+    Each tool's config value is "yes", "no", or "auto".
+    The default is "auto" unless the tool spec sets "default" (e.g. "no").
     "auto" installs the tool if the corresponding command is found on the host.
 
     Editor tools (vscode, emacs, neovim) are special: the configured editor
@@ -155,7 +164,7 @@ def resolve_tools(config: dict) -> list[str]:
             elif tools_config.get(name) == "yes":
                 enabled.append(name)
             continue
-        setting = tools_config.get(name, "auto")
+        setting = tools_config.get(name, spec.get("default", "auto"))
         if setting == "yes":
             enabled.append(name)
         elif setting == "auto":
