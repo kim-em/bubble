@@ -18,6 +18,7 @@ def is_colima_running() -> bool:
             capture_output=True,
             text=True,
             check=False,
+            timeout=10,
             stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
@@ -27,6 +28,7 @@ def is_colima_running() -> bool:
             capture_output=True,
             text=True,
             check=False,
+            timeout=10,
             stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -38,7 +40,7 @@ def is_colima_running() -> bool:
                 if entry.get("name") == "default" and entry.get("status") == "Running":
                     return True
         return False
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
 
@@ -159,10 +161,11 @@ def _ensure_incus_remote():
             capture_output=True,
             text=True,
             check=True,
+            timeout=10,
             stdin=subprocess.DEVNULL,
         )
         current = result.stdout.strip()
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         current = ""
 
     if current == "colima":
@@ -174,6 +177,7 @@ def _ensure_incus_remote():
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
         stdin=subprocess.DEVNULL,
     )
     if result.returncode == 0:
@@ -187,6 +191,7 @@ def _ensure_incus_remote():
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=10,
                 stdin=subprocess.DEVNULL,
             )
 
@@ -195,6 +200,7 @@ def _ensure_incus_remote():
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
         stdin=subprocess.DEVNULL,
     )
 
@@ -217,19 +223,45 @@ def _check_colima_dns() -> bool:
         return False
 
 
+def _remove_stale_ssh_socket():
+    """Remove a stale SSH control socket that can cause colima commands to hang."""
+    sock = Path.home() / ".colima" / "_lima" / "colima" / "ssh.sock"
+    if sock.exists():
+        try:
+            sock.unlink()
+        except OSError:
+            pass
+
+
 def ensure_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
     """Ensure Colima is running with correct settings. Restart if needed."""
     if not is_colima_running():
+        _remove_stale_ssh_socket()
         print("Starting Colima VM (one-time setup)...", file=sys.stderr)
         start_colima(cpu, memory, disk, vm_type)
     elif not _check_colima_dns():
         print("Colima VM DNS is broken, restarting...", file=sys.stderr)
-        subprocess.run(
-            ["colima", "stop"],
-            capture_output=True,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
+        try:
+            subprocess.run(
+                ["colima", "stop"],
+                capture_output=True,
+                check=False,
+                timeout=30,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            print("Colima stop timed out, forcing...", file=sys.stderr)
+            try:
+                subprocess.run(
+                    ["colima", "stop", "--force"],
+                    capture_output=True,
+                    check=False,
+                    timeout=15,
+                    stdin=subprocess.DEVNULL,
+                )
+            except subprocess.TimeoutExpired:
+                print("Colima force-stop also timed out, proceeding anyway...", file=sys.stderr)
+        _remove_stale_ssh_socket()
         start_colima(cpu, memory, disk, vm_type)
 
     _ensure_incus_remote()

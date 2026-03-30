@@ -66,8 +66,9 @@ def register_doctor_command(main):
                 if click.confirm("  Start Colima?"):
                     try:
                         runtime_cfg = config.get("runtime", {})
-                        from ..runtime.colima import start_colima
+                        from ..runtime.colima import _remove_stale_ssh_socket, start_colima
 
+                        _remove_stale_ssh_socket()
                         start_colima(
                             cpu=runtime_cfg.get("colima_cpu", 4),
                             memory=runtime_cfg.get("colima_memory", 16),
