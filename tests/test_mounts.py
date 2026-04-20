@@ -1256,7 +1256,7 @@ class TestEditorConfigMounts:
         config = {"security": {"editor_data_write": "on"}}
         mounts = editor_config_mounts("neovim", config)
         assert len(mounts) == 2
-        assert mounts[0].readonly is True   # config
+        assert mounts[0].readonly is True  # config
         assert mounts[1].readonly is False  # data dir writable when on
 
     def test_skips_missing_data_dirs(self, tmp_path, monkeypatch):

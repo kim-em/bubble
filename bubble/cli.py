@@ -114,18 +114,19 @@ class BubbleGroup(click.Group):
         formatter.write("  For all target options run: bubble open --help\n")
 
     def parse_args(self, ctx, args):
-        """If no known command is found as the first positional arg, prepend 'open'.
+        """If no known command is found as the first arg, prepend 'open'.
 
         This supports both `bubble TARGET` and `bubble --ssh HOST TARGET`.
-        Only the first non-option token is checked, so that targets like
-        `list` or `pause` in later positions don't hijack routing.
+        We check args[0] (not the first non-option token) to avoid
+        misidentifying option values like `-b list` as the `list` command.
         Also handles `bubble -b branch_name` (options only, no target).
         """
         first_positional = next((a for a in args if not a.startswith("-")), None)
         has_branch_flag = "-b" in args or "--new-branch" in args
-        if args and (
-            (first_positional is not None and first_positional not in self.commands)
-            or has_branch_flag
+        if (
+            args
+            and args[0] not in self.commands
+            and (first_positional is not None or has_branch_flag)
         ):
             args = ["open"] + args
         return super().parse_args(ctx, args)
