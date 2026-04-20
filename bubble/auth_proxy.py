@@ -1234,23 +1234,45 @@ def _get_github_token() -> str:
     the stored access token has expired, then reads the (now-current)
     token via ``gh auth token``.
     """
+    import shutil
     import subprocess
+
+    gh_path = shutil.which("gh")
+    if not gh_path:
+        raise RuntimeError(
+            "Cannot find 'gh' CLI on PATH. Install gh (https://cli.github.com) "
+            "and ensure it is on your PATH.\n"
+            f"Current PATH: {os.environ.get('PATH', '(not set)')}"
+        )
 
     # Trigger OAuth refresh (gh auth token alone returns the stale token)
     try:
         subprocess.run(
-            ["gh", "auth", "status"],
+            [gh_path, "auth", "status"],
             capture_output=True,
             timeout=15,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
         pass  # Best-effort; get_host_gh_token may still succeed
 
     from .github_token import get_host_gh_token
 
     token = get_host_gh_token()
     if not token:
-        raise RuntimeError("No GitHub token available. Run 'gh auth login' first.")
+        # Try to get more diagnostic info
+        try:
+            result = subprocess.run(
+                [gh_path, "auth", "token"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            detail_msg = f"gh auth token exited {result.returncode}"
+            if result.stderr.strip():
+                detail_msg += f": {result.stderr.strip()}"
+        except Exception as e:
+            detail_msg = f"gh auth token failed: {e}"
+        raise RuntimeError(f"No GitHub token available. {detail_msg}\nRun 'gh auth login' first.")
     return token
 
 
