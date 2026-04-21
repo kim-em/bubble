@@ -285,6 +285,12 @@ class TestRemoteOpenFlagForwarding:
         assert "--codex-credentials" not in cmd_str
         assert "--no-codex-credentials" not in cmd_str
 
+    def test_skip_auth_setup_always_forwarded(self):
+        """Remote open always passes --skip-auth-setup so the remote doesn't
+        redundantly start its own auth proxy (issue #260)."""
+        cmd_str = self._run_remote_open()
+        assert "--skip-auth-setup" in cmd_str
+
 
 class TestCreateBundle:
     def test_creates_tarball(self):

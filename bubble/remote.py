@@ -423,7 +423,7 @@ def remote_open(
 
     ensure_remote_bubble(host)
 
-    args = ["open", "--no-interactive", "--machine-readable"]
+    args = ["open", "--no-interactive", "--machine-readable", "--skip-auth-setup"]
     if not network:
         args.append("--no-network")
     if not ai_config:

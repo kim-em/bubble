@@ -109,7 +109,11 @@ def setup_git_config(runtime: ContainerRuntime, name: str, git_name: str, git_em
 
 
 def apply_network(
-    runtime: ContainerRuntime, name: str, config: dict, extra_domains: list[str] | None = None
+    runtime: ContainerRuntime,
+    name: str,
+    config: dict,
+    extra_domains: list[str] | None = None,
+    keep_github_domains: bool = False,
 ):
     """Apply network allowlist to a container if configured."""
     domains = list(config.get("network", {}).get("allowlist", []))
@@ -127,9 +131,13 @@ def apply_network(
     # is "direct" (raw token injection). For proxy-mediated access or no
     # auth, iptables blocks direct GitHub traffic — all GitHub communication
     # is forced through the auth proxy on loopback.
+    # Exception: when auth setup is deferred (remote orchestration), keep
+    # GitHub domains temporarily so the initial clone can proceed directly.
+    # Never keep them when github=off (no GitHub access at all).
     from .security import get_github_level
 
-    if get_github_level(config) != "direct":
+    gh_level = get_github_level(config)
+    if gh_level != "direct" and not (keep_github_domains and gh_level != "off"):
         domains = filter_github_domains(domains)
     if domains:
         try:
