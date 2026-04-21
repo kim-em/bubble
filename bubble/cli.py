@@ -292,35 +292,6 @@ def _resolve_ai_prompt_locally(target: str, new_branch: str | None = None) -> st
     return prompt
 
 
-def _block_github_on_remote(remote_host, container: str):
-    """Remove direct GitHub access from a remote container's iptables rules.
-
-    Called after auth proxy setup completes, so the container routes GitHub
-    traffic through the proxy on loopback instead of directly.
-    """
-    import subprocess
-
-    # Resolve github.com IPs inside the container and delete their ACCEPT rules.
-    # This is safe because the proxy is on loopback (always allowed).
-    script = (
-        "for domain in github.com api.github.com; do "
-        "  for cidr in $(getent ahostsv4 $domain 2>/dev/null"
-        " | awk '{print $1}' | sort -u"
-        " | awk -F. '{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}'"
-        " | sort -u); do"
-        "    iptables -D OUTPUT -d $cidr -j ACCEPT 2>/dev/null || true;"
-        "  done;"
-        "done"
-    )
-    q_container = shlex.quote(container)
-    q_script = shlex.quote(script)
-    cmd = remote_host.ssh_cmd([f"incus exec {q_container} -- bash -c {q_script}"])
-    try:
-        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except Exception:
-        pass  # Best-effort; proxy still provides security via token scoping
-
-
 def _open_remote(
     remote_host,
     target,
@@ -417,11 +388,6 @@ def _open_remote(
                 err=True,
             )
             sys.exit(1)
-
-    # Now that auth routes through the proxy on loopback, re-tighten the
-    # network rules by removing direct GitHub access from iptables.
-    if network and gh_level != "direct":
-        _block_github_on_remote(remote_host, name)
 
     # Write local SSH config with chained ProxyCommand through the remote host
     host_key = is_enabled(config, "host_key_trust")
@@ -1118,6 +1084,16 @@ def _open_single(
                     )
 
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
+
+        # After clone completes, re-tighten network by removing the temporary
+        # github.com access that was granted for the clone. This must happen on
+        # the remote side (where we have the runtime and config) rather than from
+        # the local machine.
+        if skip_auth_setup and network:
+            from .container_helpers import apply_network
+
+            extra_domains = hook.network_domains() if hook else None
+            apply_network(runtime, name, config, extra_domains, keep_github_domains=False)
 
         # Resolve AI prompt: stdin flag > env var > auto-generate for issues/PRs
         # The stdin flag is set by _open_remote() which generates the prompt locally.
