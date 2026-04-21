@@ -66,6 +66,22 @@ def _bubble_path() -> str:
     return path if path else "bubble"
 
 
+def _systemd_path_env() -> str:
+    """Return an Environment=PATH=... line for systemd service files.
+
+    Captures the user's current PATH so that tools like gh, incus, etc.
+    are discoverable when the service runs under systemd (which provides
+    only a minimal default PATH).
+
+    Escapes '%' as '%%' since systemd treats '%' as a specifier prefix
+    in unit files (e.g., %h = home directory).
+    """
+    path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    # Escape % for systemd specifier syntax
+    path = path.replace("%", "%%")
+    return f"Environment=PATH={path}"
+
+
 # ---------------------------------------------------------------------------
 # macOS: launchd
 # ---------------------------------------------------------------------------
@@ -199,6 +215,7 @@ def _install_systemd() -> list[str]:
         [Service]
         Type=oneshot
         ExecStart={bubble} git update
+        {_systemd_path_env()}
     """)
     )
 
@@ -229,6 +246,7 @@ def _install_systemd() -> list[str]:
         [Service]
         Type=oneshot
         ExecStart={bubble} images build base
+        {_systemd_path_env()}
     """)
     )
 
@@ -342,6 +360,7 @@ def _install_relay_systemd() -> str:
         ExecStart={bubble} relay daemon
         Restart=always
         RestartSec=5
+        {_systemd_path_env()}
 
         [Install]
         WantedBy=default.target
@@ -432,6 +451,7 @@ def _install_auth_proxy_systemd() -> str:
         ExecStart={bubble} gh proxy daemon
         Restart=always
         RestartSec=5
+        {_systemd_path_env()}
 
         [Install]
         WantedBy=default.target
