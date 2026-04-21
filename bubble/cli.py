@@ -292,6 +292,35 @@ def _resolve_ai_prompt_locally(target: str, new_branch: str | None = None) -> st
     return prompt
 
 
+def _block_github_on_remote(remote_host, container: str):
+    """Remove direct GitHub access from a remote container's iptables rules.
+
+    Called after auth proxy setup completes, so the container routes GitHub
+    traffic through the proxy on loopback instead of directly.
+    """
+    import subprocess
+
+    # Resolve github.com IPs inside the container and delete their ACCEPT rules.
+    # This is safe because the proxy is on loopback (always allowed).
+    script = (
+        "for domain in github.com api.github.com; do "
+        "  for cidr in $(getent ahostsv4 $domain 2>/dev/null"
+        " | awk '{print $1}' | sort -u"
+        " | awk -F. '{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}'"
+        " | sort -u); do"
+        "    iptables -D OUTPUT -d $cidr -j ACCEPT 2>/dev/null || true;"
+        "  done;"
+        "done"
+    )
+    q_container = shlex.quote(container)
+    q_script = shlex.quote(script)
+    cmd = remote_host.ssh_cmd([f"incus exec {q_container} -- bash -c {q_script}"])
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except Exception:
+        pass  # Best-effort; proxy still provides security via token scoping
+
+
 def _open_remote(
     remote_host,
     target,
@@ -388,6 +417,11 @@ def _open_remote(
                 err=True,
             )
             sys.exit(1)
+
+    # Now that auth routes through the proxy on loopback, re-tighten the
+    # network rules by removing direct GitHub access from iptables.
+    if network and gh_level != "direct":
+        _block_github_on_remote(remote_host, name)
 
     # Write local SSH config with chained ProxyCommand through the remote host
     host_key = is_enabled(config, "host_key_trust")
@@ -569,6 +603,12 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     hidden=True,
     help="Read AI prompt from stdin (used internally by remote open).",
 )
+@click.option(
+    "--skip-auth-setup",
+    is_flag=True,
+    hidden=True,
+    help="Skip GitHub auth proxy setup (used internally by remote open).",
+)
 def open_cmd(
     targets,
     editor_choice,
@@ -595,6 +635,7 @@ def open_cmd(
     claude_credentials,
     codex_credentials,
     ai_prompt_stdin,
+    skip_auth_setup,
 ):
     """Open a bubble for one or more targets (GitHub URL, repo, local path, or PR number)."""
     # When -b is used without an explicit target, infer owner/repo from cwd
@@ -654,6 +695,7 @@ def open_cmd(
                 claude_credentials=claude_credentials,
                 codex_credentials=codex_credentials,
                 ai_prompt_stdin=ai_prompt_stdin,
+                skip_auth_setup=skip_auth_setup,
             )
         except SystemExit as e:
             if not multi:
@@ -708,6 +750,7 @@ def _open_single(
     claude_credentials,
     codex_credentials,
     ai_prompt_stdin,
+    skip_auth_setup=False,
 ):
     """Open a single bubble target."""
     if force_path and not target.startswith(("/", ".", "..")):
@@ -1026,49 +1069,53 @@ def _open_single(
             claude_mounts=cc_mounts,
             codex_mounts=cx_mounts,
             editor_mounts=ec_mounts,
+            skip_auth_setup=skip_auth_setup,
         )
 
         # Set up GitHub auth BEFORE clone — network allowlisting strips
         # github.com from allowed domains when using the auth proxy, so
         # git must be configured to route through the proxy first.
-        gh_level = get_github_level(config)
-        if gh_level == "direct":
-            from .github_token import setup_gh_token
+        # Skip when invoked by remote orchestration (--skip-auth-setup):
+        # the local machine handles auth via SSH tunnel after this returns.
+        if not skip_auth_setup:
+            gh_level = get_github_level(config)
+            if gh_level == "direct":
+                from .github_token import setup_gh_token
 
-            auth_ok = setup_gh_token(
-                runtime,
-                name,
-                machine_readable=machine_readable,
-                token_inject=True,
-            )
-            if not auth_ok and network:
-                raise click.ClickException(
-                    "GitHub token injection failed and network allowlisting is active "
-                    "(github.com is blocked).\n"
-                    "Run `gh auth login` to configure GitHub authentication, "
-                    "or use `--no-network` to skip network allowlisting."
+                auth_ok = setup_gh_token(
+                    runtime,
+                    name,
+                    machine_readable=machine_readable,
+                    token_inject=True,
                 )
-        elif gh_level != "off":
-            from .github_token import setup_gh_token
-            from .tools import resolve_tools
+                if not auth_ok and network:
+                    raise click.ClickException(
+                        "GitHub token injection failed and network allowlisting is active "
+                        "(github.com is blocked).\n"
+                        "Run `gh auth login` to configure GitHub authentication, "
+                        "or use `--no-network` to skip network allowlisting."
+                    )
+            elif gh_level != "off":
+                from .github_token import setup_gh_token
+                from .tools import resolve_tools
 
-            gh_enabled = "gh" in resolve_tools(config)
-            auth_ok = setup_gh_token(
-                runtime,
-                name,
-                owner=t.owner,
-                repo=t.repo,
-                machine_readable=machine_readable,
-                gh_enabled=gh_enabled,
-                config=config,
-            )
-            if not auth_ok and network:
-                raise click.ClickException(
-                    "GitHub auth proxy setup failed and network allowlisting is active "
-                    "(github.com is blocked).\n"
-                    "Run `gh auth login` to configure GitHub authentication, "
-                    "or use `--no-network` to skip network allowlisting."
+                gh_enabled = "gh" in resolve_tools(config)
+                auth_ok = setup_gh_token(
+                    runtime,
+                    name,
+                    owner=t.owner,
+                    repo=t.repo,
+                    machine_readable=machine_readable,
+                    gh_enabled=gh_enabled,
+                    config=config,
                 )
+                if not auth_ok and network:
+                    raise click.ClickException(
+                        "GitHub auth proxy setup failed and network allowlisting is active "
+                        "(github.com is blocked).\n"
+                        "Run `gh auth login` to configure GitHub authentication, "
+                        "or use `--no-network` to skip network allowlisting."
+                    )
 
         checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
 

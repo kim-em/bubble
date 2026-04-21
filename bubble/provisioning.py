@@ -77,6 +77,7 @@ def provision_container(
     claude_mounts=None,
     codex_mounts=None,
     editor_mounts=None,
+    skip_auth_setup=False,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     from .output import detail
@@ -99,7 +100,7 @@ def provision_container(
         from .container_helpers import apply_network
 
         extra_domains = hook.network_domains() if hook else None
-        apply_network(runtime, name, config, extra_domains)
+        apply_network(runtime, name, config, extra_domains, keep_github_domains=skip_auth_setup)
 
     mount_source = str(ref_path)
     if Path(mount_source).exists():
