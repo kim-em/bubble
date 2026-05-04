@@ -297,8 +297,10 @@ def colima_bind_ip() -> str:
     can reach it, not the wider LAN.
 
     Discovery: find any ``bridge*`` interface whose member is ``vmenet*``
-    and return its IPv4 address.  Falls back to ``0.0.0.0`` if no VMNet
-    bridge is found (e.g. qemu backend or unusual network config).
+    and return its IPv4 address.  Falls back to ``127.0.0.1`` if no VMNet
+    bridge is found (e.g. Colima not running, qemu backend, or unusual
+    network config) — loopback is a safer default than exposing the
+    daemon to the LAN when the bridge we expected isn't there.
     """
     import re as _re
 
@@ -311,9 +313,9 @@ def colima_bind_ip() -> str:
             stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
-            return "0.0.0.0"
+            return "127.0.0.1"
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return "0.0.0.0"
+        return "127.0.0.1"
 
     # Split output into per-interface blocks
     blocks = _re.split(r"(?=^\S+:)", result.stdout, flags=_re.MULTILINE)
@@ -327,4 +329,4 @@ def colima_bind_ip() -> str:
         if m:
             return m.group(1)
 
-    return "0.0.0.0"
+    return "127.0.0.1"
