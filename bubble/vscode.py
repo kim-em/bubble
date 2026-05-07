@@ -213,35 +213,6 @@ def open_editor(
     return 0
 
 
-def open_editor_native(editor: str, local_path: str, command: str | None = None) -> int:
-    """Open the specified editor for a native (non-containerized) workspace.
-
-    Opens VSCode directly on the local path, or spawns a shell in that directory.
-    If command is provided (only with editor="shell"), runs it via `bash -c`,
-    matching how the SSH shell editor passes the same string to the remote shell.
-
-    Returns the exit code from the underlying process. For editors that detach
-    (e.g. vscode), returns 0.
-    """
-    if editor == "vscode":
-        try:
-            subprocess.run(
-                ["code", "--disable-workspace-trust", "--folder-uri", f"file://{local_path}"],
-                check=True,
-                stderr=subprocess.DEVNULL,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            print(f"VSCode CLI not found or failed. Open manually: {local_path}")
-        return 0
-    elif editor == "shell":
-        if command:
-            return subprocess.run(["bash", "-c", command], cwd=local_path).returncode
-        return subprocess.run(
-            ["bash", "-c", f"cd {shlex.quote(local_path)} && exec $SHELL"],
-        ).returncode
-    return 0
-
-
 def open_vscode(
     bubble_name: str,
     remote_path: str = "/home/user",

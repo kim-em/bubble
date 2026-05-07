@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+- Remove `--native` mode entirely
+  - `bubble --native <target>` is no longer accepted (use `bubble open` for containerized bubbles)
+  - `bubble.native` module deleted; `check_native_clean`, `open_editor_native`, and `NATIVE_DIR` removed
+  - `register_bubble()` no longer accepts `native` / `native_path`
+  - Legacy `native: true` registry entries are silently dropped on next registry load
+
 ## 0.7.16 — 2026-05-07
 - Granular Claude/Codex config mounts (#264)
   - `--claude-config/--no-claude-config` and `--codex-config/--no-codex-config` flags on `bubble open`
