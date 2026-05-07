@@ -27,7 +27,32 @@ class IncusError(subprocess.CalledProcessError, RuntimeError):
 
 
 class IncusRuntime(ContainerRuntime):
-    """Container runtime using Incus."""
+    """Container runtime using Incus.
+
+    The optional ``remote`` constructor argument names a non-default
+    Incus remote that all resource references will be prefixed with
+    (e.g. ``"bubble-colima"`` on macOS).  When empty, container/image
+    names are passed through unchanged and the user's current default
+    remote applies — bubble does not switch it.
+    """
+
+    def __init__(self, remote: str = ""):
+        self._remote = remote
+
+    def qualify(self, name: str) -> str:
+        """Prefix *name* with our remote if one is configured.
+
+        Names that already contain ``:`` are assumed to be explicitly
+        qualified by the caller and pass through unchanged.
+        """
+        if self._remote and ":" not in name:
+            return f"{self._remote}:{name}"
+        return name
+
+    def _q(self, name: str) -> str:
+        # Internal alias matching the public method, kept short so call sites
+        # stay readable.
+        return self.qualify(name)
 
     def _run(self, args: list[str], check: bool = True, capture: bool = True) -> str:
         """Run an incus command."""
@@ -74,7 +99,7 @@ class IncusRuntime(ContainerRuntime):
             return False
 
     def launch(self, name: str, image: str, **kwargs) -> ContainerInfo:
-        args = ["launch", image, name]
+        args = ["launch", self._q(image), self._q(name)]
         self._run(args)
         return self._get_info(name)
 
@@ -118,13 +143,15 @@ class IncusRuntime(ContainerRuntime):
 
     def _get_info(self, name: str) -> ContainerInfo:
         """Get info for a single container."""
-        data = self._run_json(["list", name])
+        data = self._run_json(["list", self._q(name)])
         if not data:
             raise RuntimeError(f"Container '{name}' not found")
         return self._parse_container(data[0])
 
     def list_containers(self, fast: bool = True) -> list[ContainerInfo]:
-        args = ["list"]
+        # When a remote is set, pass "remote:" with no name so list scopes
+        # to that remote rather than the user's default.
+        args = ["list", self._q("")] if self._remote else ["list"]
         if fast:
             args.append("--fast")
         data = self._run_json(args)
@@ -133,25 +160,25 @@ class IncusRuntime(ContainerRuntime):
         return [self._parse_container(c) for c in data]
 
     def start(self, name: str):
-        self._run(["start", name])
+        self._run(["start", self._q(name)])
 
     def stop(self, name: str):
-        self._run(["stop", name])
+        self._run(["stop", self._q(name)])
 
     def freeze(self, name: str):
-        self._run(["pause", name])
+        self._run(["pause", self._q(name)])
 
     def unfreeze(self, name: str):
-        self._run(["start", name])  # unpauses a frozen container
+        self._run(["start", self._q(name)])  # unpauses a frozen container
 
     def delete(self, name: str, force: bool = False):
-        args = ["delete", name]
+        args = ["delete", self._q(name)]
         if force:
             args.append("--force")
         self._run(args)
 
     def exec(self, name: str, command: list[str], **kwargs) -> str:
-        args = ["exec", name, "--"]
+        args = ["exec", self._q(name), "--"]
         args.extend(command)
         cmd = ["incus"] + args
         result = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
@@ -174,7 +201,7 @@ class IncusRuntime(ContainerRuntime):
         """
         if on_line is None:
             return self.exec(name, command)
-        args = ["exec", name, "--"] + command
+        args = ["exec", self._q(name), "--"] + command
         cmd = ["incus"] + args
         proc = subprocess.Popen(
             cmd,
@@ -204,7 +231,7 @@ class IncusRuntime(ContainerRuntime):
         return output
 
     def add_device(self, name: str, device_name: str, device_type: str, **props):
-        args = ["config", "device", "add", name, device_name, device_type]
+        args = ["config", "device", "add", self._q(name), device_name, device_type]
         for k, v in props.items():
             args.append(f"{k}={v}")
         self._run(args)
@@ -226,30 +253,51 @@ class IncusRuntime(ContainerRuntime):
         # Delete existing image with same alias
         if self.image_exists(alias):
             self.image_delete(alias)
-        self._run(["publish", name, "--alias", alias])
+        self._run(["publish", self._q(name), "--alias", alias])
 
     def image_exists(self, alias: str) -> bool:
         try:
-            self._run(["image", "show", alias])
+            self._run(["image", "show", self._q(alias)])
             return True
         except subprocess.CalledProcessError:
             return False
 
     def image_delete(self, alias_or_fingerprint: str):
-        self._run(["image", "delete", alias_or_fingerprint])
+        self._run(["image", "delete", self._q(alias_or_fingerprint)])
 
     def image_delete_all(self):
         images = self.list_images()
         for img in images:
             fingerprint = img.get("fingerprint", "")
             if fingerprint:
-                self._run(["image", "delete", fingerprint])
+                self._run(["image", "delete", self._q(fingerprint)])
 
     def list_images(self) -> list[dict]:
-        data = self._run_json(["image", "list"])
+        args = ["image", "list", self._q("")] if self._remote else ["image", "list"]
+        data = self._run_json(args)
         if not isinstance(data, list):
             return []
         return data
 
     def push_file(self, name: str, local_path: str, remote_path: str):
-        self._run(["file", "push", local_path, f"{name}{remote_path}"])
+        self._run(["file", "push", local_path, f"{self._q(name)}{remote_path}"])
+
+    # --- Operation introspection (used by `bubble doctor`) -------------
+
+    def list_operations(self) -> list[dict]:
+        """List currently running incus operations on our remote."""
+        args = ["operation", "list", self._q("")] if self._remote else ["operation", "list"]
+        data = self._run_json(args)
+        if not isinstance(data, list):
+            return []
+        return data
+
+    def delete_operation(self, op_id: str):
+        """Cancel a running operation by id."""
+        self._run(["operation", "delete", self._q(op_id)])
+
+    # --- Network introspection (used by image build IPv4/DNS fixups) --
+
+    def network_get(self, network: str, key: str) -> str:
+        """Get a single config value from an incus-managed network."""
+        return self._run(["network", "get", self._q(network), key])

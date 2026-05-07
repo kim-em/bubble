@@ -429,5 +429,12 @@ def get_runtime(config: dict, ensure_ready: bool = True) -> ContainerRuntime:
             )
     backend = config["runtime"]["backend"]
     if backend == "incus":
+        # On macOS we drive a dedicated Colima profile via a non-default
+        # incus remote; route every incus call through that prefix instead
+        # of switching the user's default remote globally.
+        if platform.system() == "Darwin":
+            from .runtime.colima import BUBBLE_INCUS_REMOTE
+
+            return IncusRuntime(remote=BUBBLE_INCUS_REMOTE)
         return IncusRuntime()
     raise ValueError(f"Unknown runtime backend: {backend}")

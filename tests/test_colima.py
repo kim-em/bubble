@@ -86,6 +86,10 @@ def _completed(stdout="", returncode=0):
 
 
 class TestEnsureIncusRemote:
+    """The remote-setup code adds an alias if missing but never switches the
+    user's default — bubble targets resources by prefix instead.
+    """
+
     def test_noop_when_socket_missing(self, tmp_path, monkeypatch):
         from bubble.runtime import colima as colima_mod
 
@@ -98,27 +102,11 @@ class TestEnsureIncusRemote:
         colima_mod._ensure_incus_remote()
         assert fake.calls == []
 
-    def test_noop_when_default_already_correct(self, fake_socket, monkeypatch):
+    def test_adds_when_remote_missing_but_does_not_switch(self, fake_socket, monkeypatch):
         from bubble.runtime import colima as colima_mod
 
         fake = _FakeRun(
             {
-                ("incus", "remote", "get-default"): _completed(
-                    stdout=colima_mod.BUBBLE_INCUS_REMOTE + "\n"
-                ),
-            }
-        )
-        monkeypatch.setattr(colima_mod.subprocess, "run", fake)
-        colima_mod._ensure_incus_remote()
-        # We should have asked for the default and stopped there.
-        assert fake.calls == [["incus", "remote", "get-default"]]
-
-    def test_adds_and_switches_when_remote_missing(self, fake_socket, monkeypatch):
-        from bubble.runtime import colima as colima_mod
-
-        fake = _FakeRun(
-            {
-                ("incus", "remote", "get-default"): _completed(stdout="local\n"),
                 ("incus", "remote", "list"): _completed(stdout=json.dumps({})),
             }
         )
@@ -127,7 +115,7 @@ class TestEnsureIncusRemote:
 
         cmds = [tuple(c[:3]) for c in fake.calls]
         assert ("incus", "remote", "add") in cmds
-        assert ("incus", "remote", "switch") in cmds
+        assert ("incus", "remote", "switch") not in cmds
 
     def test_refuses_to_clobber_alias_with_wrong_address(self, fake_socket, monkeypatch, capsys):
         from bubble.runtime import colima as colima_mod
@@ -137,14 +125,13 @@ class TestEnsureIncusRemote:
         }
         fake = _FakeRun(
             {
-                ("incus", "remote", "get-default"): _completed(stdout="local\n"),
                 ("incus", "remote", "list"): _completed(stdout=json.dumps(bogus_remotes)),
             }
         )
         monkeypatch.setattr(colima_mod.subprocess, "run", fake)
         colima_mod._ensure_incus_remote()
 
-        # We must NOT have called `add` (alias exists) or `switch` (alias is stale).
+        # We must NOT have called `add` (alias exists) or `switch` (we never switch).
         cmds = [tuple(c[:3]) for c in fake.calls]
         assert ("incus", "remote", "add") not in cmds
         assert ("incus", "remote", "switch") not in cmds
@@ -152,7 +139,7 @@ class TestEnsureIncusRemote:
         err = capsys.readouterr().err
         assert "Refusing to overwrite" in err
 
-    def test_switches_when_alias_already_points_at_us(self, fake_socket, monkeypatch):
+    def test_noop_when_alias_already_points_at_us(self, fake_socket, monkeypatch):
         from bubble.runtime import colima as colima_mod
 
         expected_addr = f"unix://{fake_socket}"
@@ -161,7 +148,6 @@ class TestEnsureIncusRemote:
         }
         fake = _FakeRun(
             {
-                ("incus", "remote", "get-default"): _completed(stdout="local\n"),
                 ("incus", "remote", "list"): _completed(stdout=json.dumps(good_remotes)),
             }
         )
@@ -169,6 +155,33 @@ class TestEnsureIncusRemote:
         colima_mod._ensure_incus_remote()
 
         cmds = [tuple(c[:3]) for c in fake.calls]
-        # No `add` (alias already exists) but yes `switch`.
+        # Alias is already in place at the right address; no add and no switch.
         assert ("incus", "remote", "add") not in cmds
-        assert ("incus", "remote", "switch") in cmds
+        assert ("incus", "remote", "switch") not in cmds
+
+
+class TestIncusRuntimeQualify:
+    def test_default_runtime_does_not_prefix(self):
+        from bubble.runtime.incus import IncusRuntime
+
+        rt = IncusRuntime()
+        assert rt.qualify("foo") == "foo"
+
+    def test_remote_runtime_prefixes(self):
+        from bubble.runtime.incus import IncusRuntime
+
+        rt = IncusRuntime(remote="bubble-colima")
+        assert rt.qualify("foo") == "bubble-colima:foo"
+
+    def test_already_qualified_name_passes_through(self):
+        from bubble.runtime.incus import IncusRuntime
+
+        rt = IncusRuntime(remote="bubble-colima")
+        assert rt.qualify("other-remote:foo") == "other-remote:foo"
+
+    def test_empty_name_yields_remote_with_colon(self):
+        """Used by list_containers / list_images to scope to the remote."""
+        from bubble.runtime.incus import IncusRuntime
+
+        rt = IncusRuntime(remote="bubble-colima")
+        assert rt.qualify("") == "bubble-colima:"

@@ -28,6 +28,16 @@ class ContainerRuntime(ABC):
     backend errors uniformly.
     """
 
+    def qualify(self, name: str) -> str:
+        """Qualify a resource name with the runtime's remote prefix, if any.
+
+        For the default Incus backend on Linux this is the identity function.
+        On macOS-via-Colima the runtime targets a non-default Incus remote
+        and this returns ``"<remote>:<name>"`` so callers don't have to depend
+        on the user's default remote being set to ours.
+        """
+        return name
+
     @abstractmethod
     def is_available(self) -> bool:
         """Check if the runtime is available."""

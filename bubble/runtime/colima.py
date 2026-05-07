@@ -174,35 +174,22 @@ def start_colima(cpu: int, memory: int, disk: int = 60, vm_type: str = "vz"):
 
 
 def _ensure_incus_remote():
-    """Ensure the incus client is configured to talk to bubble's Colima socket.
+    """Ensure the incus client knows about bubble's Colima socket.
 
-    If a remote alias matching BUBBLE_INCUS_REMOTE already exists but points
-    somewhere other than our expected unix socket, refuse to clobber it and
-    surface a clear error to stderr instead of silently switching the user's
-    default to the wrong place.
+    Adds an incus remote alias pointing at the bubble-colima profile's Unix
+    socket if it doesn't already exist.  Bubble does **not** switch the
+    user's default remote — instead it targets resources by prefixing them
+    with ``bubble-colima:`` (see :class:`IncusRuntime`).
+
+    If a remote alias matching ``BUBBLE_INCUS_REMOTE`` already exists but
+    points somewhere other than our expected unix socket, refuse to clobber
+    it and surface a clear error to stderr.
     """
     sock = COLIMA_PROFILE_DIR / "incus.sock"
     if not sock.exists():
         return
     expected_addr = f"unix://{sock}"
 
-    try:
-        result = subprocess.run(
-            ["incus", "remote", "get-default"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-        )
-        current = result.stdout.strip()
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        current = ""
-
-    if current == BUBBLE_INCUS_REMOTE:
-        return
-
-    # Inspect the existing remote list before adding/switching.
     result = subprocess.run(
         ["incus", "remote", "list", "--format=json"],
         capture_output=True,
@@ -228,19 +215,10 @@ def _ensure_incus_remote():
                 "retry.",
                 file=sys.stderr,
             )
-            return
-    else:
-        subprocess.run(
-            ["incus", "remote", "add", BUBBLE_INCUS_REMOTE, expected_addr],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-        )
+        return
 
     subprocess.run(
-        ["incus", "remote", "switch", BUBBLE_INCUS_REMOTE],
+        ["incus", "remote", "add", BUBBLE_INCUS_REMOTE, expected_addr],
         capture_output=True,
         text=True,
         check=False,
