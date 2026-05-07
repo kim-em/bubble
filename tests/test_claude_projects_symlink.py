@@ -295,6 +295,55 @@ class TestDoSymlinkClaudeProjects:
 
         assert result is True
 
+    def test_renames_residual_directory_aside(self, setup_dirs):
+        """After merge, ~/.bubble/ai-projects/ is renamed aside, not deleted."""
+        claude_projects, bubble_projects = setup_dirs
+        bubble_projects.mkdir()
+
+        (bubble_projects / "session-a").mkdir()
+        (bubble_projects / "session-a" / "data.jsonl").write_text("data")
+
+        with patch("bubble.config._is_inside_git_repo", return_value=True):
+            result = do_symlink_ai_projects()
+
+        assert result is True
+        # Symlink in place
+        assert bubble_projects.is_symlink()
+        # Backup directory should exist alongside it (residual empty subtree)
+        backups = list(bubble_projects.parent.glob("ai-projects.old.*"))
+        assert len(backups) == 1, f"expected 1 backup dir, got {backups}"
+        # Real session data was moved (not in the backup)
+        assert (claude_projects / "session-a" / "data.jsonl").read_text() == "data"
+
+    def test_symlink_failure_rolls_back_rename(self, setup_dirs, monkeypatch):
+        """If symlink_to() fails, ~/.bubble/ai-projects/ is restored from the backup."""
+        claude_projects, bubble_projects = setup_dirs
+        bubble_projects.mkdir()
+        (bubble_projects / "session-a").mkdir()
+
+        from pathlib import Path as RealPath
+
+        original_symlink_to = RealPath.symlink_to
+
+        def boom(self, *args, **kwargs):
+            if self == bubble_projects:
+                raise OSError("simulated symlink failure")
+            return original_symlink_to(self, *args, **kwargs)
+
+        monkeypatch.setattr(RealPath, "symlink_to", boom)
+
+        with (
+            patch("bubble.config._is_inside_git_repo", return_value=True),
+            pytest.raises(OSError, match="simulated"),
+        ):
+            do_symlink_ai_projects()
+
+        # Roll-back: ai-projects/ exists again, and no backup directory remains
+        assert bubble_projects.is_dir()
+        assert not bubble_projects.is_symlink()
+        backups = list(bubble_projects.parent.glob("ai-projects.old.*"))
+        assert backups == []
+
 
 class TestSymlinkClaudeProjectsCLI:
     def test_exit_code_on_failure(self, setup_dirs):
