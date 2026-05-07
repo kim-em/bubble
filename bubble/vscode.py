@@ -165,6 +165,7 @@ def open_editor(
     via SSH instead of opening an interactive session. The command string is
     passed verbatim as a single SSH argument; the remote shell parses it with
     `$SHELL -c`, so callers can write it exactly as they would after `ssh host`.
+    The command runs from remote_path, mirroring interactive --shell.
     """
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
@@ -190,7 +191,12 @@ def open_editor(
     elif editor == "shell":
         ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
         if command:
-            ssh_cmd.append(command)
+            # Run the command from the project directory, mirroring the
+            # interactive shell's landing cwd. Without this, sshd executes
+            # the command in /home/user, surprising callers who expect to
+            # be in the repo (and breaking tools that rely on cwd, like
+            # git, gh, claude -p).
+            ssh_cmd.append(f"cd {shlex.quote(remote_path)} && exec {command}")
         subprocess.run(ssh_cmd)
 
 
