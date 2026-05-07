@@ -151,8 +151,58 @@ class TestOpenEditorShell:
         assert calls == [["ssh", "bubble-test-bubble"]]
 
     def test_shell_with_command(self, monkeypatch):
-        """Shell editor with command should SSH and pass the command."""
+        """Shell editor with command should cd to project_dir, then exec the command."""
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
-        open_editor("shell", "test-bubble", command=["lake", "build"])
-        assert calls == [["ssh", "bubble-test-bubble", "lake", "build"]]
+        open_editor("shell", "test-bubble", "/home/user/proj", command=["lake", "build"])
+        assert calls == [["ssh", "bubble-test-bubble", "cd /home/user/proj && exec lake build"]]
+
+    def test_shell_with_command_default_cwd(self, monkeypatch):
+        """When no project_dir is given, fall back to /home/user."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_editor("shell", "test-bubble", command=["pwd"])
+        assert calls == [["ssh", "bubble-test-bubble", "cd /home/user && exec pwd"]]
+
+    def test_shell_bash_lc_escape_hatch(self, monkeypatch):
+        """Callers who want shell expansion can pass `bash -lc <script>`.
+
+        The argv args are quoted, but the inner script is one element that the
+        remote bash invocation expands itself — so $VAR, pipes, and globs work
+        when explicitly requested.
+        """
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_editor(
+            "shell",
+            "test-bubble",
+            "/home/user/proj",
+            command=["bash", "-lc", "echo $HOME && ls *.lean"],
+        )
+        assert calls == [
+            [
+                "ssh",
+                "bubble-test-bubble",
+                "cd /home/user/proj && exec bash -lc 'echo $HOME && ls *.lean'",
+            ]
+        ]
+
+    def test_shell_command_args_are_quoted(self, monkeypatch):
+        """Command args containing spaces or special chars must be preserved."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_editor(
+            "shell",
+            "test-bubble",
+            "/home/user/proj",
+            command=["echo", "hello world", "$VAR"],
+        )
+        # Each command arg is shlex-quoted so the remote shell doesn't re-split
+        # or expand it. The cd path is also quoted.
+        assert calls == [
+            [
+                "ssh",
+                "bubble-test-bubble",
+                "cd /home/user/proj && exec echo 'hello world' '$VAR'",
+            ]
+        ]
