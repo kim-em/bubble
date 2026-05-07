@@ -151,8 +151,71 @@ class TestOpenEditorShell:
         assert calls == [["ssh", "bubble-test-bubble"]]
 
     def test_shell_with_command(self, monkeypatch):
-        """Shell editor with command should SSH and pass the command."""
+        """Shell editor with command runs via `bash -lc` so /etc/profile.d/* is sourced."""
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
         open_editor("shell", "test-bubble", command=["lake", "build"])
-        assert calls == [["ssh", "bubble-test-bubble", "lake", "build"]]
+        assert calls == [["ssh", "bubble-test-bubble", "bash -lc 'lake build'"]]
+
+    def test_shell_command_quotes_special_chars(self, monkeypatch):
+        """Shell editor must quote args with spaces/quotes so SSH preserves them."""
+        import shlex as _shlex
+
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        cmd_args = ["echo", "hello world", "it's"]
+        open_editor("shell", "test-bubble", command=cmd_args)
+        expected = "bash -lc " + _shlex.quote(_shlex.join(cmd_args))
+        assert calls == [["ssh", "bubble-test-bubble", expected]]
+        # Sanity: round-trip through `sh -c` should recover the original argv.
+        assert _shlex.split(_shlex.split(expected)[2]) == cmd_args
+
+
+class TestBuildMarkerProfileHook:
+    """The build-marker hook in /home/user/.profile (installed by base.sh)
+    must skip non-interactive shells. Otherwise `bubble --shell --command ...`
+    (which now wraps in `bash -lc` per issue #268) would consume the marker
+    and start an unsolicited background build before the user's command runs.
+    """
+
+    def _profile_snippet(self):
+        """Extract the heredoc body from base.sh — the literal block between
+        `<< 'PROFILEEOF'` and `PROFILEEOF`."""
+        from pathlib import Path
+
+        src = Path(__file__).parent.parent / "bubble" / "images" / "scripts" / "base.sh"
+        text = src.read_text()
+        marker = "<< 'PROFILEEOF'\n"
+        start = text.index(marker) + len(marker)
+        end = text.index("\nPROFILEEOF\n", start)
+        return text[start:end]
+
+    def test_marker_consumed_by_interactive_login_shell(self, tmp_path):
+        snippet = self._profile_snippet()
+        marker = tmp_path / ".bubble-fetch-cache"
+        marker.write_text("true\n")
+        # bash -ilc → interactive + login. Set HOME and SSH_CONNECTION so the
+        # snippet thinks it's a real login.
+        result = subprocess.run(
+            ["bash", "-ilc", snippet],
+            env={"HOME": str(tmp_path), "SSH_CONNECTION": "x", "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+        assert "Build started in background" in result.stdout
+        assert not marker.exists(), "interactive shell should consume the marker"
+
+    def test_marker_preserved_by_non_interactive_login_shell(self, tmp_path):
+        snippet = self._profile_snippet()
+        marker = tmp_path / ".bubble-fetch-cache"
+        marker.write_text("true\n")
+        # bash -lc → login but not interactive. This is the `bash -lc` form
+        # used by open_editor("shell", ..., command=...).
+        result = subprocess.run(
+            ["bash", "-lc", snippet],
+            env={"HOME": str(tmp_path), "SSH_CONNECTION": "x", "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+        assert "Build started in background" not in result.stdout
+        assert marker.exists(), "non-interactive shell must not consume the marker"

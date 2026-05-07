@@ -138,7 +138,15 @@ def open_editor(
     elif editor == "shell":
         ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
         if command:
-            ssh_cmd += command
+            # Run via `bash -lc` so /etc/profile.d/* is sourced — non-login
+            # shells skip it, leaving GH_TOKEN/GH_REPO/GH_CONFIG_DIR (set in
+            # /etc/profile.d/bubble-gh.sh) and similar env knobs unset. ssh
+            # joins remaining argv with spaces and runs the result through
+            # the user's shell, so we package the command as a single
+            # already-quoted argument. The build-marker hook in ~/.profile
+            # gates itself on interactive shells so `--command` doesn't
+            # accidentally consume the marker.
+            ssh_cmd.append(shlex.join(["bash", "-lc", shlex.join(command)]))
         subprocess.run(ssh_cmd)
 
 
