@@ -285,6 +285,32 @@ class TestRemoteOpenFlagForwarding:
         assert "--codex-credentials" not in cmd_str
         assert "--no-codex-credentials" not in cmd_str
 
+    def test_claude_config_forwarded(self):
+        cmd_str = self._run_remote_open(claude_config=True)
+        assert "--claude-config" in cmd_str
+
+    def test_no_claude_config_forwarded(self):
+        cmd_str = self._run_remote_open(claude_config=False)
+        assert "--no-claude-config" in cmd_str
+
+    def test_claude_config_none_not_forwarded(self):
+        cmd_str = self._run_remote_open(claude_config=None)
+        assert "--claude-config" not in cmd_str
+        assert "--no-claude-config" not in cmd_str
+
+    def test_codex_config_forwarded(self):
+        cmd_str = self._run_remote_open(codex_config=True)
+        assert "--codex-config" in cmd_str
+
+    def test_no_codex_config_forwarded(self):
+        cmd_str = self._run_remote_open(codex_config=False)
+        assert "--no-codex-config" in cmd_str
+
+    def test_codex_config_none_not_forwarded(self):
+        cmd_str = self._run_remote_open(codex_config=None)
+        assert "--codex-config" not in cmd_str
+        assert "--no-codex-config" not in cmd_str
+
     def test_skip_auth_setup_always_forwarded(self):
         """Remote open always passes --skip-auth-setup so the remote doesn't
         redundantly start its own auth proxy (issue #260)."""

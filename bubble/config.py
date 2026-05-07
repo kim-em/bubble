@@ -250,16 +250,23 @@ class SafeConfigDir:
             return None
         return resolved
 
-    def config_mounts(self, include_credentials: bool = True) -> list[MountSpec]:
+    def config_mounts(
+        self,
+        include_credentials: bool = True,
+        include_config_items: bool = True,
+    ) -> list[MountSpec]:
         """Return read-only mounts for config files that exist on the host.
 
         Args:
             include_credentials: If True, also mount credential files.
+            include_config_items: If True, mount config items (CLAUDE.md,
+                settings.json, skills, etc.). Set False to give the container
+                credentials without exposing personal config.
         """
         mounts = []
         if not self.base_dir.is_dir():
             return mounts
-        items = list(self.config_items)
+        items = list(self.config_items) if include_config_items else []
         if include_credentials:
             items.extend(self.credential_items)
         for item in items:
@@ -286,9 +293,15 @@ CLAUDE_CONFIG = SafeConfigDir(
 )
 
 
-def claude_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
+def claude_config_mounts(
+    include_credentials: bool = True,
+    include_config_items: bool = True,
+) -> list[MountSpec]:
     """Return read-only mounts for Claude Code config files that exist on the host."""
-    return CLAUDE_CONFIG.config_mounts(include_credentials)
+    return CLAUDE_CONFIG.config_mounts(
+        include_credentials=include_credentials,
+        include_config_items=include_config_items,
+    )
 
 
 # Editor config directories to mount into containers.
@@ -440,9 +453,15 @@ CODEX_CONFIG = SafeConfigDir(
 )
 
 
-def codex_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
+def codex_config_mounts(
+    include_credentials: bool = True,
+    include_config_items: bool = True,
+) -> list[MountSpec]:
     """Return read-only mounts for Codex config files that exist on the host."""
-    return CODEX_CONFIG.config_mounts(include_credentials)
+    return CODEX_CONFIG.config_mounts(
+        include_credentials=include_credentials,
+        include_config_items=include_config_items,
+    )
 
 
 AI_PROJECTS_DIR = DATA_DIR / "ai-projects"

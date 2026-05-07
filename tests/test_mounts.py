@@ -458,6 +458,37 @@ class TestClaudeConfigMounts:
 
         assert mounts == []
 
+    def test_config_items_excluded_credentials_kept(self, tmp_path, monkeypatch):
+        """include_config_items=False skips config but still mounts credentials."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "CLAUDE.md").write_text("# personal")
+        (claude_dir / "settings.json").write_text("{}")
+        (claude_dir / "skills").mkdir()
+        (claude_dir / "keybindings.json").write_text("{}")
+        (claude_dir / "commands").mkdir()
+        (claude_dir / ".credentials.json").write_text("{}")
+
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
+
+        mounts = claude_config_mounts(include_credentials=True, include_config_items=False)
+
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.claude/.credentials.json"
+
+    def test_config_items_and_credentials_both_excluded(self, tmp_path, monkeypatch):
+        """include_config_items=False and include_credentials=False yields no mounts."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "CLAUDE.md").write_text("# personal")
+        (claude_dir / ".credentials.json").write_text("{}")
+
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", claude_dir)
+
+        mounts = claude_config_mounts(include_credentials=False, include_config_items=False)
+
+        assert mounts == []
+
     def test_rejects_symlinks_escaping_claude_dir(self, tmp_path, monkeypatch):
         """Symlinks that escape ~/.claude are rejected."""
         claude_dir = tmp_path / ".claude"
@@ -781,6 +812,20 @@ class TestCodexConfigMounts:
         mounts = codex_config_mounts(include_credentials=False)
 
         assert mounts == []
+
+    def test_config_items_excluded_credentials_kept(self, tmp_path, monkeypatch):
+        """include_config_items=False skips config but still mounts credentials."""
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text("[settings]")
+        (codex_dir / "auth.json").write_text("{}")
+
+        monkeypatch.setattr("bubble.config.CODEX_CONFIG.base_dir", codex_dir)
+
+        mounts = codex_config_mounts(include_credentials=True, include_config_items=False)
+
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.codex/auth.json"
 
     def test_rejects_symlinks_escaping_codex_dir(self, tmp_path, monkeypatch):
         """Symlinks that escape ~/.codex are rejected."""
