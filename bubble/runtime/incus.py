@@ -177,11 +177,19 @@ class IncusRuntime(ContainerRuntime):
             args.append("--force")
         self._run(args)
 
-    def exec(self, name: str, command: list[str], **kwargs) -> str:
+    def exec(self, name: str, command: list[str], *, input: str | None = None, **kwargs) -> str:
         args = ["exec", self._q(name), "--"]
         args.extend(command)
         cmd = ["incus"] + args
-        result = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        # When *input* is provided we pipe it through stdin so secrets stay
+        # out of the container's argv (process list).  Otherwise we close
+        # stdin so subprocesses don't inherit our terminal.
+        run_kwargs: dict = {"capture_output": True, "text": True}
+        if input is None:
+            run_kwargs["stdin"] = subprocess.DEVNULL
+        else:
+            run_kwargs["input"] = input
+        result = subprocess.run(cmd, **run_kwargs)
         if result.returncode != 0:
             raise IncusError(result.returncode, cmd, result.stdout, result.stderr)
         return result.stdout.strip()

@@ -41,9 +41,15 @@ def register_internal_commands(main):
         # its own options.
         context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
     )
+    @click.option(
+        "--with-stdin",
+        is_flag=True,
+        help="Read this process's stdin and pipe it into the container's stdin. "
+        "Use this for secrets (tokens, passwords) that must not appear in argv.",
+    )
     @click.argument("container")
     @click.argument("argv", nargs=-1, type=click.UNPROCESSED, required=True)
-    def incus_exec(container, argv):
+    def incus_exec(with_stdin, container, argv):
         """Run ARGV inside CONTAINER via the remote bubble's runtime.
 
         Equivalent to ``incus exec CONTAINER -- ARGV…`` on the remote, but
@@ -56,8 +62,9 @@ def register_internal_commands(main):
         """
         config = load_config()
         runtime = get_runtime(config, ensure_ready=False)
+        input_data = sys.stdin.read() if with_stdin else None
         try:
-            output = runtime.exec(container, list(argv))
+            output = runtime.exec(container, list(argv), input=input_data)
         except RuntimeError as exc:
             click.echo(str(exc), err=True)
             sys.exit(1)

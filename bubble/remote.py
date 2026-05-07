@@ -200,8 +200,15 @@ def _ssh_run(
     check: bool = True,
     capture: bool = True,
     timeout: int = 30,
+    input: str | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run a command on the remote host via SSH."""
+    """Run a command on the remote host via SSH.
+
+    When *input* is provided, it is piped to ssh's stdin; ssh forwards
+    stdin to the remote process by default, so the remote command's stdin
+    reads *input*.  This is the right channel for secrets that must not
+    appear in argv (visible in ``ps`` on the remote host).
+    """
     # SSH concatenates args after the destination and passes them to the
     # remote shell.  Shell-quote each part so spaces and metacharacters
     # in any argument are preserved correctly on the remote side.
@@ -213,6 +220,7 @@ def _ssh_run(
         text=True,
         check=check,
         timeout=timeout,
+        input=input,
     )
 
 

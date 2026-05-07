@@ -137,12 +137,22 @@ def test_setup_auth_proxy_remote_starts_tunnel():
             graphql_write="none",
         )
 
-        # Two SSH calls: incus device add + incus exec (git config)
+        # Two SSH calls: incus device add + incus exec (writing .gitconfig)
         assert mock_ssh.call_count == 2
         device_call = mock_ssh.call_args_list[0]
         assert "bubble-auth-proxy" in device_call[0][1]
         git_call = mock_ssh.call_args_list[1]
-        assert "git config" in " ".join(str(a) for a in git_call[0][1])
+        argv = git_call[0][1]
+        # The git config write goes through bubble internal incus-exec
+        assert argv[:4] == ["bubble", "internal", "incus-exec", "--with-stdin"]
+        # Bash payload references $TOKEN (literal) and writes .gitconfig
+        bash_script = " ".join(str(a) for a in argv)
+        assert "/home/user/.gitconfig" in bash_script
+        assert "X-Bubble-Token: $TOKEN" in bash_script
+        # Token must NOT appear in argv — it's piped via input=
+        assert "tok123" not in bash_script
+        # Token MUST appear in the input kwarg (stdin payload)
+        assert "tok123" in (git_call[1].get("input") or "")
 
 
 def test_setup_auth_proxy_remote_tunnel_fails():

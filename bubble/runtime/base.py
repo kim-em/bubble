@@ -71,10 +71,14 @@ class ContainerRuntime(ABC):
         """Delete a container."""
 
     @abstractmethod
-    def exec(self, name: str, command: list[str], **kwargs) -> str:
+    def exec(self, name: str, command: list[str], *, input: str | None = None, **kwargs) -> str:
         """Execute a command inside a container, return stdout.
 
         Raises ``RuntimeError`` (or a subclass) if the command fails.
+
+        ``input`` (when non-None) is piped to the command's stdin.  This is
+        the right channel for sensitive data — anything passed in argv shows
+        up in the container's process list.
         """
 
     @abstractmethod
