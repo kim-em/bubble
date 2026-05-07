@@ -47,6 +47,100 @@ _CONTAINER_PROXY_PORT = 7654
 _CONTAINER_GH_SOCKET = "/bubble/gh-proxy.sock"
 
 
+# ---------------------------------------------------------------------------
+# Sensitive-payload helpers
+# ---------------------------------------------------------------------------
+#
+# Tokens MUST NOT appear in any process's argv on the host or inside the
+# container — argv is visible via /proc/<pid>/cmdline to other users on the
+# box.  These helpers build bash snippets that read the token from stdin
+# (we pipe it via the runtime's input=... channel) and use heredoc-fed
+# `cat` to write config files; both avoid putting the token on a command
+# line.
+#
+# The bash text itself only references the *literal* string ``$TOKEN`` —
+# it's the variable name, not the value, so it is safe to ship in argv.
+
+
+def _bash_with_stdin_token(payload: str) -> str:
+    """Wrap *payload* so it runs with ``$TOKEN`` set from stdin.
+
+    The caller passes the script via stdin (see ``runtime.exec(input=...)``
+    or ``_ssh_run(input=...)``).  The first line of stdin is read into
+    ``TOKEN``; *payload* may reference ``$TOKEN`` from that point on.
+
+    ``set -e`` aborts on the first failing step so a partial config write
+    doesn't leave a half-configured container.
+    """
+    # `IFS= read -r` reads one line without trimming; this is safer than
+    # `cat` which would slurp any trailing newline-or-content the caller
+    # might have appended.
+    return f"set -e\nIFS= read -r TOKEN\n{payload}"
+
+
+# Append [url] and [http] sections to user's .gitconfig.  Heredoc body
+# expansion happens in bash before piping to cat — no argv exposure.
+# {port} is the only template substitution; $TOKEN is literal until bash
+# expands it inside the heredoc.
+_AUTH_PROXY_GIT_CONFIG_PAYLOAD = """\
+mkdir -p /home/user
+touch /home/user/.gitconfig
+chown user:user /home/user/.gitconfig
+chmod 600 /home/user/.gitconfig
+cat >> /home/user/.gitconfig <<GITCONFIG
+[url "http://127.0.0.1:{port}/git/"]
+\tinsteadOf = https://github.com/
+[http "http://127.0.0.1:{port}/"]
+\textraHeader = X-Bubble-Token: $TOKEN
+GITCONFIG
+"""
+
+
+# Write /etc/profile.d/bubble-gh.sh with GH_CONFIG_DIR / GH_TOKEN / GH_REPO.
+# Both GH_REPO and GH_REPO_FILE are template-only (template-injected before
+# bash sees them) — they're shell metadata-free identifiers.  Only $TOKEN
+# is read from stdin.
+_GH_PROXY_PROFILE_PAYLOAD = """\
+mkdir -p /etc/profile.d
+cat > /etc/profile.d/bubble-gh.sh <<PROFILE
+export GH_CONFIG_DIR=/etc/bubble/gh
+export GH_TOKEN=$TOKEN{gh_repo_line}
+PROFILE
+chmod 644 /etc/profile.d/bubble-gh.sh{repo_file_block}
+"""
+
+
+# Write /etc/profile.d/bubble-gh-inject.sh with GH_TOKEN and GITHUB_TOKEN.
+# Used by the `direct` (level 5) escape hatch — the host's real token goes
+# into the container's environment.
+_GH_INJECT_PROFILE_PAYLOAD = """\
+mkdir -p /etc/profile.d
+cat > /etc/profile.d/bubble-gh-inject.sh <<PROFILE
+export GH_TOKEN=$TOKEN
+export GITHUB_TOKEN=$TOKEN
+PROFILE
+chmod 644 /etc/profile.d/bubble-gh-inject.sh
+"""
+
+
+def _gh_proxy_profile_payload(owner: str, repo: str) -> str:
+    """Build the gh proxy profile.d payload.  The optional GH_REPO line
+    only appears when owner/repo are known."""
+    if owner and repo:
+        # owner/repo are repo identifiers and contain no shell metacharacters
+        # we'd worry about — but quote anyway for defense in depth.
+        q_repo = shlex.quote(f"{owner}/{repo}")
+        gh_repo_line = f"\nexport GH_REPO={q_repo}"
+        repo_file_block = f"\nmkdir -p /etc/bubble/gh && echo {q_repo} > /etc/bubble/gh/repo"
+    else:
+        gh_repo_line = ""
+        repo_file_block = ""
+    return _GH_PROXY_PROFILE_PAYLOAD.format(
+        gh_repo_line=gh_repo_line,
+        repo_file_block=repo_file_block,
+    )
+
+
 def get_host_gh_token() -> str | None:
     """Get the GitHub auth token from the host's gh CLI.
 
@@ -268,19 +362,18 @@ def setup_auth_proxy(
     # the listener actually accepting connections.
     _wait_for_proxy_device(runtime, container, _CONTAINER_PROXY_PORT)
 
-    # Configure git inside the container to use the proxy
-    q_token = shlex.quote(token)
-    git_config_cmd = (
-        f"git config --global url.'http://127.0.0.1:{_CONTAINER_PROXY_PORT}/git/'.insteadOf"
-        f" 'https://github.com/'"
-        f" && git config --global http.'http://127.0.0.1:{_CONTAINER_PROXY_PORT}/'.extraHeader"
-        f" 'X-Bubble-Token: {q_token}'"
-    )
-
+    # Configure git inside the container to use the proxy.
+    #
+    # Write user's .gitconfig directly via heredoc — `git config --global`
+    # would put the token in argv ("git config http... extraHeader X-Bubble-Token: <real>")
+    # and so would `su -c "..."` with the token expanded into the command.
+    # The heredoc body is fed to `cat` via the kernel's pipe, not argv.
+    payload = _AUTH_PROXY_GIT_CONFIG_PAYLOAD.format(port=_CONTAINER_PROXY_PORT)
     try:
         runtime.exec(
             container,
-            ["bash", "-c", f"su - user -c {shlex.quote(git_config_cmd)}"],
+            ["bash", "-c", _bash_with_stdin_token(payload)],
+            input=token + "\n",
         )
     except RuntimeError as e:
         if not machine_readable:
@@ -336,26 +429,14 @@ def _setup_gh_proxy(
     # GH_CONFIG_DIR points to /etc/bubble/gh/ (created by gh.sh tool script)
     # GH_TOKEN is the per-container bubble proxy token — gh sends it as
     # Authorization header, the proxy validates it and swaps in the real token.
-    q_token = shlex.quote(token)
     # GH_REPO tells gh which repo to use, bypassing remote URL parsing.
-    # Without this, gh can't match the proxy URL (127.0.0.1:7654) to github.com.
-    gh_repo_line = ""
-    repo_file_line = ""
-    if owner and repo:
-        q_repo = shlex.quote(f"{owner}/{repo}")
-        gh_repo_line = f" && echo 'export GH_REPO={q_repo}' >> /etc/profile.d/bubble-gh.sh"
-        # Also write to a file for the gh wrapper to read in non-login shells
-        repo_file_line = f" && echo {q_repo} > /etc/bubble/gh/repo"
-    profile_script = (
-        f'echo "export GH_CONFIG_DIR=/etc/bubble/gh" > /etc/profile.d/bubble-gh.sh'
-        f" && echo 'export GH_TOKEN={q_token}' >> /etc/profile.d/bubble-gh.sh"
-        f"{gh_repo_line}"
-        f" && chmod 644 /etc/profile.d/bubble-gh.sh"
-        f"{repo_file_line}"
-    )
-
+    payload = _gh_proxy_profile_payload(owner, repo)
     try:
-        runtime.exec(container, ["bash", "-c", profile_script])
+        runtime.exec(
+            container,
+            ["bash", "-c", _bash_with_stdin_token(payload)],
+            input=token + "\n",
+        )
     except RuntimeError as e:
         if not machine_readable:
             detail(f"Warning: failed to configure gh environment: {e}")
@@ -439,15 +520,9 @@ def setup_auth_proxy_remote(
         remove_auth_tokens(container)
         return False
 
-    # Configure git inside the container to use the proxy
-    q_token = shlex.quote(token)
-    git_config_cmd = (
-        f"git config --global url.'http://127.0.0.1:{_CONTAINER_PROXY_PORT}/git/'.insteadOf"
-        f" 'https://github.com/'"
-        f" && git config --global http.'http://127.0.0.1:{_CONTAINER_PROXY_PORT}/'.extraHeader"
-        f" 'X-Bubble-Token: {q_token}'"
-    )
-
+    # Configure git inside the container to use the proxy.  Token comes
+    # via stdin (--with-stdin) so it never appears in the remote argv.
+    payload = _AUTH_PROXY_GIT_CONFIG_PAYLOAD.format(port=_CONTAINER_PROXY_PORT)
     try:
         _ssh_run(
             remote_host,
@@ -455,12 +530,14 @@ def setup_auth_proxy_remote(
                 "bubble",
                 "internal",
                 "incus-exec",
+                "--with-stdin",
                 container,
                 "bash",
                 "-c",
-                f"su - user -c {shlex.quote(git_config_cmd)}",
+                _bash_with_stdin_token(payload),
             ],
             timeout=15,
+            input=token + "\n",
         )
     except Exception as e:
         if not machine_readable:
@@ -521,28 +598,23 @@ def _setup_gh_proxy_remote(
             detail("gh CLI will not have API access.")
         return
 
-    # Configure gh environment via profile.d
-    q_token = shlex.quote(token)
-    gh_repo_line = ""
-    repo_file_line = ""
-    if owner and repo:
-        q_repo = shlex.quote(f"{owner}/{repo}")
-        gh_repo_line = f" && echo 'export GH_REPO={q_repo}' >> /etc/profile.d/bubble-gh.sh"
-        # Also write to a file for the gh wrapper to read in non-login shells
-        repo_file_line = f" && echo {q_repo} > /etc/bubble/gh/repo"
-    profile_cmd = (
-        f'echo "export GH_CONFIG_DIR=/etc/bubble/gh" > /etc/profile.d/bubble-gh.sh'
-        f" && echo 'export GH_TOKEN={q_token}' >> /etc/profile.d/bubble-gh.sh"
-        f"{gh_repo_line}"
-        f" && chmod 644 /etc/profile.d/bubble-gh.sh"
-        f"{repo_file_line}"
-    )
-
+    # Configure gh environment via profile.d.  Token comes via stdin.
+    payload = _gh_proxy_profile_payload(owner, repo)
     try:
         _ssh_run(
             remote_host,
-            ["bubble", "internal", "incus-exec", container, "bash", "-c", profile_cmd],
+            [
+                "bubble",
+                "internal",
+                "incus-exec",
+                "--with-stdin",
+                container,
+                "bash",
+                "-c",
+                _bash_with_stdin_token(payload),
+            ],
             timeout=15,
+            input=token + "\n",
         )
     except RuntimeError as e:
         if not machine_readable:
@@ -569,15 +641,12 @@ def inject_gh_token(
             detail("Warning: no host GitHub token available. Run 'gh auth login' first.")
         return False
 
-    q_token = shlex.quote(token)
-    profile_script = (
-        f'echo "export GH_TOKEN={q_token}" > /etc/profile.d/bubble-gh-inject.sh'
-        f" && echo 'export GITHUB_TOKEN={q_token}' >> /etc/profile.d/bubble-gh-inject.sh"
-        f" && chmod 644 /etc/profile.d/bubble-gh-inject.sh"
-    )
-
     try:
-        runtime.exec(container, ["bash", "-c", profile_script])
+        runtime.exec(
+            container,
+            ["bash", "-c", _bash_with_stdin_token(_GH_INJECT_PROFILE_PAYLOAD)],
+            input=token + "\n",
+        )
     except RuntimeError as e:
         if not machine_readable:
             detail(f"Warning: failed to inject GitHub token: {e}")
@@ -607,18 +676,21 @@ def inject_gh_token_remote(
             detail("Warning: no host GitHub token available. Run 'gh auth login' first.")
         return False
 
-    q_token = shlex.quote(token)
-    profile_script = (
-        f'echo "export GH_TOKEN={q_token}" > /etc/profile.d/bubble-gh-inject.sh'
-        f" && echo 'export GITHUB_TOKEN={q_token}' >> /etc/profile.d/bubble-gh-inject.sh"
-        f" && chmod 644 /etc/profile.d/bubble-gh-inject.sh"
-    )
-
     try:
         _ssh_run(
             remote_host,
-            ["bubble", "internal", "incus-exec", container, "bash", "-c", profile_script],
+            [
+                "bubble",
+                "internal",
+                "incus-exec",
+                "--with-stdin",
+                container,
+                "bash",
+                "-c",
+                _bash_with_stdin_token(_GH_INJECT_PROFILE_PAYLOAD),
+            ],
             timeout=15,
+            input=token + "\n",
         )
     except Exception as e:
         if not machine_readable:

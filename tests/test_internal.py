@@ -18,8 +18,8 @@ class _RecordingRuntime:
         self.exec_calls: list[tuple] = []
         self.add_device_calls: list[tuple] = []
 
-    def exec(self, name, command, **kwargs):
-        self.exec_calls.append((name, list(command)))
+    def exec(self, name, command, *, input=None, **kwargs):
+        self.exec_calls.append((name, list(command), input))
         return "ok"
 
     def add_device(self, name, device_name, device_type, **props):
@@ -59,7 +59,7 @@ def test_incus_exec_forwards_argv(monkeypatch, tmp_data_dir):
         ["internal", "incus-exec", "my-bubble", "bash", "-c", "echo hello"],
     )
     assert result.exit_code == 0
-    assert rt.exec_calls == [("my-bubble", ["bash", "-c", "echo hello"])]
+    assert rt.exec_calls == [("my-bubble", ["bash", "-c", "echo hello"], None)]
     # Output is forwarded
     assert "ok" in result.output
 
@@ -83,7 +83,38 @@ def test_incus_exec_passes_dashes_through(monkeypatch, tmp_data_dir):
         ["internal", "incus-exec", "my-bubble", "ls", "-la", "--color=auto"],
     )
     assert result.exit_code == 0
-    assert rt.exec_calls == [("my-bubble", ["ls", "-la", "--color=auto"])]
+    assert rt.exec_calls == [("my-bubble", ["ls", "-la", "--color=auto"], None)]
+
+
+def test_incus_exec_with_stdin_pipes_stdin_to_runtime(monkeypatch, tmp_data_dir):
+    """--with-stdin reads our stdin and passes it to runtime.exec(input=...)."""
+    rt = _RecordingRuntime()
+    _patch_runtime(monkeypatch, rt)
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["internal", "incus-exec", "--with-stdin", "my-bubble", "bash", "-c", "cat"],
+        input="secret-token\n",
+    )
+    assert result.exit_code == 0
+    # Token reached the runtime via the input= kwarg, not argv
+    assert rt.exec_calls == [
+        ("my-bubble", ["bash", "-c", "cat"], "secret-token\n"),
+    ]
+
+
+def test_incus_exec_without_with_stdin_does_not_read_stdin(monkeypatch, tmp_data_dir):
+    """Without --with-stdin, input= stays None even if stdin has content."""
+    rt = _RecordingRuntime()
+    _patch_runtime(monkeypatch, rt)
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["internal", "incus-exec", "my-bubble", "true"],
+        input="should-be-ignored\n",
+    )
+    assert result.exit_code == 0
+    assert rt.exec_calls == [("my-bubble", ["true"], None)]
 
 
 def test_incus_exec_runtime_error_exits_nonzero(monkeypatch, tmp_data_dir):
