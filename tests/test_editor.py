@@ -4,7 +4,7 @@ import subprocess
 
 from bubble.images.builder import IMAGES
 from bubble.tools import EDITOR_TOOLS, TOOLS, resolve_tools
-from bubble.vscode import open_editor
+from bubble.vscode import open_editor, open_editor_native
 
 
 class TestEditorAsTools:
@@ -151,8 +151,32 @@ class TestOpenEditorShell:
         assert calls == [["ssh", "bubble-test-bubble"]]
 
     def test_shell_with_command(self, monkeypatch):
-        """Shell editor with command should SSH and pass the command."""
+        """Shell editor with command should SSH and pass the command verbatim."""
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
-        open_editor("shell", "test-bubble", command=["lake", "build"])
-        assert calls == [["ssh", "bubble-test-bubble", "lake", "build"]]
+        open_editor("shell", "test-bubble", command="lake build")
+        assert calls == [["ssh", "bubble-test-bubble", "lake build"]]
+
+    def test_shell_with_quoted_command(self, monkeypatch):
+        """Shell editor preserves quoting by passing the command as one ssh arg."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_editor("shell", "test-bubble", command="bash -lc 'gh auth status'")
+        assert calls == [["ssh", "bubble-test-bubble", "bash -lc 'gh auth status'"]]
+
+
+class TestOpenEditorNativeShell:
+    def test_native_shell_no_command(self, monkeypatch):
+        """Native shell without command spawns an interactive $SHELL in cwd."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
+        open_editor_native("shell", "/tmp/proj")
+        assert calls[0][0][:2] == ["bash", "-c"]
+        assert "exec $SHELL" in calls[0][0][2]
+
+    def test_native_shell_with_command(self, monkeypatch):
+        """Native shell with command runs it via `bash -c` in cwd."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
+        open_editor_native("shell", "/tmp/proj", command="bash -lc 'gh auth status'")
+        assert calls == [(["bash", "-c", "bash -lc 'gh auth status'"], {"cwd": "/tmp/proj"})]

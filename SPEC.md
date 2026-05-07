@@ -251,7 +251,10 @@ forwarding doesn't work reliably through Colima on macOS.
 | `neovim` | `ssh bubble-<name> -t "cd /home/user/<repo> && nvim ."` |
 | `shell` | `ssh bubble-<name>` |
 
-For `--command CMD`: `ssh bubble-<name> <cmd args...>`
+For `--command CMD`: `ssh bubble-<name> <CMD>` — the `CMD` string is passed
+to ssh as a single argument, so it is parsed by the remote shell exactly
+as if typed after `ssh bubble-<name>` interactively. Quoting is preserved
+verbatim; no host-side `shlex.split` is performed.
 
 ### 1.10 Reattachment
 
