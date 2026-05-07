@@ -1,9 +1,15 @@
 """VSCode Remote SSH integration."""
 
+import contextlib
+import fcntl
+import os
 import re
 import shlex
 import subprocess
+import tempfile
 from pathlib import Path
+
+from .config import DATA_DIR
 
 # Valid bubble name pattern (alphanumeric + hyphens, starts with letter)
 _BUBBLE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -11,6 +17,41 @@ _BUBBLE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 SSH_CONFIG_DIR = Path.home() / ".ssh" / "config.d"
 SSH_CONFIG_FILE = SSH_CONFIG_DIR / "bubble"
 SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"
+_SSH_CONFIG_LOCK_FILE = DATA_DIR / "ssh-config.lock"
+
+
+@contextlib.contextmanager
+def _ssh_config_lock():
+    """Serialize all SSH-config writes (add/remove + Include directive)."""
+    _SSH_CONFIG_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_SSH_CONFIG_LOCK_FILE, "w") as fd:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Atomically replace *path* with *content*, preserving symlinks and mode.
+
+    If *path* is a symlink, writes to (and replaces) the symlink target rather
+    than clobbering the symlink itself — important for users whose
+    ~/.ssh/config is symlinked from a dotfiles repo.
+    """
+    real = path.resolve() if path.is_symlink() else path
+    real.parent.mkdir(parents=True, exist_ok=True)
+    mode = real.stat().st_mode & 0o777 if real.exists() else 0o600
+    fd, tmp = tempfile.mkstemp(prefix=real.name + ".", dir=str(real.parent))
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.chmod(tmp, mode)
+        os.replace(tmp, real)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
 
 
 def add_ssh_config(
@@ -30,7 +71,6 @@ def add_ssh_config(
     """
     if not _BUBBLE_NAME_RE.match(bubble_name):
         raise ValueError(f"Invalid bubble name for SSH config: {bubble_name!r}")
-    SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     incus_cmd = f'incus exec {bubble_name} -- su - {user} -c "nc localhost 22"'
 
@@ -59,47 +99,57 @@ def add_ssh_config(
     lines.append("  LogLevel ERROR")
 
     entry = "\n" + "\n".join(lines) + "\n"
-    # Append to config file
-    with open(SSH_CONFIG_FILE, "a") as f:
-        f.write(entry)
-
-    _ensure_include_directive()
+    with _ssh_config_lock():
+        SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        existing = SSH_CONFIG_FILE.read_text() if SSH_CONFIG_FILE.exists() else ""
+        _atomic_write_text(SSH_CONFIG_FILE, existing + entry)
+        _ensure_include_directive_locked()
 
 
 def remove_ssh_config(bubble_name: str):
     """Remove an SSH config entry for a bubble."""
-    if not SSH_CONFIG_FILE.exists():
-        return
+    with _ssh_config_lock():
+        if not SSH_CONFIG_FILE.exists():
+            return
 
-    lines = SSH_CONFIG_FILE.read_text().splitlines()
-    result = []
-    skip = False
-    for line in lines:
-        if line.strip() == f"Host bubble-{bubble_name}":
-            skip = True
-            continue
-        if skip and line.strip().startswith("Host "):
-            skip = False
-        if not skip:
-            result.append(line)
+        lines = SSH_CONFIG_FILE.read_text().splitlines()
+        result = []
+        skip = False
+        for line in lines:
+            if line.strip() == f"Host bubble-{bubble_name}":
+                skip = True
+                continue
+            if skip and line.strip().startswith("Host "):
+                skip = False
+            if not skip:
+                result.append(line)
 
-    SSH_CONFIG_FILE.write_text("\n".join(result) + "\n" if result else "")
+        new_content = "\n".join(result) + "\n" if result else ""
+        _atomic_write_text(SSH_CONFIG_FILE, new_content)
 
 
-def _ensure_include_directive():
-    """Ensure ~/.ssh/config includes our config.d directory."""
+def _ensure_include_directive_locked():
+    """Ensure ~/.ssh/config includes our config.d directory.
+
+    Caller must hold _ssh_config_lock().
+    """
     ssh_config = SSH_MAIN_CONFIG
     include_line = f"Include {SSH_CONFIG_DIR}/*"
 
-    if ssh_config.exists():
-        content = ssh_config.read_text()
+    if ssh_config.exists() or ssh_config.is_symlink():
+        # is_symlink() check covers a symlink whose target is missing — we
+        # still want to update the linked file rather than create a sibling.
+        try:
+            content = ssh_config.read_text()
+        except FileNotFoundError:
+            content = ""
         if include_line in content:
             return
         # Prepend the include (must be at top of ssh config)
-        ssh_config.write_text(include_line + "\n\n" + content)
+        _atomic_write_text(ssh_config, include_line + "\n\n" + content)
     else:
         ssh_config.parent.mkdir(parents=True, exist_ok=True)
-        ssh_config.write_text(include_line + "\n")
+        _atomic_write_text(ssh_config, include_line + "\n")
 
 
 def open_editor(
