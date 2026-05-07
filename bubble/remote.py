@@ -414,6 +414,7 @@ def remote_open(
     new_branch: str | None = None,
     base_ref: str | None = None,
     ai_prompt: str = "",
+    github_security: str | None = None,
 ) -> dict:
     """Open a bubble on a remote host.
 
@@ -446,6 +447,8 @@ def remote_open(
         args.append("--codex-config")
     elif codex_config is False:
         args.append("--no-codex-config")
+    if github_security is not None:
+        args += ["--github-security", github_security]
     if custom_name:
         args += ["--name", custom_name]
     if git_name:

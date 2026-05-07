@@ -50,6 +50,7 @@ from .naming import deduplicate_name, generate_name
 from .provisioning import mount_overlaps, provision_container
 from .repo_registry import RepoRegistry
 from .security import (
+    GITHUB_LEVELS,
     get_github_level,
     is_enabled,
     is_locked_off,
@@ -322,6 +323,7 @@ def _open_remote(
     new_branch=None,
     base_ref=None,
     ephemeral=False,
+    github_security=None,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -345,6 +347,7 @@ def _open_remote(
             new_branch=new_branch,
             base_ref=base_ref,
             ai_prompt=ai_prompt,
+            github_security=github_security,
         )
     except RuntimeError as e:
         click.echo(str(e), err=True)
@@ -609,14 +612,13 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
 )
 @click.option(
     "--github-security",
-    type=str,
+    type=click.Choice(GITHUB_LEVELS),
     default=None,
     help=(
         "Override security.github for this bubble only. Accepts the same"
-        " values as `bubble security set github`: off, basic, rest,"
-        " allowlist-read-graphql, allowlist-write-graphql, write-graphql,"
-        " direct. Lockdown still wins. Default: use the host-configured"
-        " level."
+        " values as `bubble security set github`. Lockdown still wins"
+        " (rejected when security.github=off). Default: use the"
+        " host-configured level."
     ),
 )
 @click.option(
@@ -663,16 +665,6 @@ def open_cmd(
     skip_auth_setup,
 ):
     """Open a bubble for one or more targets (GitHub URL, repo, local path, or PR number)."""
-    # Validate --github-security against the known levels.
-    if github_security is not None:
-        from .security import GITHUB_LEVELS
-
-        if github_security not in GITHUB_LEVELS:
-            click.echo(
-                f"Error: --github-security {github_security!r} not in {', '.join(GITHUB_LEVELS)}",
-                err=True,
-            )
-            sys.exit(1)
 
     # When -b is used without an explicit target, infer owner/repo from cwd
     if not targets:
@@ -969,6 +961,7 @@ def _open_single(
             new_branch=new_branch,
             base_ref=base_ref,
             ephemeral=ephemeral,
+            github_security=github_security,
         )
         return
 
