@@ -107,12 +107,14 @@ def open_editor(
     bubble_name: str,
     remote_path: str = "/home/user",
     workspace_file: str | None = None,
-    command: list[str] | None = None,
+    command: str | None = None,
 ):
     """Open the specified editor connected to a bubble.
 
     If command is provided (only valid with editor="shell"), runs that command
-    via SSH instead of opening an interactive session.
+    via SSH instead of opening an interactive session. The command string is
+    passed verbatim as a single SSH argument; the remote shell parses it with
+    `$SHELL -c`, so callers can write it exactly as they would after `ssh host`.
     """
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
@@ -138,14 +140,16 @@ def open_editor(
     elif editor == "shell":
         ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
         if command:
-            ssh_cmd += command
+            ssh_cmd.append(command)
         subprocess.run(ssh_cmd)
 
 
-def open_editor_native(editor: str, local_path: str, command: list[str] | None = None):
+def open_editor_native(editor: str, local_path: str, command: str | None = None):
     """Open the specified editor for a native (non-containerized) workspace.
 
     Opens VSCode directly on the local path, or spawns a shell in that directory.
+    If command is provided (only with editor="shell"), runs it via `bash -c`,
+    matching how the SSH shell editor passes the same string to the remote shell.
     """
     if editor == "vscode":
         try:
@@ -158,7 +162,7 @@ def open_editor_native(editor: str, local_path: str, command: list[str] | None =
             print(f"VSCode CLI not found or failed. Open manually: {local_path}")
     elif editor == "shell":
         if command:
-            subprocess.run(command, cwd=local_path)
+            subprocess.run(["bash", "-c", command], cwd=local_path)
         else:
             subprocess.run(
                 ["bash", "-c", f"cd {shlex.quote(local_path)} && exec $SHELL"],
