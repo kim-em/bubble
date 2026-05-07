@@ -215,6 +215,25 @@ def get_github_level(config: dict) -> str:
     return value
 
 
+def resolve_github_level(config: dict, override: str | None = None) -> str:
+    """Resolve effective GitHub level, honouring an optional per-launch override.
+
+    Lockdown still wins: if `security.github` is explicitly locked off, an
+    override raises ValueError. Otherwise an explicit override (one of the
+    `GITHUB_LEVELS` values) is returned verbatim; with no override, falls
+    back to `get_github_level(config)`.
+    """
+    if override is None:
+        return get_github_level(config)
+    if override not in GITHUB_LEVELS:
+        raise ValueError(f"override {override!r} not in {GITHUB_LEVELS}")
+    if is_locked_off(config, "github"):
+        raise ValueError(
+            "Cannot override --github-security: security.github is locked off"
+        )
+    return override
+
+
 def should_include_credentials(requested: bool, config: dict, setting_name: str) -> bool:
     """Resolve whether credentials should be included.
 

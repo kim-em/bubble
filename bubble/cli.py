@@ -586,6 +586,18 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     ),
 )
 @click.option(
+    "--github-security",
+    type=str,
+    default=None,
+    help=(
+        "Override security.github for this bubble only. Accepts the same"
+        " values as `bubble security set github`: off, basic, rest,"
+        " allowlist-read-graphql, allowlist-write-graphql, write-graphql,"
+        " direct. Lockdown still wins. Default: use the host-configured"
+        " level."
+    ),
+)
+@click.option(
     "--ai-prompt-stdin",
     is_flag=True,
     hidden=True,
@@ -624,10 +636,23 @@ def open_cmd(
     codex_credentials,
     claude_config,
     codex_config,
+    github_security,
     ai_prompt_stdin,
     skip_auth_setup,
 ):
     """Open a bubble for one or more targets (GitHub URL, repo, local path, or PR number)."""
+    # Validate --github-security against the known levels.
+    if github_security is not None:
+        from .security import GITHUB_LEVELS
+
+        if github_security not in GITHUB_LEVELS:
+            click.echo(
+                f"Error: --github-security {github_security!r} not in"
+                f" {', '.join(GITHUB_LEVELS)}",
+                err=True,
+            )
+            sys.exit(1)
+
     # When -b is used without an explicit target, infer owner/repo from cwd
     if not targets:
         if new_branch:
@@ -686,6 +711,7 @@ def open_cmd(
                 codex_credentials=codex_credentials,
                 claude_config=claude_config,
                 codex_config=codex_config,
+                github_security=github_security,
                 ai_prompt_stdin=ai_prompt_stdin,
                 skip_auth_setup=skip_auth_setup,
             )
@@ -743,6 +769,7 @@ def _open_single(
     codex_credentials,
     claude_config,
     codex_config,
+    github_security,
     ai_prompt_stdin,
     skip_auth_setup=False,
 ):
@@ -751,6 +778,21 @@ def _open_single(
         target = "./" + target
 
     config = load_config()
+
+    # --github-security: per-launch override of security.github. Lockdown
+    # still wins. Apply by mutating a config copy so all downstream
+    # `get_github_level(config)` calls see the override transparently.
+    if github_security is not None:
+        if is_locked_off(config, "github"):
+            click.echo(
+                "Error: --github-security rejected because security.github=off."
+                " Re-enable: bubble security set github auto",
+                err=True,
+            )
+            sys.exit(1)
+        config = dict(config)
+        config["security"] = dict(config.get("security", {}))
+        config["security"]["github"] = github_security
 
     # Enforce security: reject all user mounts when user_mounts is locked off
     # This covers both --mount CLI flags and [[mounts]] from config
