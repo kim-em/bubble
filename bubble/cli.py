@@ -802,12 +802,14 @@ def _open_single(
         if git_email is None:
             git_email = auto_email
 
-    # Parse --command into a list
-    command_args = shlex.split(command) if command else None
+    # Treat a whitespace-only --command as no command (matches old shlex.split
+    # behavior where "   " parsed to []).
+    if command is not None and not command.strip():
+        command = None
 
     # Resolve editor: shortcut flags > --editor > config > vscode
     valid_editors = ("vscode", "emacs", "neovim", "shell")
-    if command_args:
+    if command:
         editor = "shell"
     elif shell:
         editor = "shell"
@@ -852,7 +854,7 @@ def _open_single(
             sys.exit(1)
         if not machine_readable:
             notices.finish()
-        open_native(target, editor, no_interactive, custom_name, command=command_args)
+        open_native(target, editor, no_interactive, custom_name, command=command)
         return
 
     # Priority: --local > --ssh > --cloud > [cloud] default > [remote] default_host
@@ -908,7 +910,7 @@ def _open_single(
             config,
             git_name=git_name,
             git_email=git_email,
-            command=command_args,
+            command=command,
             ai_config=ai_config,
             claude_credentials=claude_credentials,
             codex_credentials=codex_credentials,
@@ -971,7 +973,7 @@ def _open_single(
             machine_readable_output("reattached", existing, project_dir=project_dir)
             return
         notices.finish()
-        _reattach(runtime, existing, editor, no_interactive, command=command_args)
+        _reattach(runtime, existing, editor, no_interactive, command=command)
         return
 
     # Parse and register target
@@ -1019,7 +1021,7 @@ def _open_single(
             )
             return
         notices.finish()
-        _reattach(runtime, existing, editor, no_interactive, command=command_args)
+        _reattach(runtime, existing, editor, no_interactive, command=command)
         return
 
     # Resolve git source, detect language, and build image
@@ -1185,7 +1187,7 @@ def _open_single(
             machine_readable,
             git_name=git_name,
             git_email=git_email,
-            command=command_args,
+            command=command,
             ai_prompt=ai_prompt,
         )
     except Exception:
