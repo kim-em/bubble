@@ -24,7 +24,6 @@ REPOS_FILE = DATA_DIR / "repos.json"
 CLOUD_STATE_FILE = DATA_DIR / "cloud.json"
 CLOUD_KEY_FILE = DATA_DIR / "cloud_key"
 CLOUD_KNOWN_HOSTS = DATA_DIR / "known_hosts"
-NATIVE_DIR = DATA_DIR / "native"
 
 DEFAULT_CONFIG = {
     "editor": "vscode",
@@ -79,7 +78,7 @@ DEFAULT_CONFIG = {
 
 def ensure_dirs():
     """Create data directories if they don't exist."""
-    for d in [DATA_DIR, GIT_DIR, NATIVE_DIR]:
+    for d in [DATA_DIR, GIT_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
 

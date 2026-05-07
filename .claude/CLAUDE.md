@@ -96,7 +96,7 @@ created → running ⇄ paused → destroyed
 ```
 
 ### Network Allowlisting
-Uses iptables rules inside containers (not Incus ACLs) for portability across Colima/native setups. IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Base allowlist comes from config.toml; hooks contribute additional domains (e.g., Lean adds `releases.lean-lang.org`); enabled tools contribute runtime domains (e.g., vscode adds marketplace.visualstudio.com).
+Uses iptables rules inside containers (not Incus ACLs) for portability across runtimes (e.g., Colima on macOS, native Incus on Linux). IPv6 is blocked entirely. DNS restricted to container resolver only. No outbound SSH. Base allowlist comes from config.toml; hooks contribute additional domains (e.g., Lean adds `releases.lean-lang.org`); enabled tools contribute runtime domains (e.g., vscode adds marketplace.visualstudio.com).
 
 ### Editor Selection
 The default editor is VSCode via Remote SSH. Use `--shell` for a plain SSH session, `--emacs` or `--neovim` for those editors. The editor is installed as a tool in the base image (so it's pre-baked, not installed per-container). The `open_editor()` function in `vscode.py` dispatches to the appropriate launcher.

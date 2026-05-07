@@ -3,11 +3,10 @@
 import json
 import shutil
 import unicodedata
-from pathlib import Path
 
 import click
 
-from ..clean import CleanStatus, check_clean, check_native_clean
+from ..clean import CleanStatus, check_clean
 from ..config import load_config
 from ..lifecycle import load_registry, prune_stale_entries
 from ..setup import get_runtime
@@ -132,29 +131,6 @@ def _remote_entries_from_registry() -> list[dict]:
                 "remote_host_spec": host_spec,
             }
         )
-    return entries
-
-
-def _native_entries_from_registry(show_clean: bool = False) -> list[dict]:
-    """Build list entries for native workspaces from the registry."""
-    registry = load_registry()
-    entries = []
-    for name, info in registry.get("bubbles", {}).items():
-        if not info.get("native"):
-            continue
-        native_path = info.get("native_path", "")
-        state = "exists" if native_path and Path(native_path).is_dir() else "missing"
-        entry = {
-            "name": name,
-            "state": state,
-            "location": "native",
-            "created_at": _parse_iso(info.get("created_at")),
-            "last_used_at": None,
-            "native_path": native_path,
-        }
-        if show_clean and state == "exists":
-            entry["clean_status"] = check_native_clean(native_path, name)
-        entries.append(entry)
     return entries
 
 
@@ -328,13 +304,6 @@ def register_list_command(main):
                         e["state"] = "unreachable"
 
             entries.extend(remote_entries)
-
-        # --- Native workspaces from registry (always local) ---
-        native_entries = _native_entries_from_registry(show_clean=show_clean)
-        native_entries = [e for e in native_entries if e["name"] not in local_names]
-        entries.extend(native_entries)
-        if native_entries:
-            has_remote = True  # Force showing location column
 
         # --- Output ---
         if as_json:

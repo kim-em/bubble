@@ -34,15 +34,13 @@ def _bubble_counts(config: dict) -> dict[str, int]:
             counts["registered"] = n
         return counts
 
-    # Also count remote and native bubbles from the registry
+    # Also count remote bubbles from the registry
     registry = load_registry()
     for name, info in registry.get("bubbles", {}).items():
         if name in local_names:
             continue
         if info.get("remote_host"):
             counts["remote"] = counts.get("remote", 0) + 1
-        elif info.get("native"):
-            counts["native"] = counts.get("native", 0) + 1
 
     return counts
 
@@ -52,7 +50,7 @@ def _format_counts(counts: dict[str, int]) -> str:
     if not counts:
         return "none"
     # Preferred display order
-    order = ["running", "frozen", "stopped", "remote", "native", "registered"]
+    order = ["running", "frozen", "stopped", "remote", "registered"]
     # Map internal state names to display names
     display = {"frozen": "paused"}
     parts = []
@@ -186,8 +184,6 @@ def register_status_command(main):
                         parts.append(repo)
                     if host:
                         parts.append(f"on {host}")
-                    elif info.get("native"):
-                        parts.append("native")
                     click.echo(f"  {' — '.join(parts)}")
 
             # Remote bubbles
