@@ -1,16 +1,13 @@
 """Lifecycle commands: pause, pop, cleanup."""
 
-import os
-import shutil
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import click
 
-from ..clean import check_clean, check_native_clean, format_reasons
-from ..config import NATIVE_DIR, load_config
+from ..clean import check_clean, format_reasons
+from ..config import load_config
 from ..lifecycle import get_bubble_info, unregister_bubble
 from ..setup import get_runtime
 from ..vscode import remove_ssh_config
@@ -51,24 +48,6 @@ def destroy_bubble(name: str, info: dict | None = None, on_progress=None) -> tup
             )
         remove_ssh_config(name)
         _cleanup_tokens(name, remote_host_spec=info["remote_host"])
-        unregister_bubble(name)
-        return True, ""
-
-    # Native workspace: rmtree under NATIVE_DIR (refuse paths outside the root)
-    if info and info.get("native"):
-        native_path = info.get("native_path", "")
-        if native_path and Path(native_path).is_dir():
-            resolved = Path(native_path).resolve()
-            native_dir_resolved = NATIVE_DIR.resolve()
-            if not str(resolved).startswith(str(native_dir_resolved) + os.sep):
-                return False, (
-                    f"Refusing to delete: path '{native_path}' is not under {NATIVE_DIR}"
-                )
-            try:
-                shutil.rmtree(resolved)
-            except OSError as e:
-                return False, f"Failed to remove native workspace: {e}"
-        _cleanup_tokens(name)
         unregister_bubble(name)
         return True, ""
 
@@ -133,11 +112,6 @@ def register_lifecycle_commands(main):
     def pause(name):
         """Pause (freeze) a bubble."""
         info = get_bubble_info(name)
-        if info and info.get("native"):
-            click.echo(
-                "Native workspaces don't support pause/resume (no container state).", err=True
-            )
-            sys.exit(1)
         # Auto-route to remote host if the bubble is registered there
         if info and info.get("remote_host"):
             from ..remote import RemoteHost, apply_cloud_ssh_options, remote_command
@@ -173,24 +147,6 @@ def register_lifecycle_commands(main):
                     f"Permanently pop bubble '{name}' on {host.ssh_destination}?",
                     abort=True,
                 )
-            elif info and info.get("native"):
-                native_path = info.get("native_path", "")
-                if native_path and Path(native_path).is_dir():
-                    cs = check_native_clean(native_path, name)
-                    if cs.clean:
-                        click.echo(f"Native workspace '{name}' is clean. ", nl=False)
-                    elif cs.error:
-                        click.confirm(
-                            f"Cannot verify cleanness ({cs.error}). "
-                            f"Permanently pop native workspace '{name}'?",
-                            abort=True,
-                        )
-                    else:
-                        reasons = format_reasons(cs.reasons)
-                        click.echo("Warning: workspace has unsaved work:")
-                        for r in reasons:
-                            click.echo(f"  - {r}")
-                        click.confirm(f"Permanently pop native workspace '{name}'?", abort=True)
             else:
                 config = load_config()
                 runtime = get_runtime(config, ensure_ready=False)
@@ -220,8 +176,6 @@ def register_lifecycle_commands(main):
 
             host = RemoteHost.parse(info["remote_host"])
             click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
-        elif info and info.get("native"):
-            click.echo(f"Native workspace '{name}' popped.")
         else:
             click.echo(f"Bubble '{name}' popped.")
 

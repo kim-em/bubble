@@ -4,6 +4,7 @@ import json
 
 from bubble.lifecycle import (
     get_bubble_info,
+    load_registry,
     prune_stale_entries,
     register_bubble,
     unregister_bubble,
@@ -88,12 +89,6 @@ class TestPruneStaleEntries:
         assert pruned == []
         assert get_bubble_info("remote-one") is not None
 
-    def test_preserves_native_entries(self, tmp_data_dir):
-        register_bubble("native-one", "org/repo", native=True, native_path="/tmp/x")
-        pruned = prune_stale_entries(set())
-        assert pruned == []
-        assert get_bubble_info("native-one") is not None
-
     def test_no_stale_entries(self, tmp_data_dir):
         register_bubble("a", "org/repo")
         register_bubble("b", "org/repo")
@@ -105,3 +100,40 @@ class TestPruneStaleEntries:
     def test_empty_registry(self, tmp_data_dir):
         pruned = prune_stale_entries({"something"})
         assert pruned == []
+
+
+class TestLegacyNativeMigration:
+    """load_registry() should silently drop pre-removal native entries."""
+
+    def test_drops_native_entries(self, tmp_data_dir):
+        import bubble.config as config
+
+        config.REGISTRY_FILE.write_text(
+            json.dumps(
+                {
+                    "bubbles": {
+                        "old-native": {
+                            "org_repo": "org/repo",
+                            "native": True,
+                            "native_path": "/tmp/x",
+                        },
+                        "still-here": {"org_repo": "org/repo"},
+                    }
+                }
+            )
+        )
+        registry = load_registry()
+        assert "old-native" not in registry["bubbles"]
+        assert "still-here" in registry["bubbles"]
+        # Persisted to disk
+        on_disk = json.loads(config.REGISTRY_FILE.read_text())
+        assert "old-native" not in on_disk["bubbles"]
+
+    def test_no_native_entries_does_not_rewrite(self, tmp_data_dir):
+        import bubble.config as config
+
+        register_bubble("plain", "org/repo")
+        before = config.REGISTRY_FILE.stat().st_mtime
+        load_registry()  # should not rewrite
+        after = config.REGISTRY_FILE.stat().st_mtime
+        assert before == after

@@ -22,11 +22,26 @@ def _registry_lock():
         fd.close()
 
 
-def load_registry() -> dict:
-    """Load the bubble registry."""
+def _read_registry() -> dict:
+    """Read the registry without locking or migration. Internal use only."""
     if REGISTRY_FILE.exists():
         return json.loads(REGISTRY_FILE.read_text())
     return {"bubbles": {}}
+
+
+def load_registry() -> dict:
+    """Load the bubble registry, migrating away any legacy native entries."""
+    registry = _read_registry()
+    bubbles = registry.get("bubbles", {})
+    if any(info.get("native") for info in bubbles.values()):
+        with _registry_lock():
+            registry = _read_registry()
+            bubbles = registry.get("bubbles", {})
+            registry["bubbles"] = {
+                name: info for name, info in bubbles.items() if not info.get("native")
+            }
+            _save_registry(registry)
+    return registry
 
 
 def _save_registry(registry: dict):
@@ -45,13 +60,11 @@ def register_bubble(
     pr: int = 0,
     base_image: str = "",
     remote_host: str = "",
-    native: bool = False,
-    native_path: str = "",
     project_dir: str = "",
 ):
     """Record a bubble's creation in the registry."""
     with _registry_lock():
-        registry = load_registry()
+        registry = _read_registry()
         entry = {
             "org_repo": org_repo,
             "branch": branch,
@@ -63,9 +76,6 @@ def register_bubble(
             entry["base_image"] = base_image
         if remote_host:
             entry["remote_host"] = remote_host
-        if native:
-            entry["native"] = True
-            entry["native_path"] = native_path
         if project_dir:
             entry["project_dir"] = project_dir
         registry["bubbles"][name] = entry
@@ -81,7 +91,7 @@ def get_bubble_info(name: str) -> dict | None:
 def unregister_bubble(name: str):
     """Remove a bubble from the registry."""
     with _registry_lock():
-        registry = load_registry()
+        registry = _read_registry()
         registry["bubbles"].pop(name, None)
         _save_registry(registry)
 
@@ -89,14 +99,14 @@ def unregister_bubble(name: str):
 def prune_stale_entries(live_containers: set[str]) -> list[str]:
     """Remove registry entries for local containers that no longer exist.
 
-    Only prunes entries that are local (not remote, not native).
+    Only prunes entries that are local (not remote).
     Returns the list of pruned names.
     """
     with _registry_lock():
-        registry = load_registry()
+        registry = _read_registry()
         stale = []
         for name, info in registry.get("bubbles", {}).items():
-            if info.get("remote_host") or info.get("native"):
+            if info.get("remote_host"):
                 continue
             if name not in live_containers:
                 stale.append(name)

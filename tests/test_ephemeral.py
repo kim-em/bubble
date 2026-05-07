@@ -87,31 +87,6 @@ class TestEphemeralPopExitCode:
 class TestDestroyBubble:
     """destroy_bubble preserves local state on failure."""
 
-    def test_native_outside_native_dir_fails(self, tmp_path, monkeypatch):
-        """Refuses to delete native paths outside NATIVE_DIR; preserves state."""
-        from bubble.commands import lifecycle
-
-        # Build an info entry with a path outside NATIVE_DIR
-        bad_path = tmp_path / "outside-native-dir"
-        bad_path.mkdir()
-        info = {"native": True, "native_path": str(bad_path)}
-
-        unregistered = []
-        monkeypatch.setattr(
-            "bubble.commands.lifecycle.unregister_bubble",
-            lambda name: unregistered.append(name),
-        )
-        monkeypatch.setattr(
-            "bubble.commands.lifecycle._cleanup_tokens",
-            lambda *a, **kw: None,
-        )
-
-        ok, err = lifecycle.destroy_bubble("foo", info=info)
-        assert ok is False
-        assert "Refusing to delete" in err
-        assert unregistered == []  # local state preserved
-        assert bad_path.exists()  # path not deleted
-
     def test_local_delete_failure_preserves_state(self, monkeypatch):
         """If runtime.delete raises an unrecognized error, leave registry intact."""
         from bubble.commands import lifecycle
