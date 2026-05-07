@@ -97,7 +97,11 @@ class TestOpenEditorEmacs:
     def test_emacs_ssh_command(self, monkeypatch):
         """Emacs editor should SSH with -t and run emacs in project dir."""
         calls = []
-        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: (calls.append(cmd), subprocess.CompletedProcess(cmd, 0))[1],
+        )
         open_editor("emacs", "test-bubble", "/home/user/project")
         assert len(calls) == 1
         cmd = calls[0]
@@ -111,7 +115,11 @@ class TestOpenEditorEmacs:
     def test_emacs_checks_build_marker(self, monkeypatch):
         """Emacs SSH command should include marker file check for auto-build."""
         calls = []
-        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: (calls.append(cmd), subprocess.CompletedProcess(cmd, 0))[1],
+        )
         open_editor("emacs", "test-bubble", "/home/user/project")
         cmd = calls[0][3]
         assert ".bubble-fetch-cache" in cmd
@@ -122,7 +130,11 @@ class TestOpenEditorNeovim:
     def test_neovim_ssh_command(self, monkeypatch):
         """Neovim editor should SSH with -t and run nvim in project dir."""
         calls = []
-        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: (calls.append(cmd), subprocess.CompletedProcess(cmd, 0))[1],
+        )
         open_editor("neovim", "test-bubble", "/home/user/project")
         assert len(calls) == 1
         cmd = calls[0]
@@ -135,7 +147,11 @@ class TestOpenEditorNeovim:
     def test_neovim_checks_build_marker(self, monkeypatch):
         """Neovim SSH command should include marker file check for auto-build."""
         calls = []
-        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: (calls.append(cmd), subprocess.CompletedProcess(cmd, 0))[1],
+        )
         open_editor("neovim", "test-bubble", "/home/user/project")
         cmd = calls[0][3]
         assert ".bubble-fetch-cache" in cmd
@@ -146,13 +162,63 @@ class TestOpenEditorShell:
     def test_shell_no_command(self, monkeypatch):
         """Shell editor without command should just SSH."""
         calls = []
-        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: (calls.append(cmd), subprocess.CompletedProcess(cmd, 0))[1],
+        )
         open_editor("shell", "test-bubble")
         assert calls == [["ssh", "bubble-test-bubble"]]
 
     def test_shell_with_command(self, monkeypatch):
         """Shell editor with command should SSH and pass the command."""
         calls = []
-        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: (calls.append(cmd), subprocess.CompletedProcess(cmd, 0))[1],
+        )
         open_editor("shell", "test-bubble", command=["lake", "build"])
         assert calls == [["ssh", "bubble-test-bubble", "lake", "build"]]
+
+
+class TestOpenEditorReturnCode:
+    def test_shell_returns_subprocess_returncode(self, monkeypatch):
+        """open_editor with shell+command should propagate the SSH exit code."""
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 42),
+        )
+        rc = open_editor("shell", "test-bubble", command=["false"])
+        assert rc == 42
+
+    def test_shell_no_command_returns_returncode(self, monkeypatch):
+        """open_editor with shell (no command) should still return SSH exit code."""
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0),
+        )
+        rc = open_editor("shell", "test-bubble")
+        assert rc == 0
+
+    def test_emacs_returns_returncode(self, monkeypatch):
+        """open_editor with emacs returns the SSH exit code."""
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 7),
+        )
+        rc = open_editor("emacs", "test-bubble", "/home/user/project")
+        assert rc == 7
+
+    def test_vscode_returns_zero(self, monkeypatch):
+        """open_editor with vscode returns 0 (it detaches)."""
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0),
+        )
+        rc = open_editor("vscode", "test-bubble", "/home/user/project")
+        assert rc == 0

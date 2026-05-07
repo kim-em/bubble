@@ -29,6 +29,7 @@ def finalize_bubble(
     git_email="",
     command=None,
     ai_prompt="",
+    ephemeral=False,
 ):
     """Post-clone setup: hooks, SSH, registration, and attach.
 
@@ -122,7 +123,40 @@ def finalize_bubble(
 
     if not no_interactive:
         echo_editor_opening(editor)
-        open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
+        exit_code = open_editor(
+            editor, name, project_dir, workspace_file=workspace_file, command=command
+        )
+        if ephemeral and command:
+            _ephemeral_pop_and_exit(name, exit_code)
+
+
+def _ephemeral_pop_and_exit(name: str, exit_code: int):
+    """Pop the bubble after an --ephemeral --command run and exit.
+
+    Pop is best-effort: if it fails we still propagate the command's exit
+    code so callers can detect command failure. On pop failure, local state
+    (registry, SSH config) is preserved by destroy_bubble so the user can
+    retry with `bubble pop -f`.
+    """
+    import sys
+
+    from .commands.lifecycle import destroy_bubble
+    from .output import detail
+
+    detail(f"Popping ephemeral bubble '{name}'...")
+    error = ""
+    try:
+        ok, error = destroy_bubble(name)
+    except Exception as e:
+        ok = False
+        error = str(e)
+    if not ok:
+        click.echo(
+            f"Warning: failed to pop ephemeral bubble '{name}': "
+            f"{error or 'unknown error'}. Run 'bubble pop -f {name}' to clean up.",
+            err=True,
+        )
+    sys.exit(exit_code)
 
 
 def echo_editor_opening(editor: str):
