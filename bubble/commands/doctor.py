@@ -1,6 +1,5 @@
 """The 'doctor' diagnostic command."""
 
-import json
 import subprocess
 import sys
 
@@ -91,16 +90,9 @@ def register_doctor_command(main):
         # 2. Check for stuck incus operations
         click.echo("Checking for stuck operations...")
         try:
-            result = subprocess.run(
-                ["incus", "operation", "list", "--format=json"],
-                capture_output=True,
-                text=True,
-                check=True,
-                stdin=subprocess.DEVNULL,
-            )
+            all_ops = runtime.list_operations()
             _restore_terminal(saved_tty)
 
-            all_ops = json.loads(result.stdout) if result.stdout.strip() else []
             # websocket ops are active exec/console sessions (e.g. VS Code SSH), not stuck
             # Only "Running" operations can be stuck; "Success"/"Failure"/"Cancelled" are
             # just completed history that Incus retains temporarily.
@@ -123,14 +115,7 @@ def register_doctor_command(main):
                         if not op_id:
                             continue
                         try:
-                            subprocess.run(
-                                ["incus", "operation", "delete", op_id],
-                                capture_output=True,
-                                text=True,
-                                check=True,
-                                timeout=10,
-                                stdin=subprocess.DEVNULL,
-                            )
+                            runtime.delete_operation(op_id)
                             cancelled += 1
                         except subprocess.CalledProcessError as e:
                             msg = (e.stderr or "").strip()
@@ -146,7 +131,7 @@ def register_doctor_command(main):
                             click.echo(err_msg, err=True)
             else:
                 click.echo("  No stuck operations.")
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except (subprocess.CalledProcessError, FileNotFoundError, RuntimeError):
             click.echo("  Could not check operations (incus unavailable).")
 
         # 3. Check registry vs actual containers
