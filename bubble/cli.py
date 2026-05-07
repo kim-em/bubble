@@ -47,7 +47,6 @@ from .image_management import (
 )
 from .lifecycle import register_bubble
 from .naming import deduplicate_name, generate_name
-from .native import open_native
 from .provisioning import mount_overlaps, provision_container
 from .repo_registry import RepoRegistry
 from .security import (
@@ -510,11 +509,6 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     default=None,
     help="Run a command via SSH instead of interactive shell",
 )
-@click.option(
-    "--native",
-    is_flag=True,
-    help="Non-containerized workspace (local clone, no isolation)",
-)
 @click.option("--path", "force_path", is_flag=True, help="Interpret target as a local path")
 @click.option(
     "-b",
@@ -590,7 +584,6 @@ def open_cmd(
     network,
     custom_name,
     command,
-    native,
     force_path,
     new_branch,
     base_ref,
@@ -650,7 +643,6 @@ def open_cmd(
                 network=network,
                 custom_name=custom_name,
                 command=command,
-                native=native,
                 force_path=force_path,
                 new_branch=new_branch,
                 base_ref=base_ref,
@@ -705,7 +697,6 @@ def _open_single(
     network,
     custom_name,
     command,
-    native,
     force_path,
     new_branch,
     base_ref,
@@ -805,28 +796,6 @@ def _open_single(
 
         maybe_print_welcome(notices=notices)
         print_warnings(config, notices=notices)
-
-    # Native mode: skip all container/remote logic
-    if native:
-        incompatible = []
-        if ssh_host:
-            incompatible.append("--ssh")
-        if cloud:
-            incompatible.append("--cloud")
-        if not network:
-            incompatible.append("--no-network")
-        if machine_readable:
-            incompatible.append("--machine-readable")
-        if incompatible:
-            click.echo(
-                f"--native cannot be combined with {', '.join(incompatible)}",
-                err=True,
-            )
-            sys.exit(1)
-        if not machine_readable:
-            notices.finish()
-        open_native(target, editor, no_interactive, custom_name, command=command_args)
-        return
 
     # Priority: --local > --ssh > --cloud > [cloud] default > [remote] default_host
     remote_host = None

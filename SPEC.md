@@ -51,7 +51,6 @@ equivalent to `bubble open <url>`.
 | `--network/--no-network` | flag | `--network` | Apply network allowlist |
 | `--name` | string | | Custom container name |
 | `--command` | string | | Run command via SSH (implies shell) |
-| `--native` | flag | | Non-containerized workspace |
 | `--path` | flag | | Force interpretation as local path |
 | `-b`, `--new-branch` | string | | Create a new branch |
 | `--base` | string | | Base branch for `-b` |
@@ -508,9 +507,9 @@ directory's git remote.
 
 **`bubble list [--json] [-v|--verbose] [-c|--clean]`**
 
-List active bubbles. Shows local containers, native workspaces, and remote
-bubbles. Verbose mode includes IP and disk usage. Clean mode checks each
-container's cleanness status.
+List active bubbles. Shows local containers and remote bubbles. Verbose mode
+includes IP and disk usage. Clean mode checks each container's cleanness
+status.
 
 JSON output format:
 ```json
@@ -547,9 +546,6 @@ Destroy a bubble permanently:
 6. Remove relay tokens
 7. Unregister from registry
 
-**For native workspaces:** Delete the directory under `~/.bubble/native/`.
-Safety check: refuse to delete paths not under `~/.bubble/native/`.
-
 ### 4.2 Cleanness checking
 
 A container is "clean" (safe to discard) when ALL of:
@@ -579,9 +575,7 @@ A container is "clean" (safe to discard) when ALL of:
       "pr": 12345,
       "created_at": "2026-03-12T10:30:00+00:00",
       "base_image": "lean-v4.16.0",
-      "remote_host": "user@example.com",
-      "native": true,
-      "native_path": "/home/user/.bubble/native/project"
+      "remote_host": "user@example.com"
     }
   }
 }
@@ -589,7 +583,7 @@ A container is "clean" (safe to discard) when ALL of:
 
 **Always present:** `org_repo`, `branch`, `commit`, `pr`, `created_at`.
 **Conditionally present** (only written when truthy): `base_image`,
-`remote_host`, `native`, `native_path`.
+`remote_host`.
 
 Registry modifications MUST use file locking to prevent concurrent corruption.
 Writes MUST be atomic (write to temp file, rename).
@@ -617,8 +611,9 @@ on next use.
 ### 5.1 Mechanism
 
 Network allowlisting uses iptables rules **inside the container** (not Incus
-ACLs), for portability across Colima/native setups. Rules are applied by
-`incus exec` as root — the `user` account has no sudo and cannot modify them.
+ACLs), for portability across runtimes (e.g., Colima on macOS, native Incus on
+Linux). Rules are applied by `incus exec` as root — the `user` account has no
+sudo and cannot modify them.
 
 ### 5.2 Rules
 
@@ -1180,19 +1175,6 @@ enforces rate limits and (for levels below `write-graphql`) repo-scoping.
 
 ---
 
-## Native workspaces
-
-`bubble open --native <target>` creates a non-containerized workspace:
-- Clones to `~/.bubble/native/<name>/`
-- Tracked in registry with `native: true`
-- No network isolation, no container
-- `pop` deletes the directory (safety check: only under `~/.bubble/native/`)
-- `pause` is not supported
-
-**Incompatible with:** `--ssh`, `--cloud`, `--no-network`, `--machine-readable`
-
----
-
 ## Additional commands
 
 These commands support infrastructure management and are not core to the
@@ -1224,7 +1206,6 @@ container lifecycle, but a complete implementation should include them:
 | `~/.bubble/git/<repo>.git.lock` | Per-repo file locks |
 | `~/.bubble/repos.json` | Learned repo short name mappings |
 | `~/.bubble/registry.json` | Bubble state tracking |
-| `~/.bubble/native/` | Native workspace clones |
 | `~/.bubble/relay.sock` | Relay daemon Unix socket (Linux) |
 | `~/.bubble/relay.port` | Relay daemon TCP port (macOS) |
 | `~/.bubble/relay-tokens.json` | Relay auth tokens (mode 0600) |

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+- Remove `--native` mode entirely
+  - `bubble --native <target>` is no longer accepted (use `bubble open` for containerized bubbles)
+  - `bubble.native` module deleted; `check_native_clean`, `open_editor_native`, and `NATIVE_DIR` removed
+  - `register_bubble()` no longer accepts `native` / `native_path`
+  - Legacy `native: true` registry entries are silently dropped on next registry load
+
 ## 0.7.1 — 2026-03-12
 - Deprecate `config security`, `config lockdown`, `config accept-risks` in favor of `security` subcommands (#150)
   - Add deprecation warnings (to stderr) when deprecated commands are used
