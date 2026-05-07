@@ -112,7 +112,12 @@ def open_editor(
     """Open the specified editor connected to a bubble.
 
     If command is provided (only valid with editor="shell"), runs that command
-    via SSH instead of opening an interactive session.
+    via SSH instead of opening an interactive session. The command is treated
+    as an argv list — each element is shlex-quoted so the remote shell receives
+    the same arguments the caller passed, without re-splitting or expansion.
+    To get shell expansion (variables, globs, pipes, redirection), wrap the
+    request explicitly, e.g. `--command 'bash -lc "echo $HOME && ls *.lean"'`.
+    The command runs from remote_path, mirroring interactive --shell.
     """
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
@@ -138,7 +143,13 @@ def open_editor(
     elif editor == "shell":
         ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
         if command:
-            ssh_cmd += command
+            # Run the command from the project directory, mirroring the
+            # interactive shell's landing cwd. Without this, sshd executes
+            # the command in /home/user, surprising callers who expect to
+            # be in the repo (and breaking tools that rely on cwd, like
+            # git, gh, claude -p).
+            quoted = " ".join(shlex.quote(arg) for arg in command)
+            ssh_cmd.append(f"cd {shlex.quote(remote_path)} && exec {quoted}")
         subprocess.run(ssh_cmd)
 
 
