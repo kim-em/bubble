@@ -89,29 +89,21 @@ IMAGES = {
 }
 
 
-def _get_bridge_dns_ip() -> str | None:
+def _get_bridge_dns_ip(runtime: ContainerRuntime) -> str | None:
     """Get the IPv4 address of the default incus bridge (for DNS proxy workaround)."""
-    cidr = _get_bridge_cidr()
+    cidr = _get_bridge_cidr(runtime)
     if cidr:
         return cidr.split("/")[0]
     return None
 
 
-def _get_bridge_cidr() -> str | None:
+def _get_bridge_cidr(runtime: ContainerRuntime) -> str | None:
     """Get the full CIDR of the incus bridge (e.g. '10.228.152.1/24')."""
     try:
-        result = subprocess.run(
-            ["incus", "network", "get", "incusbr0", "ipv4.address"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode == 0:
-            cidr = result.stdout.strip()
-            if "/" in cidr:
-                return cidr
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+        cidr = runtime.network_get("incusbr0", "ipv4.address").strip()
+        if "/" in cidr:
+            return cidr
+    except (subprocess.TimeoutExpired, FileNotFoundError, RuntimeError):
         pass
     return None
 
@@ -131,7 +123,7 @@ def _fix_ipv4_static(runtime: ContainerRuntime, name: str) -> bool:
     Picks an address in the bridge subnet and configures it directly.
     Returns True if IPv4 was successfully configured.
     """
-    cidr = _get_bridge_cidr()
+    cidr = _get_bridge_cidr(runtime)
     if not cidr:
         return False
 
@@ -167,7 +159,7 @@ def _fix_dns_with_proxy(runtime: ContainerRuntime, name: str) -> bool:
 
     Returns True if the fix was applied and DNS works.
     """
-    dns_ip = _get_bridge_dns_ip()
+    dns_ip = _get_bridge_dns_ip(runtime)
     if not dns_ip:
         return False
 
