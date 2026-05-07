@@ -198,14 +198,15 @@ def inject_local_ssh_keys(remote_host, container_name: str):
         return
 
     keys_str = "\\n".join(pub_keys)
-    # Append local keys to the container's authorized_keys via incus exec
+    # Append local keys to the container's authorized_keys via the remote
+    # bubble's runtime (so bubble-colima:/local: prefix is applied for us).
     _ssh_run(
         remote_host,
         [
-            "incus",
-            "exec",
+            "bubble",
+            "internal",
+            "incus-exec",
             container_name,
-            "--",
             "su",
             "-",
             "user",

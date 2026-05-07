@@ -1264,6 +1264,7 @@ from .commands.completion import register_completion_command  # noqa: E402
 from .commands.doctor import register_doctor_command  # noqa: E402
 from .commands.images import register_images_commands  # noqa: E402
 from .commands.infrastructure import register_infrastructure_commands  # noqa: E402
+from .commands.internal import register_internal_commands  # noqa: E402
 from .commands.lifecycle import register_lifecycle_commands  # noqa: E402
 from .commands.list_cmd import register_list_command  # noqa: E402
 from .commands.relay_cmd import register_relay_commands  # noqa: E402
@@ -1283,6 +1284,7 @@ register_security_commands(main)
 register_settings_commands(main)
 register_doctor_command(main)
 register_status_command(main)
+register_internal_commands(main)
 register_completion_command(main)
 
 

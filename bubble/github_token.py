@@ -420,10 +420,9 @@ def setup_auth_proxy_remote(
         _ssh_run(
             remote_host,
             [
-                "incus",
-                "config",
-                "device",
-                "add",
+                "bubble",
+                "internal",
+                "incus-add-device",
                 container,
                 "bubble-auth-proxy",
                 "proxy",
@@ -453,10 +452,10 @@ def setup_auth_proxy_remote(
         _ssh_run(
             remote_host,
             [
-                "incus",
-                "exec",
+                "bubble",
+                "internal",
+                "incus-exec",
                 container,
-                "--",
                 "bash",
                 "-c",
                 f"su - user -c {shlex.quote(git_config_cmd)}",
@@ -501,10 +500,9 @@ def _setup_gh_proxy_remote(
         _ssh_run(
             remote_host,
             [
-                "incus",
-                "config",
-                "device",
-                "add",
+                "bubble",
+                "internal",
+                "incus-add-device",
                 container,
                 "bubble-gh-proxy",
                 "proxy",
@@ -543,7 +541,7 @@ def _setup_gh_proxy_remote(
     try:
         _ssh_run(
             remote_host,
-            ["incus", "exec", container, "--", "bash", "-c", profile_cmd],
+            ["bubble", "internal", "incus-exec", container, "bash", "-c", profile_cmd],
             timeout=15,
         )
     except RuntimeError as e:
@@ -619,7 +617,7 @@ def inject_gh_token_remote(
     try:
         _ssh_run(
             remote_host,
-            ["incus", "exec", container, "--", "bash", "-c", profile_script],
+            ["bubble", "internal", "incus-exec", container, "bash", "-c", profile_script],
             timeout=15,
         )
     except Exception as e:
