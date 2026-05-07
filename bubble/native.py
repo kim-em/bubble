@@ -47,6 +47,7 @@ def open_native(
     no_interactive,
     custom_name,
     command=None,
+    ephemeral=False,
 ):
     """Open a native (non-containerized) workspace."""
     registry = RepoRegistry()
@@ -73,7 +74,11 @@ def open_native(
             click.echo()
             step(f"Reattaching to native workspace '{name}' at {native_path}")
             if not no_interactive:
-                open_editor_native(editor, native_path, command=command)
+                exit_code = open_editor_native(editor, native_path, command=command)
+                if ephemeral and command:
+                    from .finalization import _ephemeral_pop_and_exit
+
+                    _ephemeral_pop_and_exit(name, exit_code)
             return
 
     ensure_dirs()
@@ -297,4 +302,8 @@ def open_native(
             step("Opening shell...")
         else:
             step("Opening VSCode...")
-        open_editor_native(editor, str(workspace_path), command=command)
+        exit_code = open_editor_native(editor, str(workspace_path), command=command)
+        if ephemeral and command:
+            from .finalization import _ephemeral_pop_and_exit
+
+            _ephemeral_pop_and_exit(name, exit_code)
