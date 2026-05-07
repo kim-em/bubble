@@ -108,14 +108,18 @@ def open_editor(
     remote_path: str = "/home/user",
     workspace_file: str | None = None,
     command: list[str] | None = None,
-):
+) -> int:
     """Open the specified editor connected to a bubble.
 
     If command is provided (only valid with editor="shell"), runs that command
     via SSH instead of opening an interactive session.
+
+    Returns the exit code from the underlying editor/SSH process. For editors
+    that detach (e.g. vscode), returns 0.
     """
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
+        return 0
     elif editor in ("emacs", "neovim"):
         editor_cmd = "emacs" if editor == "emacs" else "nvim"
         # Check for build marker file (written by hooks like LeanHook.post_clone)
@@ -134,18 +138,22 @@ def open_editor(
             "-t",
             f"{marker_check}cd {shlex.quote(remote_path)} && {editor_cmd} .",
         ]
-        subprocess.run(ssh_cmd)
+        return subprocess.run(ssh_cmd).returncode
     elif editor == "shell":
         ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
         if command:
             ssh_cmd += command
-        subprocess.run(ssh_cmd)
+        return subprocess.run(ssh_cmd).returncode
+    return 0
 
 
-def open_editor_native(editor: str, local_path: str, command: list[str] | None = None):
+def open_editor_native(editor: str, local_path: str, command: list[str] | None = None) -> int:
     """Open the specified editor for a native (non-containerized) workspace.
 
     Opens VSCode directly on the local path, or spawns a shell in that directory.
+
+    Returns the exit code from the underlying process. For editors that detach
+    (e.g. vscode), returns 0.
     """
     if editor == "vscode":
         try:
@@ -156,13 +164,14 @@ def open_editor_native(editor: str, local_path: str, command: list[str] | None =
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
             print(f"VSCode CLI not found or failed. Open manually: {local_path}")
+        return 0
     elif editor == "shell":
         if command:
-            subprocess.run(command, cwd=local_path)
-        else:
-            subprocess.run(
-                ["bash", "-c", f"cd {shlex.quote(local_path)} && exec $SHELL"],
-            )
+            return subprocess.run(command, cwd=local_path).returncode
+        return subprocess.run(
+            ["bash", "-c", f"cd {shlex.quote(local_path)} && exec $SHELL"],
+        ).returncode
+    return 0
 
 
 def open_vscode(
