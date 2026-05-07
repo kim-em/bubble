@@ -79,6 +79,81 @@ class TestRemoveSshConfig:
         assert content_before == content_after
 
 
+class TestAtomicSshConfig:
+    """SSH config writes survive process death and don't clobber dotfiles symlinks."""
+
+    def test_failed_write_leaves_original_intact(self, tmp_ssh_dir, monkeypatch):
+        """If os.replace raises mid-write, the original ~/.ssh/config is unchanged."""
+        import os as real_os
+
+        from bubble import vscode
+
+        add_ssh_config("first")
+        original = (tmp_ssh_dir / "bubble").read_text()
+
+        replace_calls = {"n": 0}
+        real_replace = real_os.replace
+
+        def flaky_replace(src, dst):
+            # Let the SSH_MAIN_CONFIG include-directive write succeed; fail on
+            # the bubble-config write itself.
+            if str(dst).endswith("/bubble"):
+                replace_calls["n"] += 1
+                raise OSError("simulated kill mid-replace")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(vscode.os, "replace", flaky_replace)
+
+        with pytest.raises(OSError, match="simulated"):
+            add_ssh_config("second")
+
+        # Original content preserved
+        assert (tmp_ssh_dir / "bubble").read_text() == original
+        assert replace_calls["n"] == 1
+        # No leftover temp files in the dir
+        leftovers = [p.name for p in tmp_ssh_dir.iterdir() if p.name.startswith("bubble.")]
+        assert leftovers == []
+
+    def test_main_config_symlink_is_preserved(self, tmp_ssh_dir, tmp_path):
+        """Writing through a symlinked ~/.ssh/config updates the target, not the link."""
+        from bubble import vscode
+
+        # Simulate a dotfiles-style setup: ~/.ssh/config -> dotfiles/ssh_config
+        dotfiles = tmp_path / "dotfiles"
+        dotfiles.mkdir()
+        real_target = dotfiles / "ssh_config"
+        real_target.write_text("# user dotfiles\n")
+        vscode.SSH_MAIN_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        vscode.SSH_MAIN_CONFIG.symlink_to(real_target)
+
+        add_ssh_config("symlink-bubble")
+
+        # Symlink itself is preserved
+        assert vscode.SSH_MAIN_CONFIG.is_symlink()
+        assert vscode.SSH_MAIN_CONFIG.resolve() == real_target.resolve()
+        # Original content preserved + Include line prepended
+        content = real_target.read_text()
+        assert "# user dotfiles" in content
+        assert "Include " in content
+
+    def test_concurrent_adds_do_not_lose_entries(self, tmp_ssh_dir):
+        """Two processes calling add_ssh_config concurrently both win."""
+        import multiprocessing as mp
+
+        # Use spawn so child re-imports modules cleanly
+        ctx = mp.get_context("fork")
+        procs = [ctx.Process(target=add_ssh_config, args=(f"concurrent-{i}",)) for i in range(8)]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=10)
+            assert p.exitcode == 0
+
+        content = (tmp_ssh_dir / "bubble").read_text()
+        for i in range(8):
+            assert f"Host bubble-concurrent-{i}" in content
+
+
 class TestRemoteProxyCommand:
     def test_chained_proxy_with_default_port(self, tmp_ssh_dir):
         ssh_file = tmp_ssh_dir / "bubble"

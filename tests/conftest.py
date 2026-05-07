@@ -177,6 +177,7 @@ def tmp_ssh_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(vscode, "SSH_CONFIG_DIR", ssh_dir)
     monkeypatch.setattr(vscode, "SSH_CONFIG_FILE", ssh_file)
     monkeypatch.setattr(vscode, "SSH_MAIN_CONFIG", tmp_path / ".ssh" / "config")
+    monkeypatch.setattr(vscode, "_SSH_CONFIG_LOCK_FILE", tmp_path / "ssh-config.lock")
 
     return ssh_dir
 
