@@ -59,6 +59,8 @@ equivalent to `bubble open <url>`.
 | `--ai-config/--no-ai-config` | flag | enabled | Mount AI provider configs read-only |
 | `--claude-credentials/--no-claude-credentials` | flag | enabled | Mount Claude credentials |
 | `--codex-credentials/--no-codex-credentials` | flag | enabled | Mount Codex credentials |
+| `--claude-config/--no-claude-config` | flag | enabled | Mount Claude config items (CLAUDE.md, skills, commands, ...) |
+| `--codex-config/--no-codex-config` | flag | enabled | Mount Codex config items |
 | `--ssh HOST` | string | | Run on remote host |
 | `--cloud` | flag | | Run on Hetzner Cloud server |
 | `--local` | flag | | Force local execution |

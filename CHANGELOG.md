@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.16 — 2026-05-07
+- Granular Claude/Codex config mounts (#264)
+  - `--claude-config/--no-claude-config` and `--codex-config/--no-codex-config` flags on `bubble open`
+  - `[claude] config` / `[codex] config` keys in `~/.bubble/config.toml`
+  - Allows mounting credentials without exposing personal `~/.claude` config items (CLAUDE.md, skills, commands, settings.json, keybindings.json) — useful for autonomous agents that need to authenticate but should not be biased by the host user's preferences
+  - `SafeConfigDir.config_mounts` gains `include_config_items` parameter (default `True`, preserves existing behavior)
+  - Flags forwarded to remote/cloud bubbles
+
 ## 0.7.1 — 2026-03-12
 - Deprecate `config security`, `config lockdown`, `config accept-risks` in favor of `security` subcommands (#150)
   - Add deprecation warnings (to stderr) when deprecated commands are used

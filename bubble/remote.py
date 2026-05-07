@@ -409,6 +409,8 @@ def remote_open(
     ai_config: bool = True,
     claude_credentials: bool | None = None,
     codex_credentials: bool | None = None,
+    claude_config: bool | None = None,
+    codex_config: bool | None = None,
     new_branch: str | None = None,
     base_ref: str | None = None,
     ai_prompt: str = "",
@@ -436,6 +438,14 @@ def remote_open(
         args.append("--codex-credentials")
     elif codex_credentials is False:
         args.append("--no-codex-credentials")
+    if claude_config is True:
+        args.append("--claude-config")
+    elif claude_config is False:
+        args.append("--no-claude-config")
+    if codex_config is True:
+        args.append("--codex-config")
+    elif codex_config is False:
+        args.append("--no-codex-config")
     if custom_name:
         args += ["--name", custom_name]
     if git_name:

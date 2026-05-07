@@ -307,6 +307,8 @@ def _open_remote(
     ai_config=True,
     claude_credentials=None,
     codex_credentials=None,
+    claude_config=None,
+    codex_config=None,
     new_branch=None,
     base_ref=None,
 ):
@@ -327,6 +329,8 @@ def _open_remote(
             ai_config=ai_config,
             claude_credentials=claude_credentials,
             codex_credentials=codex_credentials,
+            claude_config=claude_config,
+            codex_config=codex_config,
             new_branch=new_branch,
             base_ref=base_ref,
             ai_prompt=ai_prompt,
@@ -565,6 +569,23 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     help="Mount ~/.codex credentials into container (default: from config or enabled)",
 )
 @click.option(
+    "--claude-config/--no-claude-config",
+    default=None,
+    help=(
+        "Mount ~/.claude config items (CLAUDE.md, skills, commands, etc.) into"
+        " container. Independent of --claude-credentials so agents can"
+        " authenticate without seeing personal config (default: from config or enabled)."
+    ),
+)
+@click.option(
+    "--codex-config/--no-codex-config",
+    default=None,
+    help=(
+        "Mount ~/.codex config items into container, independent of"
+        " --codex-credentials (default: from config or enabled)."
+    ),
+)
+@click.option(
     "--ai-prompt-stdin",
     is_flag=True,
     hidden=True,
@@ -601,6 +622,8 @@ def open_cmd(
     ai_config,
     claude_credentials,
     codex_credentials,
+    claude_config,
+    codex_config,
     ai_prompt_stdin,
     skip_auth_setup,
 ):
@@ -661,6 +684,8 @@ def open_cmd(
                 ai_config=ai_config,
                 claude_credentials=claude_credentials,
                 codex_credentials=codex_credentials,
+                claude_config=claude_config,
+                codex_config=codex_config,
                 ai_prompt_stdin=ai_prompt_stdin,
                 skip_auth_setup=skip_auth_setup,
             )
@@ -716,6 +741,8 @@ def _open_single(
     ai_config,
     claude_credentials,
     codex_credentials,
+    claude_config,
+    codex_config,
     ai_prompt_stdin,
     skip_auth_setup=False,
 ):
@@ -854,6 +881,12 @@ def _open_single(
     if codex_credentials is None:
         codex_credentials = config.get("codex", {}).get("credentials", True)
 
+    # Resolve claude_config / codex_config: CLI flag > config > default (True)
+    if claude_config is None:
+        claude_config = config.get("claude", {}).get("config", True)
+    if codex_config is None:
+        codex_config = config.get("codex", {}).get("config", True)
+
     if remote_host:
         if mount_specs:
             click.echo(
@@ -879,6 +912,8 @@ def _open_single(
             ai_config=ai_config,
             claude_credentials=claude_credentials,
             codex_credentials=codex_credentials,
+            claude_config=claude_config,
+            codex_config=codex_config,
             new_branch=new_branch,
             base_ref=base_ref,
         )
@@ -891,11 +926,15 @@ def _open_single(
     include_creds = should_include_credentials(claude_credentials, config, "claude_credentials")
     cc_mounts = []
     if ai_config:
-        cc_mounts = claude_config_mounts(include_credentials=include_creds)
+        cc_mounts = claude_config_mounts(
+            include_credentials=include_creds,
+            include_config_items=bool(claude_config),
+        )
         # Suppress auto mounts that overlap with user mounts (exact or ancestry)
         cc_mounts = [m for m in cc_mounts if not mount_overlaps(Path(m.target), user_targets)]
         # Hint about symlinking ~/.bubble/ai-projects/ to ~/.claude/projects/
-        if not machine_readable:
+        # Only relevant when config items are mounted (projects symlink lives in ~/.claude).
+        if not machine_readable and claude_config:
             maybe_symlink_ai_projects(config, notices=notices)
 
     # Codex config mounts (also gated by --no-ai-config)
@@ -904,7 +943,10 @@ def _open_single(
         include_codex_creds = should_include_credentials(
             codex_credentials, config, "codex_credentials"
         )
-        cx_mounts = codex_config_mounts(include_credentials=include_codex_creds)
+        cx_mounts = codex_config_mounts(
+            include_credentials=include_codex_creds,
+            include_config_items=bool(codex_config),
+        )
         if cx_mounts:
             cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
