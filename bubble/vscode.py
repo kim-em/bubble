@@ -158,7 +158,7 @@ def open_editor(
     remote_path: str = "/home/user",
     workspace_file: str | None = None,
     command: str | None = None,
-):
+) -> int:
     """Open the specified editor connected to a bubble.
 
     If command is provided (only valid with editor="shell"), runs that command
@@ -168,9 +168,13 @@ def open_editor(
     GH_CONFIG_DIR set in /etc/profile.d/bubble-gh.sh would be missing for
     non-login shells). The command runs from remote_path, mirroring the
     interactive --shell.
+
+    Returns the exit code from the underlying editor/SSH process. For editors
+    that detach (e.g. vscode), returns 0.
     """
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
+        return 0
     elif editor in ("emacs", "neovim"):
         editor_cmd = "emacs" if editor == "emacs" else "nvim"
         # Check for build marker file (written by hooks like LeanHook.post_clone)
@@ -189,7 +193,7 @@ def open_editor(
             "-t",
             f"{marker_check}cd {shlex.quote(remote_path)} && {editor_cmd} .",
         ]
-        subprocess.run(ssh_cmd)
+        return subprocess.run(ssh_cmd).returncode
     elif editor == "shell":
         ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
         if command:
@@ -205,15 +209,19 @@ def open_editor(
             # doesn't accidentally consume the marker.
             inner = f"cd {shlex.quote(remote_path)} && exec {command}"
             ssh_cmd.append(shlex.join(["bash", "-lc", inner]))
-        subprocess.run(ssh_cmd)
+        return subprocess.run(ssh_cmd).returncode
+    return 0
 
 
-def open_editor_native(editor: str, local_path: str, command: str | None = None):
+def open_editor_native(editor: str, local_path: str, command: str | None = None) -> int:
     """Open the specified editor for a native (non-containerized) workspace.
 
     Opens VSCode directly on the local path, or spawns a shell in that directory.
     If command is provided (only with editor="shell"), runs it via `bash -c`,
     matching how the SSH shell editor passes the same string to the remote shell.
+
+    Returns the exit code from the underlying process. For editors that detach
+    (e.g. vscode), returns 0.
     """
     if editor == "vscode":
         try:
@@ -224,13 +232,14 @@ def open_editor_native(editor: str, local_path: str, command: str | None = None)
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
             print(f"VSCode CLI not found or failed. Open manually: {local_path}")
+        return 0
     elif editor == "shell":
         if command:
-            subprocess.run(["bash", "-c", command], cwd=local_path)
-        else:
-            subprocess.run(
-                ["bash", "-c", f"cd {shlex.quote(local_path)} && exec $SHELL"],
-            )
+            return subprocess.run(["bash", "-c", command], cwd=local_path).returncode
+        return subprocess.run(
+            ["bash", "-c", f"cd {shlex.quote(local_path)} && exec $SHELL"],
+        ).returncode
+    return 0
 
 
 def open_vscode(

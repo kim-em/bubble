@@ -322,6 +322,7 @@ def _open_remote(
     codex_config=None,
     new_branch=None,
     base_ref=None,
+    ephemeral=False,
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -426,10 +427,16 @@ def _open_remote(
 
     if not no_interactive:
         echo_editor_opening(editor)
-        open_editor(editor, name, project_dir, workspace_file=workspace_file, command=command)
+        exit_code = open_editor(
+            editor, name, project_dir, workspace_file=workspace_file, command=command
+        )
+        if ephemeral and command:
+            from .finalization import _ephemeral_pop_and_exit
+
+            _ephemeral_pop_and_exit(name, exit_code)
 
 
-def _reattach(runtime, name, editor, no_interactive, command=None):
+def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=False):
     """Re-attach to an existing container."""
     ensure_running(runtime, name)
 
@@ -479,7 +486,11 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
             pass  # Can't check status, skip pull
 
     echo_editor_opening(editor)
-    open_editor(editor, name, project_dir, command=command)
+    exit_code = open_editor(editor, name, project_dir, command=command)
+    if ephemeral and command:
+        from .finalization import _ephemeral_pop_and_exit
+
+        _ephemeral_pop_and_exit(name, exit_code)
 
 
 # The "open" command is hidden from help because users invoke it implicitly via
@@ -524,6 +535,12 @@ def _reattach(runtime, name, editor, no_interactive, command=None):
     type=str,
     default=None,
     help="Run a command via SSH instead of interactive shell",
+)
+@click.option(
+    "--ephemeral",
+    is_flag=True,
+    default=False,
+    help="With --command, pop the bubble after the command exits (propagating its exit code).",
 )
 @click.option(
     "--native",
@@ -634,6 +651,7 @@ def open_cmd(
     network,
     custom_name,
     command,
+    ephemeral,
     native,
     force_path,
     new_branch,
@@ -708,6 +726,7 @@ def open_cmd(
                 network=network,
                 custom_name=custom_name,
                 command=command,
+                ephemeral=ephemeral,
                 native=native,
                 force_path=force_path,
                 new_branch=new_branch,
@@ -766,6 +785,7 @@ def _open_single(
     network,
     custom_name,
     command,
+    ephemeral,
     native,
     force_path,
     new_branch,
@@ -859,6 +879,15 @@ def _open_single(
     if command is not None and not command.strip():
         command = None
 
+    # --ephemeral requires --command (the bubble must have a finite lifetime)
+    if ephemeral and not command:
+        click.echo("Error: --ephemeral requires --command", err=True)
+        sys.exit(1)
+    # --ephemeral with --no-interactive is a no-op (no command runs)
+    if ephemeral and no_interactive:
+        click.echo("Error: --ephemeral cannot be combined with --no-interactive", err=True)
+        sys.exit(1)
+
     # Resolve editor: shortcut flags > --editor > config > vscode
     valid_editors = ("vscode", "emacs", "neovim", "shell")
     if command:
@@ -906,7 +935,14 @@ def _open_single(
             sys.exit(1)
         if not machine_readable:
             notices.finish()
-        open_native(target, editor, no_interactive, custom_name, command=command)
+        open_native(
+            target,
+            editor,
+            no_interactive,
+            custom_name,
+            command=command,
+            ephemeral=ephemeral,
+        )
         return
 
     # Priority: --local > --ssh > --cloud > [cloud] default > [remote] default_host
@@ -970,6 +1006,7 @@ def _open_single(
             codex_config=codex_config,
             new_branch=new_branch,
             base_ref=base_ref,
+            ephemeral=ephemeral,
         )
         return
 
@@ -1025,7 +1062,7 @@ def _open_single(
             machine_readable_output("reattached", existing, project_dir=project_dir)
             return
         notices.finish()
-        _reattach(runtime, existing, editor, no_interactive, command=command)
+        _reattach(runtime, existing, editor, no_interactive, command=command, ephemeral=ephemeral)
         return
 
     # Parse and register target
@@ -1073,7 +1110,7 @@ def _open_single(
             )
             return
         notices.finish()
-        _reattach(runtime, existing, editor, no_interactive, command=command)
+        _reattach(runtime, existing, editor, no_interactive, command=command, ephemeral=ephemeral)
         return
 
     # Resolve git source, detect language, and build image
@@ -1241,6 +1278,7 @@ def _open_single(
             git_email=git_email,
             command=command,
             ai_prompt=ai_prompt,
+            ephemeral=ephemeral,
         )
     except Exception:
         # Clean up partially-provisioned container on failure

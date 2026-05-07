@@ -16,6 +16,97 @@ from ..setup import get_runtime
 from ..vscode import remove_ssh_config
 
 
+def destroy_bubble(name: str, info: dict | None = None, on_progress=None) -> tuple[bool, str]:
+    """Destroy a bubble unconditionally (no confirmation, no cleanness check).
+
+    Routes to the right backend (remote / native / local container) based on
+    the registry entry. Returns (success, error_message).
+
+    On success (including "already gone"), cleans up the local SSH config,
+    tokens, and registry entry. On failure, leaves local state intact so the
+    user can retry cleanup with `bubble pop -f`.
+
+    `on_progress` is an optional callable that receives status strings (e.g.
+    "Container busy, retrying (1/3)...") so the CLI can stream progress.
+
+    Used by `bubble pop -f` and by --ephemeral after a --command exits.
+    """
+    if info is None:
+        info = get_bubble_info(name)
+
+    # Remote-hosted bubble: destroy on the remote, then clean up locally
+    if info and info.get("remote_host"):
+        from ..remote import RemoteHost, apply_cloud_ssh_options, remote_command
+
+        host = RemoteHost.parse(info["remote_host"])
+        apply_cloud_ssh_options(host)
+        try:
+            result = remote_command(host, ["pop", "-f", name])
+        except Exception as e:
+            return False, f"Failed to pop on {host.ssh_destination}: {e}"
+        if result.returncode != 0:
+            return False, (
+                f"Failed to pop on {host.ssh_destination}: "
+                f"{(result.stderr or '').strip() or 'remote pop returned nonzero'}"
+            )
+        remove_ssh_config(name)
+        _cleanup_tokens(name, remote_host_spec=info["remote_host"])
+        unregister_bubble(name)
+        return True, ""
+
+    # Native workspace: rmtree under NATIVE_DIR (refuse paths outside the root)
+    if info and info.get("native"):
+        native_path = info.get("native_path", "")
+        if native_path and Path(native_path).is_dir():
+            resolved = Path(native_path).resolve()
+            native_dir_resolved = NATIVE_DIR.resolve()
+            if not str(resolved).startswith(str(native_dir_resolved) + os.sep):
+                return False, (
+                    f"Refusing to delete: path '{native_path}' is not under {NATIVE_DIR}"
+                )
+            try:
+                shutil.rmtree(resolved)
+            except OSError as e:
+                return False, f"Failed to remove native workspace: {e}"
+        _cleanup_tokens(name)
+        unregister_bubble(name)
+        return True, ""
+
+    # Local container
+    config = load_config()
+    runtime = get_runtime(config, ensure_ready=False)
+    last_error = ""
+    deleted = False
+    for attempt in range(3):
+        try:
+            runtime.delete(name, force=True)
+            deleted = True
+            break
+        except subprocess.CalledProcessError as e:
+            msg = ((e.stderr or "") + " " + (e.stdout or "")).strip()
+            last_error = msg or str(e)
+            if "not found" in msg.lower() or "does not exist" in msg.lower():
+                deleted = True  # Already gone — proceed with cleanup
+                break
+            if "busy" in msg.lower() and attempt < 2:
+                if on_progress:
+                    on_progress(f"Container busy, retrying ({attempt + 1}/3)...")
+                time.sleep(3 * (attempt + 1))
+                continue
+            break
+        except Exception as e:
+            last_error = str(e)
+            break
+
+    if not deleted:
+        return False, last_error or "unknown error"
+
+    remove_ssh_config(name)
+    _cleanup_tokens(name)
+    unregister_bubble(name)
+    return True, ""
+
+
 def _cleanup_tokens(name: str, remote_host_spec: str = ""):
     """Remove relay and auth proxy tokens for a container.
 
@@ -70,102 +161,69 @@ def register_lifecycle_commands(main):
     @click.option("-f", "--force", is_flag=True, help="Skip confirmation prompt")
     def pop(name, force):
         """Pop a bubble (destroy it permanently)."""
-        # Auto-route to remote host if the bubble is registered there
         info = get_bubble_info(name)
-        if info and info.get("remote_host"):
-            from ..remote import RemoteHost, apply_cloud_ssh_options, remote_command
 
-            host = RemoteHost.parse(info["remote_host"])
-            apply_cloud_ssh_options(host)
-            if not force:
+        # Confirmation prompt (skipped with -f)
+        if not force:
+            if info and info.get("remote_host"):
+                from ..remote import RemoteHost
+
+                host = RemoteHost.parse(info["remote_host"])
                 click.confirm(
                     f"Permanently pop bubble '{name}' on {host.ssh_destination}?",
                     abort=True,
                 )
-            result = remote_command(host, ["pop", "-f", name])
-            if result.returncode != 0:
-                click.echo(f"Failed to pop on {host.ssh_destination}: {result.stderr}", err=True)
-                sys.exit(1)
-            remove_ssh_config(name)
-            _cleanup_tokens(name, remote_host_spec=info["remote_host"])
-            unregister_bubble(name)
-            click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
-            return
-
-        # Handle native workspaces
-        if info and info.get("native"):
-            native_path = info.get("native_path", "")
-            if not force and native_path and Path(native_path).is_dir():
-                cs = check_native_clean(native_path, name)
+            elif info and info.get("native"):
+                native_path = info.get("native_path", "")
+                if native_path and Path(native_path).is_dir():
+                    cs = check_native_clean(native_path, name)
+                    if cs.clean:
+                        click.echo(f"Native workspace '{name}' is clean. ", nl=False)
+                    elif cs.error:
+                        click.confirm(
+                            f"Cannot verify cleanness ({cs.error}). "
+                            f"Permanently pop native workspace '{name}'?",
+                            abort=True,
+                        )
+                    else:
+                        reasons = format_reasons(cs.reasons)
+                        click.echo("Warning: workspace has unsaved work:")
+                        for r in reasons:
+                            click.echo(f"  - {r}")
+                        click.confirm(f"Permanently pop native workspace '{name}'?", abort=True)
+            else:
+                config = load_config()
+                runtime = get_runtime(config, ensure_ready=False)
+                cs = check_clean(runtime, name)
                 if cs.clean:
-                    click.echo(f"Native workspace '{name}' is clean. ", nl=False)
+                    click.echo(f"Bubble '{name}' is clean. ", nl=False)
                 elif cs.error:
                     click.confirm(
-                        f"Cannot verify cleanness ({cs.error}). "
-                        f"Permanently pop native workspace '{name}'?",
+                        f"Cannot verify cleanness ({cs.error}). Permanently pop bubble '{name}'?",
                         abort=True,
                     )
                 else:
                     reasons = format_reasons(cs.reasons)
-                    click.echo("Warning: workspace has unsaved work:")
+                    click.echo("Warning: bubble has unsaved work:")
                     for r in reasons:
                         click.echo(f"  - {r}")
-                    click.confirm(f"Permanently pop native workspace '{name}'?", abort=True)
+                    click.confirm(f"Permanently pop bubble '{name}'?", abort=True)
 
-            if native_path and Path(native_path).is_dir():
-                resolved = Path(native_path).resolve()
-                native_dir_resolved = NATIVE_DIR.resolve()
-                if not str(resolved).startswith(str(native_dir_resolved) + os.sep):
-                    click.echo(
-                        f"Refusing to delete: path '{native_path}' is not under {NATIVE_DIR}",
-                        err=True,
-                    )
-                    sys.exit(1)
-                shutil.rmtree(resolved)
-            _cleanup_tokens(name)
-            unregister_bubble(name)
+        success, error = destroy_bubble(name, info=info, on_progress=click.echo)
+        if not success:
+            click.echo(f"Failed to delete bubble '{name}': {error}", err=True)
+            click.echo("Try 'bubble doctor' to diagnose and fix the issue.", err=True)
+            sys.exit(1)
+
+        if info and info.get("remote_host"):
+            from ..remote import RemoteHost
+
+            host = RemoteHost.parse(info["remote_host"])
+            click.echo(f"Bubble '{name}' popped on {host.ssh_destination}.")
+        elif info and info.get("native"):
             click.echo(f"Native workspace '{name}' popped.")
-            return
-
-        config = load_config()
-        runtime = get_runtime(config, ensure_ready=False)
-
-        if not force:
-            cs = check_clean(runtime, name)
-            if cs.clean:
-                click.echo(f"Bubble '{name}' is clean. ", nl=False)
-            elif cs.error:
-                click.confirm(
-                    f"Cannot verify cleanness ({cs.error}). Permanently pop bubble '{name}'?",
-                    abort=True,
-                )
-            else:
-                reasons = format_reasons(cs.reasons)
-                click.echo("Warning: bubble has unsaved work:")
-                for r in reasons:
-                    click.echo(f"  - {r}")
-                click.confirm(f"Permanently pop bubble '{name}'?", abort=True)
-
-        for attempt in range(3):
-            try:
-                runtime.delete(name, force=True)
-                break
-            except subprocess.CalledProcessError as e:
-                msg = ((e.stderr or "") + " " + (e.stdout or "")).strip()
-                if "not found" in msg.lower() or "does not exist" in msg.lower():
-                    break  # Already gone, just clean up registry/ssh
-                if "busy" in msg.lower() and attempt < 2:
-                    click.echo(f"Container busy, retrying ({attempt + 1}/3)...")
-                    time.sleep(3 * (attempt + 1))
-                    continue
-                click.echo(f"Failed to delete container: {msg}", err=True)
-                click.echo("Try 'bubble doctor' to diagnose and fix the issue.", err=True)
-                sys.exit(1)
-
-        remove_ssh_config(name)
-        _cleanup_tokens(name)
-        unregister_bubble(name)
-        click.echo(f"Bubble '{name}' popped.")
+        else:
+            click.echo(f"Bubble '{name}' popped.")
 
     @main.command()
     @click.option("-n", "--dry-run", is_flag=True, help="Show what would be popped")
