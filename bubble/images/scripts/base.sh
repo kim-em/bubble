@@ -113,7 +113,11 @@ cat >> /home/user/.profile << 'PROFILEEOF'
 # bubble: auto-run build command if marker file exists.
 # Guard on SSH_CONNECTION to avoid triggering during provisioning
 # (su - user -c "..." sources .profile but doesn't set SSH_CONNECTION).
-if [ -n "$SSH_CONNECTION" ] && [ -f "$HOME/.bubble-fetch-cache" ]; then
+# Also skip non-interactive shells (e.g. `bubble --shell --command ...`
+# wraps the command in `bash -lc`, which sources .profile but has $- with
+# no `i`) so one-off commands don't accidentally consume the marker.
+case $- in *i*) _bubble_interactive=1 ;; *) _bubble_interactive= ;; esac
+if [ -n "$_bubble_interactive" ] && [ -n "$SSH_CONNECTION" ] && [ -f "$HOME/.bubble-fetch-cache" ]; then
     _bubble_cmd=$(cat "$HOME/.bubble-fetch-cache")
     rm -f "$HOME/.bubble-fetch-cache"
     if [ -n "$_bubble_cmd" ]; then
@@ -123,6 +127,7 @@ if [ -n "$SSH_CONNECTION" ] && [ -f "$HOME/.bubble-fetch-cache" ]; then
     fi
     unset _bubble_cmd
 fi
+unset _bubble_interactive
 PROFILEEOF
 chown user:user /home/user/.profile
 

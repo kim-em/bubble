@@ -163,9 +163,11 @@ def open_editor(
 
     If command is provided (only valid with editor="shell"), runs that command
     via SSH instead of opening an interactive session. The command string is
-    passed verbatim as a single SSH argument; the remote shell parses it with
-    `$SHELL -c`, so callers can write it exactly as they would after `ssh host`.
-    The command runs from remote_path, mirroring interactive --shell.
+    passed verbatim as a single SSH argument and wrapped in `bash -lc` on the
+    remote so `/etc/profile.d/*` is sourced (otherwise GH_TOKEN/GH_REPO/
+    GH_CONFIG_DIR set in /etc/profile.d/bubble-gh.sh would be missing for
+    non-login shells). The command runs from remote_path, mirroring the
+    interactive --shell.
     """
     if editor == "vscode":
         open_vscode(bubble_name, remote_path, workspace_file=workspace_file)
@@ -191,12 +193,18 @@ def open_editor(
     elif editor == "shell":
         ssh_cmd = ["ssh", f"bubble-{bubble_name}"]
         if command:
-            # Run the command from the project directory, mirroring the
-            # interactive shell's landing cwd. Without this, sshd executes
-            # the command in /home/user, surprising callers who expect to
-            # be in the repo (and breaking tools that rely on cwd, like
-            # git, gh, claude -p).
-            ssh_cmd.append(f"cd {shlex.quote(remote_path)} && exec {command}")
+            # Run via `bash -lc` so /etc/profile.d/* is sourced — non-login
+            # shells skip it, leaving GH_TOKEN/GH_REPO/GH_CONFIG_DIR (set in
+            # /etc/profile.d/bubble-gh.sh) and similar env knobs unset. ssh
+            # joins remaining argv with spaces and runs the result through
+            # the user's shell, so we package the command as a single
+            # already-quoted argument. The cd prefix mirrors the interactive
+            # shell's landing cwd so tools relying on cwd (git, gh, claude -p)
+            # see the project dir, not /home/user. The build-marker hook in
+            # ~/.profile gates itself on interactive shells so `--command`
+            # doesn't accidentally consume the marker.
+            inner = f"cd {shlex.quote(remote_path)} && exec {command}"
+            ssh_cmd.append(shlex.join(["bash", "-lc", inner]))
         subprocess.run(ssh_cmd)
 
 
