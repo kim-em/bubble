@@ -151,18 +151,31 @@ class TestOpenEditorShell:
         assert calls == [["ssh", "bubble-test-bubble"]]
 
     def test_shell_with_command(self, monkeypatch):
-        """Shell editor with command should SSH and pass the command verbatim."""
+        """Shell editor with command should cd into remote_path and exec verbatim."""
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
-        open_editor("shell", "test-bubble", command="lake build")
-        assert calls == [["ssh", "bubble-test-bubble", "lake build"]]
+        open_editor("shell", "test-bubble", "/home/user/proj", command="lake build")
+        assert calls == [["ssh", "bubble-test-bubble", "cd /home/user/proj && exec lake build"]]
+
+    def test_shell_with_command_default_cwd(self, monkeypatch):
+        """When no remote_path is given, fall back to /home/user."""
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+        open_editor("shell", "test-bubble", command="pwd")
+        assert calls == [["ssh", "bubble-test-bubble", "cd /home/user && exec pwd"]]
 
     def test_shell_with_quoted_command(self, monkeypatch):
-        """Shell editor preserves quoting by passing the command as one ssh arg."""
+        """Quoted commands are passed verbatim through the cd-prefixed wrapper."""
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append(cmd))
-        open_editor("shell", "test-bubble", command="bash -lc 'gh auth status'")
-        assert calls == [["ssh", "bubble-test-bubble", "bash -lc 'gh auth status'"]]
+        open_editor("shell", "test-bubble", "/home/user/proj", command="bash -lc 'gh auth status'")
+        assert calls == [
+            [
+                "ssh",
+                "bubble-test-bubble",
+                "cd /home/user/proj && exec bash -lc 'gh auth status'",
+            ]
+        ]
 
 
 class TestOpenEditorNativeShell:
