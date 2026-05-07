@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -533,7 +535,15 @@ def do_symlink_ai_projects() -> bool:
     """Link ~/.bubble/ai-projects/ to ~/.claude/projects/ via symlink.
 
     Merges existing contents from bubble-projects into claude-projects before
-    creating the symlink. Aborts if any files conflict (exist in both locations).
+    creating the symlink. Aborts if any files conflict (exist in both
+    locations).
+
+    Anything left in ~/.bubble/ai-projects/ after the merge (residual empty
+    directories, or files that appeared during the merge from a concurrently-
+    running bubble) is renamed aside to ai-projects.old.<timestamp>.<rand>/
+    rather than deleted. The user can inspect and remove that directory once
+    they're satisfied the merge worked.
+
     Returns True if the symlink was created, False otherwise.
     """
     import click
@@ -582,9 +592,31 @@ def do_symlink_ai_projects() -> bool:
 
     # Pass 2: no conflicts, safe to merge
     _merge_dir(bubble_projects, claude_projects)
-    shutil.rmtree(str(bubble_projects))
-    bubble_projects.symlink_to(claude_projects)
+
+    # Rename the (now-residual) source aside instead of rmtree'ing it.
+    # mkdtemp gives a guaranteed-unique suffix; rename() needs the target
+    # to be absent so we remove the empty placeholder it creates.
+    backup = Path(
+        tempfile.mkdtemp(
+            prefix=f"ai-projects.old.{time.strftime('%Y%m%d-%H%M%S')}.",
+            dir=str(bubble_projects.parent),
+        )
+    )
+    backup.rmdir()
+    bubble_projects.rename(backup)
+    try:
+        bubble_projects.symlink_to(claude_projects)
+    except OSError:
+        # Symlink failed: roll the directory back so the user is not left
+        # without ~/.bubble/ai-projects/ at all.
+        backup.rename(bubble_projects)
+        raise
+
     click.echo(f"Created symlink: {bubble_projects} -> {claude_projects}")
+    click.echo(
+        f"Residual data from the merge is at {backup}. "
+        "Inspect and remove once you're satisfied the merge worked."
+    )
     return True
 
 
