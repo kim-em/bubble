@@ -211,8 +211,14 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
             # per-worktree dir under .git/worktrees/<name>/, which git
             # refuses to use as a `--reference` (linked checkout).
             git_dir_result = subprocess.run(
-                ["git", "-C", t.local_path, "rev-parse",
-                 "--path-format=absolute", "--git-common-dir"],
+                [
+                    "git",
+                    "-C",
+                    t.local_path,
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-common-dir",
+                ],
                 capture_output=True,
                 text=True,
                 check=True,
