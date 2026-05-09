@@ -1009,6 +1009,308 @@ class TestAccessLevelRouting:
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight rate limiting and caching (issue #286)
+# ---------------------------------------------------------------------------
+
+
+class TestPreflightRateLimiting:
+    """Pre-flight queries against GitHub must:
+
+    1. Count toward the originating container's rate window so a misbehaving
+       container can't burn the host's GitHub API quota.
+    2. Cache positive and negative results so repeated probes for the same
+       node don't issue fresh upstream queries.
+    """
+
+    def _make_handler(self):
+        handler = AuthProxyHandler.__new__(AuthProxyHandler)
+        handler.rate_limiter = ProxyRateLimiter()
+        handler.token_refresher = GitHubTokenRefresher("ghp_test_token")
+        # Reset class-level caches so tests are independent.
+        handler._repo_node_id_cache = {}
+        handler._preflight_cache = {}
+        handler._preflight_inflight = {}
+        handler._repo_node_id_lock = threading.Lock()
+        handler._preflight_cache_lock = threading.Lock()
+        handler._preflight_inflight_lock = threading.Lock()
+        return handler
+
+    def test_preflight_consumes_rate_quota(self, monkeypatch):
+        """Each upstream preflight call consumes a slot in the container's
+        rate window so a flood of bad-id mutations can't bypass throttling."""
+        handler = self._make_handler()
+        calls = []
+
+        def fake_query(query, variables):
+            calls.append(variables)
+            return {"data": {"node": None}}
+
+        handler._github_graphql_query = fake_query
+
+        # First call hits upstream and consumes a quota slot.
+        result = handler._preflight_check("node-1", "c1")
+        assert result is None
+        assert len(calls) == 1
+        assert len(handler.rate_limiter._requests["c1"]) == 1
+
+    def test_preflight_blocked_when_rate_limited(self, monkeypatch):
+        """When the container is over its window, preflight skips upstream."""
+        handler = self._make_handler()
+        calls = []
+
+        def fake_query(query, variables):
+            calls.append(variables)
+            return {"data": {"node": None}}
+
+        handler._github_graphql_query = fake_query
+
+        # Saturate the per-minute window.
+        for _ in range(60):
+            handler.rate_limiter.check("c1")
+
+        # Use a fresh node id (no cache) to force an upstream attempt.
+        result = handler._preflight_check("fresh-node", "c1")
+        assert result is None
+        assert calls == []  # upstream not called
+
+    def test_preflight_negative_result_cached(self, monkeypatch):
+        """Repeated probes for the same bad node id only hit upstream once
+        within the negative-cache TTL, so a loop on a single bad id can't
+        burn through the rate window."""
+        handler = self._make_handler()
+        calls = []
+
+        def fake_query(query, variables):
+            calls.append(variables)
+            return {"data": {"node": None}}
+
+        handler._github_graphql_query = fake_query
+
+        for _ in range(50):
+            result = handler._preflight_check("bad-id", "c1")
+            assert result is None
+
+        assert len(calls) == 1
+        # And only one rate-limit slot was consumed.
+        assert len(handler.rate_limiter._requests["c1"]) == 1
+
+    def test_preflight_positive_result_cached(self, monkeypatch):
+        handler = self._make_handler()
+        calls = []
+
+        def fake_query(query, variables):
+            calls.append(variables)
+            return {
+                "data": {
+                    "node": {
+                        "__typename": "Issue",
+                        "repository": {"nameWithOwner": "owner/repo"},
+                    }
+                }
+            }
+
+        handler._github_graphql_query = fake_query
+
+        for _ in range(5):
+            assert handler._preflight_check("good-id", "c1") == "owner/repo"
+        assert len(calls) == 1
+
+    def test_preflight_negative_cache_expires(self, monkeypatch):
+        """Once the negative TTL passes, a probe for the same id re-queries
+        and re-consumes a quota slot."""
+        handler = self._make_handler()
+        calls = []
+
+        def fake_query(query, variables):
+            calls.append(variables)
+            return {"data": {"node": None}}
+
+        handler._github_graphql_query = fake_query
+
+        # Patch time so the cache entry appears expired on the second call.
+        from bubble import auth_proxy as ap
+
+        t = [1000.0]
+        monkeypatch.setattr(ap.time, "time", lambda: t[0])
+
+        assert handler._preflight_check("bad-id", "c1") is None
+        assert len(calls) == 1
+
+        t[0] += ap.PREFLIGHT_NEGATIVE_CACHE_TTL + 1
+        assert handler._preflight_check("bad-id", "c1") is None
+        assert len(calls) == 2
+
+    def test_preflight_cache_ignores_rate_limit_misses(self, monkeypatch):
+        """Rate-limit denials must not poison the cache: the next request
+        from a fresh container should still resolve normally."""
+        handler = self._make_handler()
+        calls = []
+
+        def fake_query(query, variables):
+            calls.append(variables)
+            return {
+                "data": {
+                    "node": {
+                        "__typename": "Issue",
+                        "repository": {"nameWithOwner": "owner/repo"},
+                    }
+                }
+            }
+
+        handler._github_graphql_query = fake_query
+
+        # Saturate c1, then probe.
+        for _ in range(60):
+            handler.rate_limiter.check("c1")
+        assert handler._preflight_check("node-X", "c1") is None
+        assert calls == []
+
+        # c2 has fresh quota and should succeed.
+        assert handler._preflight_check("node-X", "c2") == "owner/repo"
+        assert len(calls) == 1
+
+    def test_repo_node_id_consumes_rate_quota(self, monkeypatch):
+        handler = self._make_handler()
+        calls = []
+
+        def fake_query(query, variables):
+            calls.append(variables)
+            return {"data": {"repository": {"id": "R_xyz"}}}
+
+        handler._github_graphql_query = fake_query
+
+        assert handler._get_repo_node_id("o", "r", "c1") == "R_xyz"
+        assert len(calls) == 1
+        assert len(handler.rate_limiter._requests["c1"]) == 1
+
+        # Cached: no further upstream calls, no further quota consumed.
+        assert handler._get_repo_node_id("o", "r", "c1") == "R_xyz"
+        assert len(calls) == 1
+        assert len(handler.rate_limiter._requests["c1"]) == 1
+
+    def test_preflight_transient_exception_not_cached(self, monkeypatch):
+        """A network/HTTP error must NOT poison the cache: a single bad
+        moment shouldn't lock out a legitimate node id for the negative TTL."""
+        handler = self._make_handler()
+        attempts = []
+
+        def fake_query(query, variables):
+            attempts.append(variables)
+            if len(attempts) == 1:
+                raise OSError("transient network error")
+            return {
+                "data": {
+                    "node": {
+                        "__typename": "Issue",
+                        "repository": {"nameWithOwner": "owner/repo"},
+                    }
+                }
+            }
+
+        handler._github_graphql_query = fake_query
+
+        # First attempt fails with a transient error; nothing cached.
+        assert handler._preflight_check("legit-id", "c1") is None
+        assert len(attempts) == 1
+
+        # Second attempt: same id, no waiting required, fresh upstream call,
+        # this time succeeds.
+        assert handler._preflight_check("legit-id", "c1") == "owner/repo"
+        assert len(attempts) == 2
+
+    def test_preflight_graphql_errors_not_cached(self, monkeypatch):
+        """GraphQL-level errors (200 + errors[]) are treated as transient:
+        could be secondary rate limit, server hiccup, etc."""
+        handler = self._make_handler()
+        attempts = []
+        responses = [
+            {"errors": [{"type": "RATE_LIMITED", "message": "slow down"}]},
+            {
+                "data": {
+                    "node": {
+                        "__typename": "Issue",
+                        "repository": {"nameWithOwner": "owner/repo"},
+                    }
+                }
+            },
+        ]
+
+        def fake_query(query, variables):
+            attempts.append(variables)
+            return responses[len(attempts) - 1]
+
+        handler._github_graphql_query = fake_query
+
+        assert handler._preflight_check("id-x", "c1") is None
+        assert handler._preflight_check("id-x", "c1") == "owner/repo"
+        assert len(attempts) == 2
+
+    def test_preflight_singleflight_serializes_concurrent_misses(self, monkeypatch):
+        """Concurrent handlers asking about the same uncached node id must
+        result in only one upstream call. This prevents N-handler fan-out
+        from amplifying a single fake id into N host quota burns."""
+        handler = self._make_handler()
+        attempts = []
+        gate = threading.Event()
+        upstream_lock = threading.Lock()
+
+        def fake_query(query, variables):
+            with upstream_lock:
+                attempts.append(variables)
+                # Hold the leader inside the upstream call until other
+                # threads have queued up behind the singleflight.
+                gate.wait(timeout=2)
+            return {
+                "data": {
+                    "node": {
+                        "__typename": "Issue",
+                        "repository": {"nameWithOwner": "owner/repo"},
+                    }
+                }
+            }
+
+        handler._github_graphql_query = fake_query
+
+        results = []
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(handler._preflight_check("hot-id", f"c{i}"))
+            )
+            for i in range(8)
+        ]
+        for t in threads:
+            t.start()
+        # Give followers a moment to enter and block on the singleflight.
+        time.sleep(0.05)
+        gate.set()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert results == ["owner/repo"] * 8
+        # Exactly one upstream call across all 8 concurrent handlers.
+        assert len(attempts) == 1
+        # And only one rate-limit slot consumed (by the leader).
+        total_slots = sum(len(q) for q in handler.rate_limiter._requests.values())
+        assert total_slots == 1
+
+    def test_repo_node_id_blocked_when_rate_limited(self, monkeypatch):
+        handler = self._make_handler()
+        calls = []
+
+        def fake_query(query, variables):
+            calls.append(variables)
+            return {"data": {"repository": {"id": "R_xyz"}}}
+
+        handler._github_graphql_query = fake_query
+
+        for _ in range(60):
+            handler.rate_limiter.check("c1")
+
+        assert handler._get_repo_node_id("o", "r", "c1") is None
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
 # Integration: API proxy round-trip
 # ---------------------------------------------------------------------------
 
