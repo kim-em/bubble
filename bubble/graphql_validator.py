@@ -718,14 +718,7 @@ def validate_structure(parsed: ParsedGraphQL, op_count: int = 1) -> str | None:
     if len(parsed.top_level_fields) == 0:
         return "No fields in operation"
     if len(parsed.top_level_fields) > 1:
-        # Allow multiple scalar fields for RepositoryInfo queries
-        if parsed.op_type == "query" and all(
-            f.name in ALLOWED_REPO_FIELDS and f.selection_start is None
-            for f in parsed.top_level_fields
-        ):
-            pass  # RepositoryInfo exception: multiple scalar fields
-        else:
-            return "Multiple top-level fields not allowed"
+        return "Multiple top-level fields not allowed"
 
     # No aliases on top-level fields
     if any(f.alias is not None for f in parsed.top_level_fields):
@@ -758,8 +751,13 @@ def validate_read(
     preflight_fn: callable(node_id) -> "owner/repo" or None
     Returns error message or None if valid.
     """
-    if not parsed.top_level_fields:
-        return "No fields in query"
+    # Defense-in-depth: validate_structure already enforces exactly one
+    # top-level field, but assert it here too so this helper is safe if
+    # ever called without structural validation. Without this check, only
+    # parsed.top_level_fields[0] is inspected and any trailing fields would
+    # silently bypass repo-scoping.
+    if len(parsed.top_level_fields) != 1:
+        return "Expected exactly one top-level field"
 
     field_name = parsed.top_level_fields[0].name
 
@@ -863,8 +861,11 @@ def validate_write(
     repo_node_id_fn: callable(owner, repo) -> node_id or None
     Returns error message or None if valid.
     """
-    if not parsed.top_level_fields:
-        return "No fields in mutation"
+    # Defense-in-depth: structural validation already enforces a single
+    # top-level field. Re-check here so this helper stays safe if ever
+    # called without it.
+    if len(parsed.top_level_fields) != 1:
+        return "Expected exactly one top-level field"
 
     mutation_name = parsed.top_level_fields[0].name
 
