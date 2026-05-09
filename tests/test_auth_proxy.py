@@ -356,6 +356,140 @@ class TestAuthProxyHandler:
         assert 403 in handler._responses
 
 
+class TestCopyResponseHeaders:
+    """The proxy must not bridge auxiliary state (cookies, auth challenges,
+    upstream redirect targets on errors) between GitHub and the container."""
+
+    def _make_handler(self):
+        handler = AuthProxyHandler.__new__(AuthProxyHandler)
+        handler._sent = []
+        handler.send_header = lambda k, v: handler._sent.append((k, v))
+        return handler
+
+    def test_default_strips_auxiliary_headers(self):
+        from bubble.auth_proxy import _STRIPPED_RESPONSE_HEADERS
+
+        handler = self._make_handler()
+        upstream = [
+            ("Content-Type", "application/json"),
+            ("Set-Cookie", "_gh_sess=abc; Path=/"),
+            ("WWW-Authenticate", 'Bearer realm="GitHub"'),
+            ("Authorization", "token leaked"),
+            ("Transfer-Encoding", "chunked"),
+            ("Connection", "keep-alive"),
+            ("Keep-Alive", "timeout=5"),
+            ("Location", "https://example.com/redirect"),
+            ("X-RateLimit-Remaining", "42"),
+        ]
+        handler._copy_response_headers(upstream)
+        forwarded = {k.lower() for k, _ in handler._sent}
+        assert forwarded.isdisjoint(_STRIPPED_RESPONSE_HEADERS)
+        # Non-stripped headers (including Location and X-RateLimit-*) survive
+        # by default — Location is required on 3xx for the container to
+        # follow proxy-skipped redirects.
+        assert "content-type" in forwarded
+        assert "location" in forwarded
+        assert "x-ratelimit-remaining" in forwarded
+
+    def test_4xx_strips_location(self):
+        from bubble.auth_proxy import _STRIPPED_4XX_RESPONSE_HEADERS
+
+        handler = self._make_handler()
+        upstream = [
+            ("Content-Type", "application/json"),
+            ("Set-Cookie", "_gh_sess=abc"),
+            ("Location", "https://blob.example.com/sensitive"),
+            ("X-RateLimit-Remaining", "0"),
+        ]
+        handler._copy_response_headers(upstream, stripped=_STRIPPED_4XX_RESPONSE_HEADERS)
+        forwarded = {k.lower(): v for k, v in handler._sent}
+        assert "location" not in forwarded
+        assert "set-cookie" not in forwarded
+        assert forwarded.get("content-type") == "application/json"
+        # X-RateLimit-* remains visible — useful for clients to back off.
+        assert "x-ratelimit-remaining" in forwarded
+
+    def test_repeated_set_cookie_all_stripped(self):
+        """HTTPMessage.items() yields one entry per Set-Cookie value; each
+        must be filtered."""
+        handler = self._make_handler()
+        upstream = [
+            ("Set-Cookie", "a=1"),
+            ("Set-Cookie", "b=2"),
+            ("Content-Type", "text/plain"),
+        ]
+        handler._copy_response_headers(upstream)
+        assert all(k.lower() != "set-cookie" for k, _ in handler._sent)
+        assert ("Content-Type", "text/plain") in handler._sent
+
+    def test_case_insensitive_matching(self):
+        handler = self._make_handler()
+        upstream = [
+            ("SET-COOKIE", "x=1"),
+            ("set-cookie", "y=2"),
+            ("Set-Cookie", "z=3"),
+        ]
+        handler._copy_response_headers(upstream)
+        assert handler._sent == []
+
+    def test_useful_github_headers_preserved(self):
+        """Don't strip headers gh CLI relies on for pagination and backoff."""
+        handler = self._make_handler()
+        upstream = [
+            ("Link", '<https://api.github.com/x?page=2>; rel="next"'),
+            ("Link", '<https://api.github.com/x?page=3>; rel="last"'),
+            ("X-RateLimit-Limit", "5000"),
+            ("X-RateLimit-Remaining", "4999"),
+            ("X-RateLimit-Reset", "1700000000"),
+            ("Retry-After", "60"),
+        ]
+        handler._copy_response_headers(upstream)
+        # Both Link entries forwarded — pagination relies on this.
+        link_values = [v for k, v in handler._sent if k.lower() == "link"]
+        assert len(link_values) == 2
+        assert all(k.lower() != "set-cookie" for k, _ in handler._sent)
+        assert ("Retry-After", "60") in handler._sent
+        assert ("X-RateLimit-Remaining", "4999") in handler._sent
+
+    def test_extended_hop_by_hop_stripped(self):
+        from bubble.auth_proxy import _STRIPPED_RESPONSE_HEADERS
+
+        # RFC 7230 §6.1 hop-by-hop headers should never reach the container.
+        for name in (
+            "TE",
+            "Trailer",
+            "Upgrade",
+            "Proxy-Authenticate",
+            "Proxy-Authorization",
+        ):
+            assert name.lower() in _STRIPPED_RESPONSE_HEADERS
+
+    def test_real_httperror_set_cookie_duplicates_stripped(self):
+        """HTTPError.headers is an email.message.Message — verify items()
+        yields one entry per Set-Cookie value (not collapsed) and our helper
+        filters all of them."""
+        import email.message
+
+        from bubble.auth_proxy import _STRIPPED_RESPONSE_HEADERS
+
+        msg = email.message.Message()
+        msg["Set-Cookie"] = "session=abc"
+        msg["Set-Cookie"] = "user=xyz"
+        msg["Content-Type"] = "application/json"
+        msg["X-RateLimit-Remaining"] = "0"
+
+        # Confirm the assumption baked into the production code: items()
+        # really does yield one tuple per Set-Cookie value.
+        cookie_count = sum(1 for k, _ in msg.items() if k.lower() == "set-cookie")
+        assert cookie_count == 2
+
+        handler = self._make_handler()
+        handler._copy_response_headers(msg.items())
+        forwarded = {k.lower() for k, _ in handler._sent}
+        assert forwarded.isdisjoint(_STRIPPED_RESPONSE_HEADERS)
+        assert "x-ratelimit-remaining" in forwarded
+
+
 # ---------------------------------------------------------------------------
 # Integration: full proxy round-trip with mock GitHub backend
 # ---------------------------------------------------------------------------
