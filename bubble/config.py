@@ -74,6 +74,7 @@ DEFAULT_CONFIG = {
         "credentials": True,
     },
     "security": {},
+    "ssh": {},
     "tools": {},
 }
 

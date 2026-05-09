@@ -148,7 +148,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 - **IPv6 blocked**: All IPv6 traffic is dropped
 - **DNS restricted**: DNS queries only go to the container's configured resolver
 - **No outbound SSH**: Containers cannot SSH out (VSCode uses `incus exec` ProxyCommand)
-- **SSH key-only auth**: Password authentication is disabled
+- **SSH key-only auth**: Password authentication is disabled. By default only `~/.ssh/id_ed25519.pub` is injected as `authorized_keys` (with `id_rsa.pub`/`id_ecdsa.pub` as fallbacks if no ed25519 key exists). Override with `[ssh] authorized_keys = "~/.ssh/yubikey.pub"` (or a list) in `~/.bubble/config.toml`, or with the `BUBBLE_AUTHORIZED_KEYS` env var (colon-separated paths).
 - **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
 - **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
 - **Bubble-in-bubble relay**: Containers can open new bubbles on the host, but only for repos already cloned in `~/.bubble/git/`. Disable with `bubble security set relay off`

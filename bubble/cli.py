@@ -359,7 +359,7 @@ def _open_remote(
     org_repo = result.get("org_repo", "")
 
     # Inject local SSH keys into the container so the chained ProxyCommand works
-    inject_local_ssh_keys(remote_host, name)
+    inject_local_ssh_keys(remote_host, name, config=config)
 
     # Set up GitHub auth based on the unified github security level
     gh_level = get_github_level(config)

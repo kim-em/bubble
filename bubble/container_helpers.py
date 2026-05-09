@@ -1,5 +1,6 @@
 """Shared container helper functions: find, ensure running, SSH, git config, network."""
 
+import os
 import shlex
 import subprocess
 import sys
@@ -13,6 +14,65 @@ from .output import detail, step
 from .runtime.base import ContainerRuntime
 from .security import filter_github_domains
 from .vscode import add_ssh_config
+
+
+def collect_authorized_keys(config: dict | None = None) -> list[str]:
+    """Collect public key contents to inject as authorized_keys in containers.
+
+    Resolution order (first match wins):
+      1. ``BUBBLE_AUTHORIZED_KEYS`` env var (colon-separated paths).
+      2. ``[ssh] authorized_keys`` config — string path or list of paths.
+      3. Default: ``~/.ssh/id_ed25519.pub`` if present.
+      4. Fallback (only when no ed25519 key exists): ``~/.ssh/id_rsa.pub``
+         and ``~/.ssh/id_ecdsa.pub``.
+
+    Paths support ``~`` expansion. With (1) or (2), every listed path must
+    exist; missing files raise ``ClickException``. An explicit empty list
+    means "no keys" — SSH will still be running but nothing will be
+    authorized.
+    """
+    explicit_paths: list[str] | None = None
+
+    env_value = os.environ.get("BUBBLE_AUTHORIZED_KEYS")
+    if env_value is not None:
+        explicit_paths = [p for p in env_value.split(":") if p]
+    elif config is not None:
+        cfg_value = config.get("ssh", {}).get("authorized_keys")
+        if isinstance(cfg_value, str):
+            explicit_paths = [cfg_value] if cfg_value else []
+        elif isinstance(cfg_value, list):
+            explicit_paths = [str(p) for p in cfg_value]
+        elif cfg_value is not None:
+            raise click.ClickException(
+                f"[ssh] authorized_keys must be a string or list of strings, "
+                f"got {type(cfg_value).__name__}"
+            )
+
+    if explicit_paths is not None:
+        keys: list[str] = []
+        for path_str in explicit_paths:
+            path = Path(path_str).expanduser()
+            if not path.exists():
+                raise click.ClickException(f"SSH key file not found: {path_str}")
+            content = path.read_text().strip()
+            if content:
+                keys.append(content)
+        return keys
+
+    ssh_dir = Path.home() / ".ssh"
+    ed25519 = ssh_dir / "id_ed25519.pub"
+    if ed25519.exists():
+        content = ed25519.read_text().strip()
+        return [content] if content else []
+
+    keys = []
+    for fallback in ("id_rsa.pub", "id_ecdsa.pub"):
+        path = ssh_dir / fallback
+        if path.exists():
+            content = path.read_text().strip()
+            if content:
+                keys.append(content)
+    return keys
 
 
 def find_container(runtime: ContainerRuntime, name: str):
@@ -36,16 +96,16 @@ def ensure_running(runtime: ContainerRuntime, name: str):
     return info
 
 
-def setup_ssh(runtime: ContainerRuntime, name: str, host_key_trust: bool = True):
+def setup_ssh(
+    runtime: ContainerRuntime,
+    name: str,
+    host_key_trust: bool = True,
+    config: dict | None = None,
+):
     """Start SSH and inject host public keys into a container."""
     runtime.exec(name, ["bash", "-c", "service ssh start || /usr/sbin/sshd"])
 
-    ssh_dir = Path.home() / ".ssh"
-    pub_keys = []
-    for key_file in ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]:
-        key_path = ssh_dir / key_file
-        if key_path.exists():
-            pub_keys.append(key_path.read_text().strip())
+    pub_keys = collect_authorized_keys(config)
     if pub_keys:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".keys", delete=False) as f:
             f.write("\n".join(pub_keys) + "\n")
