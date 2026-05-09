@@ -32,14 +32,23 @@ def register_infrastructure_commands(main):
     @network_group.command("apply")
     @click.argument("name")
     def network_apply(name):
-        """Apply network allowlist to a bubble."""
-        from ..container_helpers import apply_network
+        """Apply network allowlist to a bubble.
+
+        Restores the hook-contributed domains stored at provision time so a
+        manual replay matches the original bubble's allowlist (issue #285).
+        """
+        from ..container_helpers import apply_network, recover_extra_domains
+        from ..lifecycle import get_bubble_info
 
         config = load_config()
         runtime = get_runtime(config, ensure_ready=False)
         ensure_running(runtime, name)
 
-        apply_network(runtime, name, config)
+        info = get_bubble_info(name) or {}
+        extra_domains = info.get("extra_domains")
+        if extra_domains is None:
+            extra_domains = recover_extra_domains(info) or []
+        apply_network(runtime, name, config, extra_domains=list(extra_domains))
 
     @network_group.command("remove")
     @click.argument("name")

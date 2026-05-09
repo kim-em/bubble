@@ -73,6 +73,34 @@ class TestRegistry:
         assert info is not None
         assert "project_dir" not in info
 
+    def test_register_with_network_state(self, tmp_data_dir):
+        register_bubble(
+            "net-bubble",
+            "org/repo",
+            network_enabled=True,
+            extra_domains=["example.com", "deps.example.com"],
+        )
+        info = get_bubble_info("net-bubble")
+        assert info is not None
+        assert info["network_enabled"] is True
+        assert info["extra_domains"] == ["example.com", "deps.example.com"]
+
+    def test_register_with_network_disabled(self, tmp_data_dir):
+        register_bubble("no-net-bubble", "org/repo", network_enabled=False)
+        info = get_bubble_info("no-net-bubble")
+        assert info is not None
+        assert info["network_enabled"] is False
+        # Empty list shouldn't be persisted
+        assert "extra_domains" not in info
+
+    def test_register_without_network_state(self, tmp_data_dir):
+        # Legacy / unspecified path: nothing persisted, defaults applied at read time.
+        register_bubble("legacy", "org/repo")
+        info = get_bubble_info("legacy")
+        assert info is not None
+        assert "network_enabled" not in info
+        assert "extra_domains" not in info
+
 
 class TestPruneStaleEntries:
     def test_prunes_missing_local_containers(self, tmp_data_dir):

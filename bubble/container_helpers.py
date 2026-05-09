@@ -85,15 +85,89 @@ def find_container(runtime: ContainerRuntime, name: str):
 
 
 def ensure_running(runtime: ContainerRuntime, name: str):
-    """Ensure a container is running (unpause/start if needed)."""
+    """Ensure a container is running, restoring iptables rules on stop/start.
+
+    ``incus stop`` destroys the container's network namespace, which drops
+    the iptables allowlist installed at provision time. Without an explicit
+    replay the container would silently come back up with default-ACCEPT
+    egress (issue #285). Freeze/unfreeze (incus pause/start) keeps the
+    namespace intact, so paused bubbles don't need replay.
+
+    On replay failure the container is stopped again so the next attempt
+    starts from a clean ``stopped`` state — failing closed rather than
+    leaving an unprotected container running.
+    """
     info = find_container(runtime, name)
-    if info.state == "frozen":
+    prior_state = info.state
+    if prior_state == "frozen":
         step(f"Unpausing '{name}'...")
         runtime.unfreeze(name)
-    elif info.state == "stopped":
+    elif prior_state == "stopped":
         step(f"Starting '{name}'...")
         runtime.start(name)
+        try:
+            reapply_network_after_restart(runtime, name)
+        except Exception:
+            try:
+                runtime.stop(name)
+            except Exception:
+                pass
+            raise
     return info
+
+
+def reapply_network_after_restart(runtime: ContainerRuntime, name: str):
+    """Re-apply the network allowlist after an ``incus stop``/``start`` cycle.
+
+    Looks up the bubble's network state from the registry: ``network_enabled``
+    decides whether to re-apply at all (so ``--no-network`` bubbles aren't
+    suddenly locked down), and ``extra_domains`` restores the hook-contributed
+    allowlist that the container was originally provisioned with.
+
+    Legacy entries that predate the registry fields are handled
+    conservatively: ``network_enabled`` defaults to ``True`` (the historical
+    default of the ``--network`` flag) and ``extra_domains`` is recovered by
+    re-detecting the language hook against the bare repo.
+    """
+    from .config import load_config
+    from .lifecycle import get_bubble_info
+
+    info = get_bubble_info(name) or {}
+    if not info.get("network_enabled", True):
+        return
+
+    extra_domains = info.get("extra_domains")
+    if extra_domains is None:
+        extra_domains = recover_extra_domains(info) or []
+
+    config = load_config()
+    apply_network(runtime, name, config, extra_domains=list(extra_domains))
+
+
+def recover_extra_domains(info: dict) -> list[str] | None:
+    """Best-effort recovery of hook domains for legacy registry entries.
+
+    Returns ``None`` when recovery isn't possible (no org_repo, no bare repo,
+    or no matching hook). Prefers ``commit`` over ``branch`` so that long-lived
+    bubbles whose branch tip has advanced upstream still see the same hook
+    output that the bubble was originally provisioned with.
+    """
+    org_repo = info.get("org_repo")
+    if not org_repo:
+        return None
+    repo_short = org_repo.split("/")[-1] if "/" in org_repo else org_repo
+    from .config import DATA_DIR
+    from .hooks import select_hook
+
+    bare_repo = DATA_DIR / "git" / f"{repo_short}.git"
+    if not bare_repo.exists():
+        return None
+    ref = info.get("commit") or info.get("branch") or "HEAD"
+    try:
+        hook = select_hook(bare_repo, ref)
+    except Exception:
+        return None
+    return list(hook.network_domains()) if hook else []
 
 
 def setup_ssh(

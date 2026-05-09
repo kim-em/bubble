@@ -61,8 +61,15 @@ def register_bubble(
     base_image: str = "",
     remote_host: str = "",
     project_dir: str = "",
+    network_enabled: bool | None = None,
+    extra_domains: list[str] | None = None,
 ):
-    """Record a bubble's creation in the registry."""
+    """Record a bubble's creation in the registry.
+
+    network_enabled and extra_domains capture the network allowlist state
+    so that ``_reattach`` can rebuild iptables rules after ``incus stop``
+    destroys the container's network namespace. See issue #285.
+    """
     with _registry_lock():
         registry = _read_registry()
         entry = {
@@ -78,6 +85,13 @@ def register_bubble(
             entry["remote_host"] = remote_host
         if project_dir:
             entry["project_dir"] = project_dir
+        if network_enabled is not None:
+            entry["network_enabled"] = bool(network_enabled)
+        # Persist whenever the caller knows the value (including ``[]``) so a
+        # post-fix entry is distinguishable from a legacy one and we don't
+        # uselessly re-run hook detection on every restart.
+        if extra_domains is not None:
+            entry["extra_domains"] = list(extra_domains)
         registry["bubbles"][name] = entry
         _save_registry(registry)
 
