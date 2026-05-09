@@ -285,17 +285,20 @@ class TestStructuralValidation:
         assert error is not None
         assert "Multiple" in error
 
-    def test_multiple_scalar_fields_allowed(self):
-        """RepositoryInfo exception: multiple scalar fields under repository are OK,
-        but multiple top-level fields are still rejected."""
-        # Multiple scalar fields AT the top level (as if inside a repository selection)
-        # would only happen if the top-level fields are all in ALLOWED_REPO_FIELDS
-        # and have no selection set
+    def test_multiple_top_level_scalars_rejected(self):
+        """Multiple top-level fields are rejected unconditionally.
+
+        Real gh queries nest scalars under `repository(...) { ... }`, so there
+        is no need for a top-level multi-scalar exception. Allowing one would
+        be a footgun: any future addition of a scalar to
+        ALLOWED_TOP_LEVEL_QUERY_FIELDS would silently bypass repo-scoping on
+        fields 2..N.
+        """
         query = "query { name description url }"
         parsed, op_count = self._parse(query)
-        # These are scalar fields in ALLOWED_REPO_FIELDS without selection sets
         error = validate_structure(parsed, op_count)
-        assert error is None
+        assert error is not None
+        assert "Multiple" in error
 
     def test_alias_rejected(self):
         parsed, op_count = self._parse("query { myAlias: repository { name } }")
