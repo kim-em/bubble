@@ -127,6 +127,40 @@ _REDIRECT_ALLOWED_HOSTS = [
     "*.githubusercontent.com",
 ]
 
+# Response headers stripped before forwarding to the container. The container
+# authenticates to the proxy with its bubble token only — no other state should
+# bridge container and GitHub. The hop-by-hop entries are stripped because the
+# proxy terminates the upstream connection (RFC 7230 §6.1). The remaining
+# entries close auxiliary channels: Authorization / Proxy-Authorization could
+# echo upstream credentials; Set-Cookie would let GitHub (or an attacker
+# substituting an upstream response) plant client-side state the container
+# could replay against an exfil target; WWW-Authenticate / Proxy-Authenticate
+# prompt the client into a separate auth scheme outside the bubble token model.
+_STRIPPED_RESPONSE_HEADERS = frozenset(
+    {
+        # Hop-by-hop (RFC 7230 §6.1)
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "te",
+        "trailer",
+        "upgrade",
+        "proxy-authenticate",
+        "proxy-authorization",
+        # Auxiliary auth/state channels
+        "authorization",
+        "set-cookie",
+        "www-authenticate",
+    }
+)
+
+# On 4xx responses the Location header is purely informational (no redirect
+# follow happens) and would disclose upstream redirect targets — including
+# blob-storage URLs that already passed our redirect allowlist. Strip it on
+# error pass-through but keep it on 3xx so the container can follow redirects
+# the proxy explicitly chose not to handle.
+_STRIPPED_4XX_RESPONSE_HEADERS = _STRIPPED_RESPONSE_HEADERS | {"location"}
+
 logger = logging.getLogger("bubble.auth_proxy")
 
 
@@ -476,10 +510,13 @@ def _is_redirect_host_allowed(host: str) -> bool:
 
 def _follow_redirect(
     location: str, hops_remaining: int, method: str = "GET"
-) -> tuple[int, dict, bytes]:
+) -> tuple[int, list[tuple[str, str]], bytes]:
     """Follow a redirect URL with hardened rules.
 
-    Returns (status_code, headers_dict, body).
+    Returns (status_code, headers_list, body). Headers are returned as a
+    list of (name, value) tuples to preserve repeated headers (e.g. Link
+    pagination headers).
+
     Raises ValueError on policy violations.
     """
     parsed = urlparse(location)
@@ -522,8 +559,7 @@ def _follow_redirect(
             raise ValueError("Redirect response too large")
         body_parts.append(chunk)
 
-    headers = {k: v for k, v in resp.getheaders()}
-    return resp.status, headers, b"".join(body_parts)
+    return resp.status, resp.getheaders(), b"".join(body_parts)
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +681,13 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         if auth.startswith("Bearer "):
             return auth[7:].strip()
         return None
+
+    def _copy_response_headers(self, headers_iter, stripped=_STRIPPED_RESPONSE_HEADERS):
+        """Forward upstream response headers, dropping anything in `stripped`."""
+        for header, value in headers_iter:
+            if header.lower() in stripped:
+                continue
+            self.send_header(header, value)
 
     def _authenticate(self) -> dict | None:
         """Authenticate the request via X-Bubble-Token.
@@ -1121,11 +1164,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                     return
                 # For git or non-followable redirects, return as-is
                 self.send_response(e.code)
-                for header, value in e.headers.items():
-                    lower = header.lower()
-                    if lower in ("transfer-encoding", "connection", "keep-alive"):
-                        continue
-                    self.send_header(header, value)
+                self._copy_response_headers(e.headers.items())
                 self.end_headers()
                 body_data = e.read()
                 if body_data:
@@ -1165,14 +1204,9 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             # Pass through 4xx errors from GitHub (auth failures, not found, etc.)
             if 400 <= e.code < 500:
                 self.send_response(e.code)
-                for header, value in e.headers.items():
-                    lower = header.lower()
-                    if lower in ("transfer-encoding", "connection", "keep-alive"):
-                        continue
-                    # Strip GitHub's auth-related headers
-                    if lower == "authorization":
-                        continue
-                    self.send_header(header, value)
+                self._copy_response_headers(
+                    e.headers.items(), stripped=_STRIPPED_4XX_RESPONSE_HEADERS
+                )
                 self.end_headers()
                 body_data = e.read()
                 if body_data:
@@ -1209,11 +1243,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         # Send response back to client
         self.send_response(resp.status)
-        for header, value in resp.getheaders():
-            lower = header.lower()
-            if lower in ("transfer-encoding", "connection", "keep-alive"):
-                continue
-            self.send_header(header, value)
+        self._copy_response_headers(resp.getheaders())
         self.end_headers()
 
         # Stream response body
@@ -1249,11 +1279,13 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             return
 
         self.send_response(status)
-        for header, value in headers.items():
-            lower = header.lower()
-            if lower in ("transfer-encoding", "connection", "keep-alive"):
-                continue
-            self.send_header(header, value)
+        # Defensive: today _follow_redirect only returns on 2xx (HTTPError is
+        # raised above and converted to 502), but if that ever changes, keep
+        # the same Location-strip rule that direct 4xx pass-through uses.
+        stripped = (
+            _STRIPPED_4XX_RESPONSE_HEADERS if 400 <= status < 500 else _STRIPPED_RESPONSE_HEADERS
+        )
+        self._copy_response_headers(headers, stripped=stripped)
         self.end_headers()
         if body:
             self.wfile.write(body)
