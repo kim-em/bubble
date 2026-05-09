@@ -39,6 +39,7 @@ import os
 import re
 import ssl
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import HTTPError
 from urllib.parse import urlparse
@@ -73,6 +74,14 @@ RATE_LIMIT_PER_HOUR = 600
 
 # Maximum tracked containers
 MAX_TRACKED_CONTAINERS = 100
+
+# Pre-flight result cache TTLs (seconds). Positive results are cached longer
+# to avoid re-querying for legitimate repeated mutations on the same node.
+# Negative results are cached briefly to blunt loops on bad/never-resolving IDs
+# without keeping stale "missing" answers around.
+PREFLIGHT_POSITIVE_CACHE_TTL = 300.0
+PREFLIGHT_NEGATIVE_CACHE_TTL = 60.0
+MAX_PREFLIGHT_CACHE_ENTRIES = 1024
 
 # ---------------------------------------------------------------------------
 # Path patterns
@@ -604,6 +613,18 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
     _repo_node_id_cache: dict[tuple[str, str], str] = {}
     _repo_node_id_lock = threading.Lock()
 
+    # Pre-flight node-id resolution cache. Stores both positive and negative
+    # results with TTLs to avoid re-querying GitHub for repeated probes.
+    # Maps node_id -> (resolved_repo_or_None, expiry_unix_ts).
+    _preflight_cache: dict[str, tuple[str | None, float]] = {}
+    _preflight_cache_lock = threading.Lock()
+
+    # In-flight singleflight tracking. Prevents the threaded HTTP server from
+    # firing N concurrent host-side preflights for the same node id when N
+    # handlers all miss the cache simultaneously.
+    _preflight_inflight: dict[str, threading.Event] = {}
+    _preflight_inflight_lock = threading.Lock()
+
     def log_message(self, format, *args):
         """Route HTTP server logs to our logger."""
         logger.info(format, *args)
@@ -842,8 +863,8 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                     parsed,
                     owner,
                     repo,
-                    preflight_fn=self._preflight_check,
-                    repo_node_id_fn=self._get_repo_node_id,
+                    preflight_fn=lambda nid: self._preflight_check(nid, container),
+                    repo_node_id_fn=lambda o, r: self._get_repo_node_id(o, r, container),
                 )
                 if error:
                     self._send_error(403, f"GraphQL mutation validation failed: {error}")
@@ -867,7 +888,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                     parsed,
                     owner,
                     repo,
-                    preflight_fn=self._preflight_check,
+                    preflight_fn=lambda nid: self._preflight_check(nid, container),
                 )
                 if error:
                     self._send_error(403, f"GraphQL read validation failed: {error}")
@@ -898,13 +919,27 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         resp = opener.open(req, timeout=30)
         return json.loads(resp.read())
 
-    def _get_repo_node_id(self, owner: str, repo: str) -> str | None:
-        """Get the GitHub node ID for a repository. Cached."""
+    def _get_repo_node_id(self, owner: str, repo: str, container: str) -> str | None:
+        """Get the GitHub node ID for a repository. Cached.
+
+        Counts uncached upstream queries against the originating container's
+        rate window so misbehaving containers can't burn the host's GitHub
+        quota through preflight traffic.
+        """
         key = (owner.lower(), repo.lower())
         with self._repo_node_id_lock:
             cached = self._repo_node_id_cache.get(key)
             if cached is not None:
                 return cached
+
+        if not self.rate_limiter.check(container):
+            logger.info(
+                "PREFLIGHT rate-limited container=%s repo_id_lookup=%s/%s",
+                container,
+                owner,
+                repo,
+            )
+            return None
 
         from .graphql_validator import REPO_ID_QUERY
 
@@ -919,19 +954,114 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             logger.info("PREFLIGHT repo_node_id failed for %s/%s", owner, repo)
             return None
 
-    def _preflight_check(self, node_id: str) -> str | None:
+    def _preflight_cache_get(self, node_id: str) -> tuple[bool, str | None]:
+        """Look up a preflight result in the cache. Returns (hit, value)."""
+        now = time.time()
+        with self._preflight_cache_lock:
+            cached = self._preflight_cache.get(node_id)
+            if cached is None:
+                return False, None
+            value, expiry = cached
+            if expiry <= now:
+                # Expired: drop and miss.
+                self._preflight_cache.pop(node_id, None)
+                return False, None
+            return True, value
+
+    def _preflight_cache_put(self, node_id: str, value: str | None) -> None:
+        """Cache a preflight result with TTL based on positive/negative."""
+        ttl = PREFLIGHT_POSITIVE_CACHE_TTL if value else PREFLIGHT_NEGATIVE_CACHE_TTL
+        expiry = time.time() + ttl
+        with self._preflight_cache_lock:
+            # Bound the cache: drop the entry with the soonest expiry if full.
+            if (
+                len(self._preflight_cache) >= MAX_PREFLIGHT_CACHE_ENTRIES
+                and node_id not in self._preflight_cache
+            ):
+                oldest = min(self._preflight_cache, key=lambda k: self._preflight_cache[k][1])
+                self._preflight_cache.pop(oldest, None)
+            self._preflight_cache[node_id] = (value, expiry)
+
+    def _preflight_check(self, node_id: str, container: str) -> str | None:
         """Check which repo a node belongs to.
 
-        Returns "owner/repo" string or None on failure.
+        Returns "owner/repo" string or None on failure / unverifiable.
+
+        Counts uncached upstream queries against the originating container's
+        rate window so misbehaving containers can't burn the host's GitHub
+        quota through preflight traffic. Caches both positive results and
+        definitive negative answers from GitHub with short TTLs so repeated
+        probes for the same ID don't re-query at all. Transient failures
+        (network errors, timeouts, GraphQL-level errors) are NOT cached, to
+        avoid one upstream blip locking out a legitimate node ID for 60s.
+
+        Concurrent misses for the same node id are serialized via a per-id
+        singleflight so a flood of parallel handlers can't fan out into N
+        host-side calls before the first one populates the cache.
         """
-        from .graphql_validator import PREFLIGHT_QUERY, extract_repo_from_preflight
+        hit, value = self._preflight_cache_get(node_id)
+        if hit:
+            return value
+
+        # Singleflight: at most one upstream query per node id at a time.
+        # If another handler is already querying, wait for its result then
+        # re-check the cache. If the cache still misses (transient failure
+        # — those aren't cached), fall through and try again ourselves,
+        # subject to the rate limiter.
+        while True:
+            with self._preflight_inflight_lock:
+                event = self._preflight_inflight.get(node_id)
+                if event is None:
+                    event = threading.Event()
+                    self._preflight_inflight[node_id] = event
+                    is_leader = True
+                else:
+                    is_leader = False
+            if is_leader:
+                break
+            # Wait modestly longer than the upstream timeout (30s) so a
+            # stuck leader can't pin us forever.
+            event.wait(timeout=35)
+            hit, value = self._preflight_cache_get(node_id)
+            if hit:
+                return value
+            # Cache miss after the leader finished — leader saw a transient
+            # failure and didn't cache. Loop to take the leader role.
 
         try:
-            data = self._github_graphql_query(PREFLIGHT_QUERY, {"id": node_id})
-            return extract_repo_from_preflight(data)
-        except Exception:
-            logger.info("PREFLIGHT check failed for node %s", node_id)
-            return None
+            if not self.rate_limiter.check(container):
+                logger.info(
+                    "PREFLIGHT rate-limited container=%s node_id=%s",
+                    container,
+                    node_id,
+                )
+                # Don't cache: the rate-limit decision is per-container/
+                # per-window, not a property of the node ID.
+                return None
+
+            from .graphql_validator import PREFLIGHT_QUERY, extract_repo_from_preflight
+
+            try:
+                data = self._github_graphql_query(PREFLIGHT_QUERY, {"id": node_id})
+            except Exception:
+                logger.info("PREFLIGHT check failed for node %s", node_id)
+                # Transient (HTTP error / timeout / network): don't cache.
+                return None
+
+            # Treat GraphQL-level errors as transient too: a 200 with an
+            # `errors` array can be a server hiccup ("Something went wrong",
+            # secondary rate limit, etc.) and shouldn't poison the cache.
+            if isinstance(data, dict) and data.get("errors"):
+                logger.info("PREFLIGHT graphql errors for node %s", node_id)
+                return None
+
+            result = extract_repo_from_preflight(data)
+            self._preflight_cache_put(node_id, result)
+            return result
+        finally:
+            with self._preflight_inflight_lock:
+                self._preflight_inflight.pop(node_id, None)
+            event.set()
 
     def _forward_to_github(
         self,
