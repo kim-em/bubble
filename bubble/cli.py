@@ -440,6 +440,8 @@ def _open_remote(
 
 def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=False):
     """Re-attach to an existing container."""
+    # ``ensure_running`` re-applies the network allowlist on stop/start
+    # transitions; see issue #285.
     ensure_running(runtime, name)
 
     if no_interactive:

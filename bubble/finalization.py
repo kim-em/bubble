@@ -89,6 +89,7 @@ def finalize_bubble(
     except Exception:
         pass
 
+    extra_domains = list(hook.network_domains()) if hook else []
     register_bubble(
         name,
         t.org_repo,
@@ -97,6 +98,8 @@ def finalize_bubble(
         pr=int(t.ref) if t.kind == "pr" else 0,
         base_image=image_name,
         project_dir=project_dir,
+        network_enabled=network,
+        extra_domains=extra_domains,
     )
 
     workspace_file = hook.workspace_file(project_dir) if hook else None

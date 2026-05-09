@@ -233,15 +233,17 @@ def register_lifecycle_commands(main):
                 click.echo(f"No bubbles unused for {age}+ days.")
                 return
 
-        # Start stopped/frozen containers temporarily for checking
+        # Start stopped/frozen containers temporarily for checking. ``incus
+        # stop`` destroys the network namespace, so route stopped containers
+        # through ``ensure_running`` to replay the iptables allowlist before
+        # we exec ``check_clean`` inside them (issue #285).
+        from ..container_helpers import ensure_running
+
         started_containers = []
         for c in to_start:
             try:
                 click.echo(f"  Starting {c.name} for inspection...")
-                if c.state == "frozen":
-                    runtime.unfreeze(c.name)
-                else:
-                    runtime.start(c.name)
+                ensure_running(runtime, c.name)
                 started_containers.append(c)
                 to_check.append(c)
             except Exception as e:
