@@ -2,7 +2,6 @@
 
 import json
 import shlex
-from pathlib import Path
 
 import click
 
@@ -73,7 +72,12 @@ def finalize_bubble(
         from .output import step
 
         step("Setting up SSH access...")
-    setup_ssh(runtime, name, host_key_trust=is_enabled(config, "host_key_trust"))
+    setup_ssh(
+        runtime,
+        name,
+        host_key_trust=is_enabled(config, "host_key_trust"),
+        config=config,
+    )
     setup_git_config(runtime, name, git_name, git_email)
 
     commit = ""
@@ -179,41 +183,40 @@ def machine_readable_output(status: str, name: str, **kwargs):
     click.echo(json.dumps(data))
 
 
-def inject_local_ssh_keys(remote_host, container_name: str):
+def inject_local_ssh_keys(remote_host, container_name: str, config: dict | None = None):
     """Inject local SSH public keys into a remote container's authorized_keys.
 
     The remote `bubble open` only injects the remote host's keys. For the
     chained ProxyCommand (local → remote → container) to work, the local
     machine's keys must also be present.
     """
+    from .container_helpers import collect_authorized_keys
     from .remote import _ssh_run
 
-    ssh_dir = Path.home() / ".ssh"
-    pub_keys = []
-    for key_file in ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]:
-        key_path = ssh_dir / key_file
-        if key_path.exists():
-            pub_keys.append(key_path.read_text().strip())
+    pub_keys = collect_authorized_keys(config)
     if not pub_keys:
         return
 
-    keys_str = "\\n".join(pub_keys)
-    # Append local keys to the container's authorized_keys via the remote
-    # bubble's runtime (so bubble-colima:/local: prefix is applied for us).
+    # Pipe the keys via stdin rather than embedding them in the shell
+    # command — public-key comments may legally contain quotes, '$',
+    # backticks, etc., which would otherwise be mangled or expanded.
+    keys_blob = "\n".join(pub_keys) + "\n"
     _ssh_run(
         remote_host,
         [
             "bubble",
             "internal",
             "incus-exec",
+            "--with-stdin",
             container_name,
             "su",
             "-",
             "user",
             "-c",
-            f"mkdir -p ~/.ssh && chmod 700 ~/.ssh "
-            f'&& printf "{keys_str}\\n" >> ~/.ssh/authorized_keys '
-            f"&& chmod 600 ~/.ssh/authorized_keys",
+            "mkdir -p ~/.ssh && chmod 700 ~/.ssh "
+            "&& cat >> ~/.ssh/authorized_keys "
+            "&& chmod 600 ~/.ssh/authorized_keys",
         ],
         timeout=15,
+        input=keys_blob,
     )
