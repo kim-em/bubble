@@ -255,10 +255,11 @@ def nested_subdir_lean_repo(tmp_path):
 
 @pytest.fixture
 def vendor_only_lean_repo(tmp_path):
-    """Repo whose only lean-toolchain lives in a vendor-looking subdirectory.
+    """Repo whose only lean-toolchain lives in a directory with no lakefile.
 
-    Detection should still fire — bubble installs elan + the VS Code
-    extension; the user can choose what (if anything) to build.
+    Detection should NOT fire — this is the false-positive guard: a Python
+    repo could plausibly vendor a lean-toolchain file, and we don't want
+    that to inject the Lean image and a failing `lake build`.
     """
     return _make_hook_repo(
         tmp_path,
@@ -328,12 +329,15 @@ class TestSubdirDetection:
         assert hook._subdir == "src/lean"
         assert hook.image_name() == "lean-v4.21.0"
 
-    def test_vendor_only_still_detected(self, vendor_only_lean_repo):
-        """The sibling-lakefile requirement is gone — any lean-toolchain fires."""
+    def test_vendor_only_not_detected(self, vendor_only_lean_repo):
+        """A non-root lean-toolchain without a sibling lakefile is ignored.
+
+        Guards against false positives like a Python repo with a vendored
+        lean-toolchain ending up on the Lean image with a failing auto-build.
+        """
         hook = LeanHook()
-        assert hook.detect(vendor_only_lean_repo, "HEAD") is True
-        assert hook._subdir == "vendor"
-        assert hook.image_name() == "lean-v4.20.0"
+        assert hook.detect(vendor_only_lean_repo, "HEAD") is False
+        assert hook._subdir == ""
 
     def test_root_wins_over_subdir(self, root_and_subdir_lean_repo):
         hook = LeanHook()
@@ -341,6 +345,29 @@ class TestSubdirDetection:
         assert hook._subdir == ""
         assert hook._multi_project is False
         assert hook.image_name() == "lean-v4.19.0"
+
+    def test_root_wins_even_with_buildable_subdir(self, tmp_path):
+        """Root lean-toolchain takes precedence even if a buildable subdir exists.
+
+        Subdir lean-toolchain files in real repos (e.g. lean4 itself) are
+        almost always test/vendor fixtures, so root is canonical.
+        """
+        repo = _make_hook_repo(
+            tmp_path,
+            "root-plus-buildable-sub",
+            {
+                "lean-toolchain": "leanprover/lean4:v4.19.0\n",
+                "lakefile.toml": "name = 'main'\n",
+                "sub/lean-toolchain": "leanprover/lean4:v4.20.0\n",
+                "sub/lakefile.toml": "name = 'sub'\n",
+            },
+        )
+        hook = LeanHook()
+        assert hook.detect(repo, "HEAD") is True
+        assert hook._subdir == ""
+        assert hook._multi_project is False
+        assert hook.image_name() == "lean-v4.19.0"
+        assert hook.notices() == []
 
     def test_root_repo_subdir_empty(self, lean_repo):
         hook = LeanHook()

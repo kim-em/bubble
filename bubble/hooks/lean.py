@@ -33,6 +33,27 @@ def _is_safe_subdir(subdir: str) -> bool:
     return True
 
 
+def _has_lakefile(bare_repo_path: Path, ref: str, subdir: str) -> bool:
+    """Check for a sibling lakefile alongside a discovered lean-toolchain.
+
+    Filters out vendored/example/doc directories that happen to ship a
+    `lean-toolchain` without being a buildable Lean project — e.g. a Python
+    repo with `vendor/lean-toolchain` shouldn't be mistaken for a Lean repo.
+    """
+    prefix = f"{subdir}/" if subdir else ""
+    for name in ("lakefile.toml", "lakefile.lean"):
+        try:
+            subprocess.run(
+                ["git", "-C", str(bare_repo_path), "cat-file", "-e", f"{ref}:{prefix}{name}"],
+                capture_output=True,
+                check=True,
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    return False
+
+
 def _read_lean_toolchain(bare_repo_path: Path, ref: str, subdir: str = "") -> str | None:
     """Read the lean-toolchain file content from a bare repo at a given ref.
 
@@ -204,19 +225,28 @@ class LeanHook(Hook):
 
         if root_content is not None:
             # Root lean-toolchain wins — treat the repo as a single-root
-            # project, matching the original detection behavior even if
-            # additional lean-toolchain files exist deeper in the tree.
+            # project even if additional lean-toolchain files exist deeper
+            # in the tree. Subdir copies in real repos are almost always
+            # vendored/test fixtures (e.g. lean4 itself ships them under
+            # tests/), so demoting to multi-project would be wrong.
             self._toolchain = root_content
             self._subdir = ""
             self._configure_for_single_project(bare_repo_path, ref, "")
             return True
 
-        subdirs = _find_lean_toolchain_subdirs(bare_repo_path, ref)
-        if not subdirs:
+        # Only count subdirs that look like real Lean projects (sibling
+        # lakefile). This filters out e.g. a Python repo with a vendored
+        # `lean-toolchain` that has no lakefile next to it.
+        candidates = [
+            s
+            for s in _find_lean_toolchain_subdirs(bare_repo_path, ref)
+            if _has_lakefile(bare_repo_path, ref, s)
+        ]
+        if not candidates:
             return False
 
-        if len(subdirs) == 1:
-            subdir = subdirs[0]
+        if len(candidates) == 1:
+            subdir = candidates[0]
             content = _read_lean_toolchain(bare_repo_path, ref, subdir)
             if content is None:
                 return False
@@ -225,16 +255,16 @@ class LeanHook(Hook):
             self._configure_for_single_project(bare_repo_path, ref, subdir)
             return True
 
-        # Multiple lean-toolchain files across subdirectories.
+        # Multiple buildable Lean projects across subdirectories.
         self._multi_project = True
         self._subdir = ""  # we don't pick one for the auto-build
         contents: list[str] = []
-        for s in subdirs:
+        for s in candidates:
             c = _read_lean_toolchain(bare_repo_path, ref, s)
             if c is not None:
                 contents.append(c)
         unique = sorted(set(contents))
-        dirs_label = ", ".join(sorted(subdirs))
+        dirs_label = ", ".join(sorted(candidates))
         if len(unique) == 1:
             self._toolchain = contents[0]
             self._notices.append(
