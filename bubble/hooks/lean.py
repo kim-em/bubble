@@ -17,11 +17,50 @@ from . import GitDependency, Hook
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def _read_lean_toolchain(bare_repo_path: Path, ref: str) -> str | None:
-    """Read the lean-toolchain file content from a bare repo at a given ref."""
+def _is_safe_subdir(subdir: str) -> bool:
+    """Validate a detected project subdirectory.
+
+    The string flows into shell commands and into paths under /home/user/, so
+    each path component must match the same conservative policy used for Lake
+    package names. Reject absolute paths, leading/trailing slashes, empty
+    components, and any '.' / '..' segments.
+    """
+    if not subdir or subdir.startswith("/") or subdir.endswith("/"):
+        return False
+    for part in subdir.split("/"):
+        if not part or part in (".", "..") or not _SAFE_NAME_RE.match(part):
+            return False
+    return True
+
+
+def _has_lakefile(bare_repo_path: Path, ref: str, subdir: str) -> bool:
+    """Confirm a sibling lakefile exists next to a discovered lean-toolchain.
+
+    Filters out vendored/example/doc directories that happen to ship a
+    lean-toolchain without being the project root.
+    """
+    for name in ("lakefile.toml", "lakefile.lean"):
+        try:
+            subprocess.run(
+                ["git", "-C", str(bare_repo_path), "cat-file", "-e", f"{ref}:{subdir}/{name}"],
+                capture_output=True,
+                check=True,
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    return False
+
+
+def _read_lean_toolchain(bare_repo_path: Path, ref: str, subdir: str = "") -> str | None:
+    """Read the lean-toolchain file content from a bare repo at a given ref.
+
+    ``subdir`` is "" for the repo root, or a relative path like "foo" or "foo/bar".
+    """
+    path = f"{subdir}/lean-toolchain" if subdir else "lean-toolchain"
     try:
         result = subprocess.run(
-            ["git", "-C", str(bare_repo_path), "show", f"{ref}:lean-toolchain"],
+            ["git", "-C", str(bare_repo_path), "show", f"{ref}:{path}"],
             capture_output=True,
             text=True,
             check=True,
@@ -29,6 +68,81 @@ def _read_lean_toolchain(bare_repo_path: Path, ref: str) -> str | None:
         return result.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
+
+
+def _find_lean_toolchain_subdir(bare_repo_path: Path, ref: str) -> str | None:
+    """Search for a non-root `lean-toolchain` file in the bare repo at `ref`.
+
+    Returns the relative directory containing the file, or None if there are
+    zero or multiple matches, or if the unique match doesn't sit next to a
+    lakefile. The root is handled separately by the caller; this only fires
+    on the slow path when root has no lean-toolchain.
+
+    Uses `git ls-tree -z` (NUL-delimited) and streams output, stopping after
+    the second match so a huge tree with no Lean project doesn't pay for the
+    full listing. NUL-delimited mode also avoids git's quotePath escaping for
+    paths with unusual bytes.
+    """
+    try:
+        proc = subprocess.Popen(
+            ["git", "-C", str(bare_repo_path), "ls-tree", "-rz", "--name-only", ref],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, FileNotFoundError):
+        return None
+
+    matches: list[str] = []
+    try:
+        assert proc.stdout is not None
+        buf = b""
+        suffix = b"/lean-toolchain"
+        while True:
+            chunk = proc.stdout.read(65536)
+            if not chunk:
+                buf += b""
+                # Flush whatever's left.
+                for entry in buf.split(b"\0"):
+                    if entry.endswith(suffix):
+                        matches.append(entry.decode("utf-8", "replace"))
+                        if len(matches) >= 2:
+                            break
+                break
+            buf += chunk
+            parts = buf.split(b"\0")
+            buf = parts[-1]  # last fragment may be incomplete
+            for entry in parts[:-1]:
+                if entry.endswith(suffix):
+                    matches.append(entry.decode("utf-8", "replace"))
+            if len(matches) >= 2:
+                break
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+
+    if not matches:
+        return None
+    if len(matches) >= 2:
+        dirs = sorted(m[: -len("/lean-toolchain")] for m in matches)
+        click.echo(
+            f"Multiple lean-toolchain files found ({', '.join(dirs)}); "
+            "cannot auto-detect Lean project subdirectory.",
+            err=True,
+        )
+        return None
+    subdir = matches[0][: -len("/lean-toolchain")]
+    if not _is_safe_subdir(subdir):
+        return None
+    if not _has_lakefile(bare_repo_path, ref, subdir):
+        return None
+    return subdir
 
 
 def _parse_lean_version(toolchain_str: str) -> str | None:
@@ -52,11 +166,14 @@ def _parse_lean_version(toolchain_str: str) -> str | None:
     return None
 
 
-def _parse_git_dependencies(bare_repo_path: Path, ref: str) -> list[GitDependency]:
+def _parse_git_dependencies(
+    bare_repo_path: Path, ref: str, subdir: str = ""
+) -> list[GitDependency]:
     """Parse git dependencies from lake-manifest.json in the bare repo."""
+    path = f"{subdir}/lake-manifest.json" if subdir else "lake-manifest.json"
     try:
         result = subprocess.run(
-            ["git", "-C", str(bare_repo_path), "show", f"{ref}:lake-manifest.json"],
+            ["git", "-C", str(bare_repo_path), "show", f"{ref}:{path}"],
             capture_output=True,
             text=True,
             check=True,
@@ -100,30 +217,49 @@ class LeanHook(Hook):
         self._needs_cache: bool = False
         self._is_lean4: bool = False
         self._git_deps: list[GitDependency] = []
+        self._subdir: str = ""
 
     def name(self) -> str:
         return "Lean 4"
 
     def detect(self, bare_repo_path: Path, ref: str) -> bool:
-        """Check for lean-toolchain file at the given ref in the bare repo."""
+        """Check for lean-toolchain file at the given ref in the bare repo.
+
+        Tries the repo root first (the common case). If that fails, scans the
+        tree for a single non-root `lean-toolchain` file and uses its
+        directory. Bails out (returns False) when there are multiple matches.
+        """
         content = _read_lean_toolchain(bare_repo_path, ref)
+        subdir = ""
+        if content is None:
+            found = _find_lean_toolchain_subdir(bare_repo_path, ref)
+            if found is not None:
+                content = _read_lean_toolchain(bare_repo_path, ref, found)
+                if content is not None:
+                    subdir = found
+
         if content is not None:
             self._toolchain = content
+            self._subdir = subdir
             self._is_lean4 = bare_repo_path.name == "lean4.git"
             if self._is_lean4:
                 self._git_deps = []
                 self._needs_cache = False
             else:
-                self._git_deps = _parse_git_dependencies(bare_repo_path, ref)
+                self._git_deps = _parse_git_dependencies(bare_repo_path, ref, subdir)
                 self._needs_cache = bare_repo_path.name == "mathlib4.git" or any(
                     d.name == "mathlib" for d in self._git_deps
                 )
             return True
         self._toolchain = None
+        self._subdir = ""
         self._needs_cache = False
         self._is_lean4 = False
         self._git_deps = []
         return False
+
+    def project_subdir(self) -> str:
+        return self._subdir
 
     def image_name(self) -> str:
         """Return the image name based on the lean-toolchain version.

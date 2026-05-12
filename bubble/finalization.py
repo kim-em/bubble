@@ -38,7 +38,9 @@ def finalize_bubble(
     before any clone/fetch operations.
     """
     q_short = shlex.quote(short)
-    project_dir = f"/home/user/{short}"
+    repo_dir = f"/home/user/{short}"
+    subdir = hook.project_subdir() if hook else ""
+    project_dir = f"{repo_dir}/{subdir}" if subdir else repo_dir
     if hook:
         hook.post_clone(runtime, name, project_dir)
 
@@ -50,7 +52,7 @@ def finalize_bubble(
     # letting gh discover the host without needing to actually use the remote.
     if t.owner and t.repo:
         q_repo = shlex.quote(f"git@github.com:{t.owner}/{t.repo}.git")
-        q_dir = shlex.quote(project_dir)
+        q_dir = shlex.quote(repo_dir)
         add_cmd = f"cd {q_dir} && git remote add github {q_repo} 2>/dev/null || true"
         try:
             runtime.exec(name, ["su", "-", "user", "-c", add_cmd])

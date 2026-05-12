@@ -69,6 +69,14 @@ class Hook(ABC):
         """Return absolute path to a .code-workspace file to open, or None."""
         return None
 
+    def project_subdir(self) -> str:
+        """Subdirectory within the repo where the project lives.
+
+        Returns "" if the project is at the repo root (the common case).
+        Only populated after detect() returns True.
+        """
+        return ""
+
 
 def discover_hooks() -> list[Hook]:
     """Return all registered hooks in priority order."""

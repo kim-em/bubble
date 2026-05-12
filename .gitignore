@@ -11,3 +11,4 @@ uv.lock
 .vscode/claude-prompt.txt
 .vscode/tasks.json
 .vscode/settings.json
+.claude/scheduled_tasks.lock
