@@ -254,11 +254,15 @@ def nested_subdir_lean_repo(tmp_path):
 
 
 @pytest.fixture
-def subdir_no_lakefile_repo(tmp_path):
-    """Subdirectory has lean-toolchain but no sibling lakefile (vendored/doc dir)."""
+def vendor_only_lean_repo(tmp_path):
+    """Repo whose only lean-toolchain lives in a vendor-looking subdirectory.
+
+    Detection should still fire — bubble installs elan + the VS Code
+    extension; the user can choose what (if anything) to build.
+    """
     return _make_hook_repo(
         tmp_path,
-        "no-lakefile",
+        "vendor-only",
         {
             "README.md": "# Root\n",
             "vendor/lean-toolchain": "leanprover/lean4:v4.20.0\n",
@@ -267,25 +271,38 @@ def subdir_no_lakefile_repo(tmp_path):
 
 
 @pytest.fixture
-def ambiguous_lean_repo(tmp_path):
-    """Create a bare git repo with multiple non-root lean-toolchain files."""
+def multi_identical_lean_repo(tmp_path):
+    """Multiple lean-toolchain files in subdirs, all with identical content."""
     return _make_hook_repo(
         tmp_path,
-        "ambig-work",
+        "multi-same",
         {
             "a/lean-toolchain": "leanprover/lean4:v4.20.0\n",
+            "a/lakefile.toml": "name = 'a'\n",
             "b/lean-toolchain": "leanprover/lean4:v4.20.0\n",
+            "b/lakefile.toml": "name = 'b'\n",
+        },
+    )
+
+
+@pytest.fixture
+def multi_versions_lean_repo(tmp_path):
+    """Multiple lean-toolchain files in subdirs with different versions."""
+    return _make_hook_repo(
+        tmp_path,
+        "multi-versions",
+        {
+            "a/lean-toolchain": "leanprover/lean4:v4.20.0\n",
+            "a/lakefile.toml": "name = 'a'\n",
+            "b/lean-toolchain": "leanprover/lean4:v4.21.0\n",
+            "b/lakefile.toml": "name = 'b'\n",
         },
     )
 
 
 @pytest.fixture
 def root_and_subdir_lean_repo(tmp_path):
-    """Repo with lean-toolchain at root AND in a subdirectory.
-
-    The root file should win — we don't enter the slow scan path when root
-    has lean-toolchain, even if other copies exist deeper in the tree.
-    """
+    """Root lean-toolchain plus extra copies in subdirs — root wins."""
     return _make_hook_repo(
         tmp_path,
         "root-and-sub",
@@ -300,44 +317,91 @@ class TestSubdirDetection:
     def test_detect_subdir_lean_repo(self, subdir_lean_repo):
         hook = LeanHook()
         assert hook.detect(subdir_lean_repo, "HEAD") is True
-        assert hook.project_subdir() == "myproj"
+        assert hook._subdir == "myproj"
         assert hook.image_name() == "lean-v4.20.0"
+        assert hook._multi_project is False
+        assert hook.notices() == []
 
     def test_detect_nested_subdir(self, nested_subdir_lean_repo):
         hook = LeanHook()
         assert hook.detect(nested_subdir_lean_repo, "HEAD") is True
-        assert hook.project_subdir() == "src/lean"
+        assert hook._subdir == "src/lean"
         assert hook.image_name() == "lean-v4.21.0"
 
-    def test_ambiguous_repo_not_detected(self, ambiguous_lean_repo):
+    def test_vendor_only_still_detected(self, vendor_only_lean_repo):
+        """The sibling-lakefile requirement is gone — any lean-toolchain fires."""
         hook = LeanHook()
-        assert hook.detect(ambiguous_lean_repo, "HEAD") is False
-        assert hook.project_subdir() == ""
+        assert hook.detect(vendor_only_lean_repo, "HEAD") is True
+        assert hook._subdir == "vendor"
+        assert hook.image_name() == "lean-v4.20.0"
 
     def test_root_wins_over_subdir(self, root_and_subdir_lean_repo):
         hook = LeanHook()
         assert hook.detect(root_and_subdir_lean_repo, "HEAD") is True
-        assert hook.project_subdir() == ""
+        assert hook._subdir == ""
+        assert hook._multi_project is False
         assert hook.image_name() == "lean-v4.19.0"
 
-    def test_root_repo_has_empty_subdir(self, lean_repo):
+    def test_root_repo_subdir_empty(self, lean_repo):
         hook = LeanHook()
         hook.detect(lean_repo, "HEAD")
-        assert hook.project_subdir() == ""
+        assert hook._subdir == ""
 
-    def test_subdir_cleared_on_redetect_failure(self, subdir_lean_repo, non_lean_repo):
-        """Re-running detect() on a non-Lean repo must clear stale subdir state."""
+    def test_state_cleared_on_redetect_failure(self, subdir_lean_repo, non_lean_repo):
         hook = LeanHook()
         hook.detect(subdir_lean_repo, "HEAD")
-        assert hook.project_subdir() == "myproj"
+        assert hook._subdir == "myproj"
         assert hook.detect(non_lean_repo, "HEAD") is False
-        assert hook.project_subdir() == ""
+        assert hook._subdir == ""
+        assert hook._multi_project is False
+        assert hook.notices() == []
 
-    def test_subdir_without_lakefile_rejected(self, subdir_no_lakefile_repo):
-        """A lean-toolchain in a subdir with no sibling lakefile is ignored."""
+
+class TestMultiProject:
+    def test_identical_toolchains_pick_image_skip_build(
+        self, multi_identical_lean_repo, mock_runtime
+    ):
         hook = LeanHook()
-        assert hook.detect(subdir_no_lakefile_repo, "HEAD") is False
-        assert hook.project_subdir() == ""
+        assert hook.detect(multi_identical_lean_repo, "HEAD") is True
+        assert hook._multi_project is True
+        assert hook.image_name() == "lean-v4.20.0"
+        assert hook._subdir == ""
+        notes = hook.notices()
+        assert len(notes) == 1
+        assert "Multiple Lean projects" in notes[0]
+        assert "a" in notes[0] and "b" in notes[0]
+
+        hook.post_clone(mock_runtime, "c", "/home/user/repo")
+        marker_calls = [
+            c
+            for c in mock_runtime.calls
+            if c[0] == "exec" and ".bubble-fetch-cache" in " ".join(c[2])
+        ]
+        assert marker_calls == []
+
+    def test_differing_toolchains_use_plain_lean(self, multi_versions_lean_repo):
+        hook = LeanHook()
+        assert hook.detect(multi_versions_lean_repo, "HEAD") is True
+        assert hook._multi_project is True
+        assert hook.image_name() == "lean"
+        notes = hook.notices()
+        assert len(notes) == 1
+        assert "Multiple Lean toolchains" in notes[0]
+        assert "v4.20.0" in notes[0] and "v4.21.0" in notes[0]
+        assert "elan will install" in notes[0]
+
+    def test_subdir_build_dir(self, subdir_lean_repo, mock_runtime):
+        """Single-subdir auto-build runs in the subdir, not the repo root."""
+        hook = LeanHook()
+        hook.detect(subdir_lean_repo, "HEAD")
+        hook.post_clone(mock_runtime, "c", "/home/user/repo")
+        marker_calls = [
+            c
+            for c in mock_runtime.calls
+            if c[0] == "exec" and ".bubble-fetch-cache" in " ".join(c[2])
+        ]
+        assert len(marker_calls) == 1
+        assert "/home/user/repo/myproj" in " ".join(marker_calls[0][2])
 
 
 class TestSafeSubdir:
