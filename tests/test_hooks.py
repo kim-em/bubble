@@ -248,6 +248,20 @@ def nested_subdir_lean_repo(tmp_path):
         {
             "docs/README.md": "# Docs\n",
             "src/lean/lean-toolchain": "leanprover/lean4:v4.21.0\n",
+            "src/lean/lakefile.lean": "package myproj\n",
+        },
+    )
+
+
+@pytest.fixture
+def subdir_no_lakefile_repo(tmp_path):
+    """Subdirectory has lean-toolchain but no sibling lakefile (vendored/doc dir)."""
+    return _make_hook_repo(
+        tmp_path,
+        "no-lakefile",
+        {
+            "README.md": "# Root\n",
+            "vendor/lean-toolchain": "leanprover/lean4:v4.20.0\n",
         },
     )
 
@@ -318,6 +332,42 @@ class TestSubdirDetection:
         assert hook.project_subdir() == "myproj"
         assert hook.detect(non_lean_repo, "HEAD") is False
         assert hook.project_subdir() == ""
+
+    def test_subdir_without_lakefile_rejected(self, subdir_no_lakefile_repo):
+        """A lean-toolchain in a subdir with no sibling lakefile is ignored."""
+        hook = LeanHook()
+        assert hook.detect(subdir_no_lakefile_repo, "HEAD") is False
+        assert hook.project_subdir() == ""
+
+
+class TestSafeSubdir:
+    def test_safe_names(self):
+        from bubble.hooks.lean import _is_safe_subdir
+
+        assert _is_safe_subdir("myproj")
+        assert _is_safe_subdir("src/lean")
+        assert _is_safe_subdir("a.b-c_d/e1")
+
+    def test_rejects_traversal(self):
+        from bubble.hooks.lean import _is_safe_subdir
+
+        assert not _is_safe_subdir("..")
+        assert not _is_safe_subdir("../etc")
+        assert not _is_safe_subdir("foo/../bar")
+        assert not _is_safe_subdir(".")
+        assert not _is_safe_subdir("./foo")
+
+    def test_rejects_absolute_and_edge_cases(self):
+        from bubble.hooks.lean import _is_safe_subdir
+
+        assert not _is_safe_subdir("")
+        assert not _is_safe_subdir("/abs")
+        assert not _is_safe_subdir("trailing/")
+        assert not _is_safe_subdir("foo//bar")
+        assert not _is_safe_subdir("foo bar")
+        assert not _is_safe_subdir("foo;bar")
+        assert not _is_safe_subdir("foo\nbar")
+        assert not _is_safe_subdir("café")
 
 
 @pytest.fixture
