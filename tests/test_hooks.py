@@ -28,7 +28,9 @@ def _make_hook_repo(tmp_path, work_name, files):
     work = tmp_path / work_name
     subprocess.run([GIT, "clone", str(repo), str(work)], capture_output=True, check=True)
     for name, content in files.items():
-        (work / name).write_text(content)
+        path = work / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
     subprocess.run([GIT, "-C", str(work), "add", "."], capture_output=True, check=True)
     subprocess.run(
         [GIT, "-C", str(work), "commit", "-m", "init"],
@@ -221,6 +223,101 @@ class TestLean4Detection:
         hook = LeanHook()
         hook.detect(mathlib4_repo, "HEAD")
         assert hook.workspace_file("/home/user/mathlib4") is None
+
+
+@pytest.fixture
+def subdir_lean_repo(tmp_path):
+    """Create a bare git repo with lean-toolchain in a subdirectory."""
+    return _make_hook_repo(
+        tmp_path,
+        "subdir-work",
+        {
+            "README.md": "# Root\n",
+            "myproj/lean-toolchain": "leanprover/lean4:v4.20.0\n",
+            "myproj/lakefile.toml": "name = 'myproj'\n",
+        },
+    )
+
+
+@pytest.fixture
+def nested_subdir_lean_repo(tmp_path):
+    """Create a bare git repo with lean-toolchain in a nested subdirectory."""
+    return _make_hook_repo(
+        tmp_path,
+        "nested-work",
+        {
+            "docs/README.md": "# Docs\n",
+            "src/lean/lean-toolchain": "leanprover/lean4:v4.21.0\n",
+        },
+    )
+
+
+@pytest.fixture
+def ambiguous_lean_repo(tmp_path):
+    """Create a bare git repo with multiple non-root lean-toolchain files."""
+    return _make_hook_repo(
+        tmp_path,
+        "ambig-work",
+        {
+            "a/lean-toolchain": "leanprover/lean4:v4.20.0\n",
+            "b/lean-toolchain": "leanprover/lean4:v4.20.0\n",
+        },
+    )
+
+
+@pytest.fixture
+def root_and_subdir_lean_repo(tmp_path):
+    """Repo with lean-toolchain at root AND in a subdirectory.
+
+    The root file should win — we don't enter the slow scan path when root
+    has lean-toolchain, even if other copies exist deeper in the tree.
+    """
+    return _make_hook_repo(
+        tmp_path,
+        "root-and-sub",
+        {
+            "lean-toolchain": "leanprover/lean4:v4.19.0\n",
+            "vendor/lean-toolchain": "leanprover/lean4:v4.10.0\n",
+        },
+    )
+
+
+class TestSubdirDetection:
+    def test_detect_subdir_lean_repo(self, subdir_lean_repo):
+        hook = LeanHook()
+        assert hook.detect(subdir_lean_repo, "HEAD") is True
+        assert hook.project_subdir() == "myproj"
+        assert hook.image_name() == "lean-v4.20.0"
+
+    def test_detect_nested_subdir(self, nested_subdir_lean_repo):
+        hook = LeanHook()
+        assert hook.detect(nested_subdir_lean_repo, "HEAD") is True
+        assert hook.project_subdir() == "src/lean"
+        assert hook.image_name() == "lean-v4.21.0"
+
+    def test_ambiguous_repo_not_detected(self, ambiguous_lean_repo):
+        hook = LeanHook()
+        assert hook.detect(ambiguous_lean_repo, "HEAD") is False
+        assert hook.project_subdir() == ""
+
+    def test_root_wins_over_subdir(self, root_and_subdir_lean_repo):
+        hook = LeanHook()
+        assert hook.detect(root_and_subdir_lean_repo, "HEAD") is True
+        assert hook.project_subdir() == ""
+        assert hook.image_name() == "lean-v4.19.0"
+
+    def test_root_repo_has_empty_subdir(self, lean_repo):
+        hook = LeanHook()
+        hook.detect(lean_repo, "HEAD")
+        assert hook.project_subdir() == ""
+
+    def test_subdir_cleared_on_redetect_failure(self, subdir_lean_repo, non_lean_repo):
+        """Re-running detect() on a non-Lean repo must clear stale subdir state."""
+        hook = LeanHook()
+        hook.detect(subdir_lean_repo, "HEAD")
+        assert hook.project_subdir() == "myproj"
+        assert hook.detect(non_lean_repo, "HEAD") is False
+        assert hook.project_subdir() == ""
 
 
 @pytest.fixture
