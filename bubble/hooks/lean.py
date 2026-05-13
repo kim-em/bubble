@@ -34,15 +34,17 @@ def _is_safe_subdir(subdir: str) -> bool:
 
 
 def _has_lakefile(bare_repo_path: Path, ref: str, subdir: str) -> bool:
-    """Confirm a sibling lakefile exists next to a discovered lean-toolchain.
+    """Check for a sibling lakefile alongside a discovered lean-toolchain.
 
     Filters out vendored/example/doc directories that happen to ship a
-    lean-toolchain without being the project root.
+    `lean-toolchain` without being a buildable Lean project — e.g. a Python
+    repo with `vendor/lean-toolchain` shouldn't be mistaken for a Lean repo.
     """
+    prefix = f"{subdir}/" if subdir else ""
     for name in ("lakefile.toml", "lakefile.lean"):
         try:
             subprocess.run(
-                ["git", "-C", str(bare_repo_path), "cat-file", "-e", f"{ref}:{subdir}/{name}"],
+                ["git", "-C", str(bare_repo_path), "cat-file", "-e", f"{ref}:{prefix}{name}"],
                 capture_output=True,
                 check=True,
             )
@@ -70,18 +72,14 @@ def _read_lean_toolchain(bare_repo_path: Path, ref: str, subdir: str = "") -> st
         return None
 
 
-def _find_lean_toolchain_subdir(bare_repo_path: Path, ref: str) -> str | None:
-    """Search for a non-root `lean-toolchain` file in the bare repo at `ref`.
+def _find_lean_toolchain_subdirs(bare_repo_path: Path, ref: str) -> list[str]:
+    """Return every directory containing a `lean-toolchain` file at `ref`.
 
-    Returns the relative directory containing the file, or None if there are
-    zero or multiple matches, or if the unique match doesn't sit next to a
-    lakefile. The root is handled separately by the caller; this only fires
-    on the slow path when root has no lean-toolchain.
-
-    Uses `git ls-tree -z` (NUL-delimited) and streams output, stopping after
-    the second match so a huge tree with no Lean project doesn't pay for the
-    full listing. NUL-delimited mode also avoids git's quotePath escaping for
-    paths with unusual bytes.
+    Empty string represents the repo root. Uses `git ls-tree -rz` so paths
+    with unusual bytes aren't quoted, and streams output through a single
+    decode/split pass. Unsafe path components (traversal, control chars,
+    non-ASCII) are silently dropped — they'd be unsafe to plumb into shell
+    commands later.
     """
     try:
         proc = subprocess.Popen(
@@ -90,59 +88,37 @@ def _find_lean_toolchain_subdir(bare_repo_path: Path, ref: str) -> str | None:
             stderr=subprocess.DEVNULL,
         )
     except (OSError, FileNotFoundError):
-        return None
+        return []
 
-    matches: list[str] = []
+    subdirs: list[str] = []
+    suffix = b"/lean-toolchain"
     try:
         assert proc.stdout is not None
-        buf = b""
-        suffix = b"/lean-toolchain"
-        while True:
-            chunk = proc.stdout.read(65536)
-            if not chunk:
-                buf += b""
-                # Flush whatever's left.
-                for entry in buf.split(b"\0"):
-                    if entry.endswith(suffix):
-                        matches.append(entry.decode("utf-8", "replace"))
-                        if len(matches) >= 2:
-                            break
-                break
-            buf += chunk
-            parts = buf.split(b"\0")
-            buf = parts[-1]  # last fragment may be incomplete
-            for entry in parts[:-1]:
-                if entry.endswith(suffix):
-                    matches.append(entry.decode("utf-8", "replace"))
-            if len(matches) >= 2:
-                break
+        data = proc.stdout.read()
     finally:
         try:
-            proc.stdout.close()
+            proc.stdout.close()  # type: ignore[union-attr]
         except Exception:
             pass
         try:
-            proc.terminate()
             proc.wait(timeout=2)
         except Exception:
-            pass
+            try:
+                proc.terminate()
+            except Exception:
+                pass
 
-    if not matches:
-        return None
-    if len(matches) >= 2:
-        dirs = sorted(m[: -len("/lean-toolchain")] for m in matches)
-        click.echo(
-            f"Multiple lean-toolchain files found ({', '.join(dirs)}); "
-            "cannot auto-detect Lean project subdirectory.",
-            err=True,
-        )
-        return None
-    subdir = matches[0][: -len("/lean-toolchain")]
-    if not _is_safe_subdir(subdir):
-        return None
-    if not _has_lakefile(bare_repo_path, ref, subdir):
-        return None
-    return subdir
+    for entry in data.split(b"\0"):
+        if entry == b"lean-toolchain":
+            subdirs.append("")
+        elif entry.endswith(suffix):
+            try:
+                subdir = entry[: -len(suffix)].decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if _is_safe_subdir(subdir):
+                subdirs.append(subdir)
+    return subdirs
 
 
 def _parse_lean_version(toolchain_str: str) -> str | None:
@@ -218,48 +194,110 @@ class LeanHook(Hook):
         self._is_lean4: bool = False
         self._git_deps: list[GitDependency] = []
         self._subdir: str = ""
+        self._multi_project: bool = False
+        self._notices: list[str] = []
 
     def name(self) -> str:
         return "Lean 4"
 
-    def detect(self, bare_repo_path: Path, ref: str) -> bool:
-        """Check for lean-toolchain file at the given ref in the bare repo.
-
-        Tries the repo root first (the common case). If that fails, scans the
-        tree for a single non-root `lean-toolchain` file and uses its
-        directory. Bails out (returns False) when there are multiple matches.
-        """
-        content = _read_lean_toolchain(bare_repo_path, ref)
-        subdir = ""
-        if content is None:
-            found = _find_lean_toolchain_subdir(bare_repo_path, ref)
-            if found is not None:
-                content = _read_lean_toolchain(bare_repo_path, ref, found)
-                if content is not None:
-                    subdir = found
-
-        if content is not None:
-            self._toolchain = content
-            self._subdir = subdir
-            self._is_lean4 = bare_repo_path.name == "lean4.git"
-            if self._is_lean4:
-                self._git_deps = []
-                self._needs_cache = False
-            else:
-                self._git_deps = _parse_git_dependencies(bare_repo_path, ref, subdir)
-                self._needs_cache = bare_repo_path.name == "mathlib4.git" or any(
-                    d.name == "mathlib" for d in self._git_deps
-                )
-            return True
+    def _reset_state(self) -> None:
         self._toolchain = None
         self._subdir = ""
         self._needs_cache = False
         self._is_lean4 = False
         self._git_deps = []
-        return False
+        self._multi_project = False
+        self._notices = []
 
-    def project_subdir(self) -> str:
-        return self._subdir
+    def detect(self, bare_repo_path: Path, ref: str) -> bool:
+        """Fire if there is any `lean-toolchain` file at the given ref.
+
+        The repo root is preferred when present. For repos with one or more
+        `lean-toolchain` files in subdirectories, the hook still fires (so
+        elan + the VS Code extension end up in the bubble), but VS Code
+        always opens at the repo root. When multiple files exist the
+        auto-build is skipped and a notice is emitted; when their contents
+        disagree the plain `lean` image is used and elan installs toolchains
+        on demand.
+        """
+        self._reset_state()
+        root_content = _read_lean_toolchain(bare_repo_path, ref)
+
+        if root_content is not None:
+            # Root lean-toolchain wins — treat the repo as a single-root
+            # project even if additional lean-toolchain files exist deeper
+            # in the tree. Subdir copies in real repos are almost always
+            # vendored/test fixtures (e.g. lean4 itself ships them under
+            # tests/), so demoting to multi-project would be wrong.
+            self._toolchain = root_content
+            self._subdir = ""
+            self._configure_for_single_project(bare_repo_path, ref, "")
+            return True
+
+        # Only count subdirs that look like real Lean projects (sibling
+        # lakefile). This filters out e.g. a Python repo with a vendored
+        # `lean-toolchain` that has no lakefile next to it.
+        candidates = [
+            s
+            for s in _find_lean_toolchain_subdirs(bare_repo_path, ref)
+            if _has_lakefile(bare_repo_path, ref, s)
+        ]
+        if not candidates:
+            return False
+
+        if len(candidates) == 1:
+            subdir = candidates[0]
+            content = _read_lean_toolchain(bare_repo_path, ref, subdir)
+            if content is None:
+                return False
+            self._toolchain = content
+            self._subdir = subdir
+            self._configure_for_single_project(bare_repo_path, ref, subdir)
+            return True
+
+        # Multiple buildable Lean projects across subdirectories.
+        self._multi_project = True
+        self._subdir = ""  # we don't pick one for the auto-build
+        contents: list[str] = []
+        for s in candidates:
+            c = _read_lean_toolchain(bare_repo_path, ref, s)
+            if c is not None:
+                contents.append(c)
+        unique = sorted(set(contents))
+        dirs_label = ", ".join(sorted(candidates))
+        if len(unique) == 1:
+            self._toolchain = contents[0]
+            self._notices.append(
+                f"Multiple Lean projects detected ({dirs_label}); skipping auto-build."
+                " Run `lake build` in your project's subdirectory."
+            )
+        else:
+            self._toolchain = None  # forces image_name() to plain `lean`
+            versions_label = ", ".join(unique)
+            self._notices.append(
+                f"Multiple Lean toolchains detected across {dirs_label}: {versions_label}."
+                " Using the base `lean` image; elan will install each toolchain"
+                " on demand the first time you run `lake build` in a subdirectory."
+            )
+        self._is_lean4 = False
+        self._git_deps = []
+        self._needs_cache = False
+        return True
+
+    def _configure_for_single_project(self, bare_repo_path: Path, ref: str, subdir: str) -> None:
+        """Populate is_lean4 / git_deps / needs_cache for a single-project repo."""
+        self._is_lean4 = bare_repo_path.name == "lean4.git"
+        if self._is_lean4:
+            self._git_deps = []
+            self._needs_cache = False
+        else:
+            self._git_deps = _parse_git_dependencies(bare_repo_path, ref, subdir)
+            self._needs_cache = bare_repo_path.name == "mathlib4.git" or any(
+                d.name == "mathlib" for d in self._git_deps
+            )
+
+    def notices(self) -> list[str]:
+        return list(self._notices)
 
     def image_name(self) -> str:
         """Return the image name based on the lean-toolchain version.
@@ -287,15 +325,25 @@ class LeanHook(Hook):
         return None
 
     def post_clone(self, runtime: ContainerRuntime, container: str, project_dir: str):
-        """Pre-populate Lake dependencies, then set up auto build command."""
+        """Pre-populate Lake dependencies, then set up auto build command.
+
+        ``project_dir`` is always the repo root. The hook's stored ``_subdir``
+        controls where ``lake build`` actually runs. For multi-project repos
+        the auto-build is skipped entirely.
+        """
+        if self._multi_project:
+            return
+
         if self._is_lean4:
             self._setup_lean4_build(runtime, container, project_dir)
             return
 
-        if self._git_deps:
-            self._populate_lake_packages(runtime, container, project_dir)
+        build_dir = f"{project_dir}/{self._subdir}" if self._subdir else project_dir
 
-        q_dir = shlex.quote(project_dir)
+        if self._git_deps:
+            self._populate_lake_packages(runtime, container, build_dir)
+
+        q_dir = shlex.quote(build_dir)
         if self._needs_cache:
             cmd = f"cd {q_dir} && lake exe cache get && lake build"
             msg = "Mathlib cache download and build will start automatically."

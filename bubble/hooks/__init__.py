@@ -69,13 +69,13 @@ class Hook(ABC):
         """Return absolute path to a .code-workspace file to open, or None."""
         return None
 
-    def project_subdir(self) -> str:
-        """Subdirectory within the repo where the project lives.
+    def notices(self) -> list[str]:
+        """One-shot human-readable notes to print after detection.
 
-        Returns "" if the project is at the repo root (the common case).
-        Only populated after detect() returns True.
+        Used for warnings the user should see when a bubble is created (but
+        not on every reattach). Only populated after detect() returns True.
         """
-        return ""
+        return []
 
 
 def discover_hooks() -> list[Hook]:
