@@ -108,6 +108,14 @@ class ContainerRuntime(ABC):
     def device_exists(self, name: str, device_name: str) -> bool:
         """Check whether a named device is attached to a container."""
 
+    def device_property(self, name: str, device_name: str, key: str) -> str | None:
+        """Return a device property value, or None if unset/unavailable.
+
+        Default implementation returns None; runtimes that can introspect
+        device config (e.g. IncusRuntime) override it.
+        """
+        return None
+
     def container_ipv4(self, name: str) -> str | None:
         """Return the container's primary IPv4 address, or None.
 

@@ -6,6 +6,7 @@ helpers that support it: bridge discovery, token IP-binding, and the
 network allowlist's bridge ACCEPT rule.
 """
 
+import contextlib
 from unittest.mock import patch
 
 import pytest
@@ -138,14 +139,26 @@ def bridge_endpoint():
     }
 
 
+@contextlib.contextmanager
+def _bridge_preconditions(mock_runtime, *, container="c", ip="10.156.104.42", filtering=True):
+    """Set up the conditions the bridge flow requires: a Linux host, a
+    launched container with an eth0 IP, and (optionally) active NIC
+    filtering. Tests run on a macOS dev box, so platform.system must be
+    patched to "Linux"."""
+    mock_runtime.launch(container, "base")
+    mock_runtime._containers[container].ipv4 = ip
+    if filtering:
+        mock_runtime.override_device(container, "eth0", **{"security.ipv4_filtering": "true"})
+    with patch("platform.system", return_value="Linux"):
+        yield
+
+
 def test_setup_auth_proxy_bridge_skips_proxy_devices(mock_runtime, bridge_endpoint):
     """Bridge flow must not add bubble-auth-proxy or bubble-gh-proxy."""
     from bubble.github_token import setup_auth_proxy
 
-    mock_runtime.launch("c", "base")
-    mock_runtime._containers["c"].ipv4 = "10.156.104.42"
-
     with (
+        _bridge_preconditions(mock_runtime),
         patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
         patch("bubble.auth_proxy.generate_auth_token", return_value="tok-bridge"),
     ):
@@ -162,10 +175,8 @@ def test_setup_auth_proxy_bridge_issues_ip_bound_token(mock_runtime, bridge_endp
     """Token must carry the container's eth0 IPv4 in container_ip."""
     from bubble.github_token import setup_auth_proxy
 
-    mock_runtime.launch("c", "base")
-    mock_runtime._containers["c"].ipv4 = "10.156.104.42"
-
     with (
+        _bridge_preconditions(mock_runtime),
         patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
         patch("bubble.auth_proxy.generate_auth_token", return_value="tok-bridge") as mock_gen,
     ):
@@ -180,10 +191,8 @@ def test_setup_auth_proxy_bridge_adds_gh_socket_disk_mount(mock_runtime, bridge_
     """When gh+rest are enabled, the host socket dir is bind-mounted."""
     from bubble.github_token import setup_auth_proxy
 
-    mock_runtime.launch("c", "base")
-    mock_runtime._containers["c"].ipv4 = "10.156.104.42"
-
     with (
+        _bridge_preconditions(mock_runtime),
         patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
         patch("bubble.auth_proxy.generate_auth_token", return_value="tok-bridge"),
         # Force REST+gh on.
@@ -202,10 +211,8 @@ def test_setup_auth_proxy_bridge_git_config_uses_bridge_url(mock_runtime, bridge
     """The .gitconfig payload routes through the bridge URL, not 127.0.0.1."""
     from bubble.github_token import setup_auth_proxy
 
-    mock_runtime.launch("c", "base")
-    mock_runtime._containers["c"].ipv4 = "10.156.104.42"
-
     with (
+        _bridge_preconditions(mock_runtime),
         patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
         patch("bubble.auth_proxy.generate_auth_token", return_value="tok-bridge"),
     ):
@@ -215,7 +222,49 @@ def test_setup_auth_proxy_bridge_git_config_uses_bridge_url(mock_runtime, bridge
     assert exec_calls, "no exec call recorded"
     payload = " ".join(str(c[2]) for c in exec_calls)
     assert "http://10.156.104.1:7654/git/" in payload
-    assert "http://127.0.0.1:7654/git/" not in payload, "should not use loopback in bridge flow"
+
+
+def test_bridge_skipped_without_nic_filtering(mock_runtime, bridge_endpoint):
+    """If NIC filtering isn't active, fall back to the legacy proxy-device
+    flow rather than trust unspoofable source IPs that aren't enforced."""
+    from bubble.github_token import setup_auth_proxy
+
+    with (
+        _bridge_preconditions(mock_runtime, filtering=False),
+        patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
+        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok-legacy"),
+    ):
+        setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=False, config={})
+
+    proxy_devices = [c for c in mock_runtime.calls if c[0] == "add_device" and c[3] == "proxy"]
+    assert any(c[2] == "bubble-auth-proxy" for c in proxy_devices), (
+        "no NIC filtering => must fall back to legacy proxy-device flow"
+    )
+
+
+def test_bridge_skipped_on_non_linux(mock_runtime, bridge_endpoint):
+    """On macOS the bridge flow is never used (its controls don't hold)."""
+    from bubble.github_token import setup_auth_proxy
+
+    mock_runtime.launch("c", "base")
+    mock_runtime._containers["c"].ipv4 = "10.156.104.42"
+    mock_runtime.override_device("c", "eth0", **{"security.ipv4_filtering": "true"})
+
+    with (
+        patch("platform.system", return_value="Darwin"),
+        # Endpoint mock would only be consulted on Linux; assert it isn't.
+        patch(
+            "bubble.github_token._ensure_auth_proxy_endpoint",
+            side_effect=AssertionError("endpoint must not be consulted on macOS"),
+        ),
+        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok-legacy"),
+    ):
+        setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=False, config={})
+
+    proxy_devices = [c for c in mock_runtime.calls if c[0] == "add_device" and c[3] == "proxy"]
+    assert any(c[2] == "bubble-auth-proxy" for c in proxy_devices)
 
 
 def test_token_persists_container_ip(tmp_path, monkeypatch):

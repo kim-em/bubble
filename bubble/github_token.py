@@ -384,22 +384,28 @@ def setup_auth_proxy(
     rest_api = _resolve_rest_api(config or {}, gh_enabled)
     graphql_read, graphql_write = _resolve_graphql_config(config or {}, gh_enabled)
 
-    endpoint = _ensure_auth_proxy_endpoint()
-    if not endpoint:
-        # Fall through to the legacy path if the daemon hasn't written
-        # the v2 endpoint file (older daemon binary, partial install).
-        port = _ensure_auth_proxy_running()
-        if not port:
-            if not machine_readable:
-                detail("Warning: auth proxy failed to start. No GitHub auth configured.")
-                detail("Run 'bubble gh proxy start' to diagnose.")
-            return False
-        return _setup_auth_proxy_legacy(
+    # The bridge flow (no per-bubble forkproxy devices) is Linux-only. Its
+    # security rests on two controls that don't hold on macOS/Colima:
+    #   - NIC anti-spoof filtering needs the br_netfilter kernel module,
+    #     which the Colima VM doesn't load; and
+    #   - source-IP-bound tokens require the daemon to see the container's
+    #     real IP, but Colima NATs container traffic through the VM so the
+    #     daemon only sees the VM's address.
+    # On macOS we therefore keep the proven proxy-device flow. On Linux we
+    # additionally require that NIC filtering actually took effect; if it
+    # didn't (e.g. br_netfilter missing), we fall back rather than run the
+    # bridge flow without the control the token IP-binding depends on.
+    import platform
+
+    use_bridge = platform.system() == "Linux"
+    endpoint = _ensure_auth_proxy_endpoint() if use_bridge else None
+    if endpoint and _nic_filtering_active(runtime, container):
+        return _setup_auth_proxy_bridge(
             runtime,
             container,
             owner,
             repo,
-            port,
+            endpoint,
             rest_api,
             graphql_read,
             graphql_write,
@@ -407,18 +413,40 @@ def setup_auth_proxy(
             gh_enabled,
         )
 
-    return _setup_auth_proxy_bridge(
+    # Legacy proxy-device flow: macOS, remote/cloud, older daemon without
+    # the v2 endpoint file, or NIC filtering unavailable.
+    port = _ensure_auth_proxy_running()
+    if not port:
+        if not machine_readable:
+            detail("Warning: auth proxy failed to start. No GitHub auth configured.")
+            detail("Run 'bubble gh proxy start' to diagnose.")
+        return False
+    return _setup_auth_proxy_legacy(
         runtime,
         container,
         owner,
         repo,
-        endpoint,
+        port,
         rest_api,
         graphql_read,
         graphql_write,
         machine_readable,
         gh_enabled,
     )
+
+
+def _nic_filtering_active(runtime: ContainerRuntime, container: str) -> bool:
+    """True if eth0 has incus ipv4 anti-spoof filtering in effect.
+
+    The bridge flow trusts the request's source IP (it binds tokens to
+    the container's address); that trust is only sound when incus drops
+    spoofed source IPs at the bridge. If we can't confirm filtering is
+    on, the caller falls back to the proxy-device flow.
+    """
+    try:
+        return runtime.device_property(container, "eth0", "security.ipv4_filtering") == "true"
+    except Exception:
+        return False
 
 
 def _setup_auth_proxy_bridge(

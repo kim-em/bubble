@@ -197,11 +197,20 @@ class IncusRuntime(ContainerRuntime):
         )
 
     def _get_info(self, name: str) -> ContainerInfo:
-        """Get info for a single container."""
-        data = self._run_json(["list", self._q(name)])
-        if not data:
-            raise RuntimeError(f"Container '{name}' not found")
-        return self._parse_container(data[0])
+        """Get info for a single container.
+
+        Filters the full listing in Python rather than passing
+        ``<remote>:<name>`` as an incus list filter: on recent incus
+        versions ``incus list <remote>:<name>`` returns nothing (the
+        ``remote:name`` form isn't treated as a name filter), whereas
+        ``incus list <remote>:`` reliably scopes to the remote. This is
+        the same workaround the no-name path in ``list_containers``
+        already relies on.
+        """
+        for info in self.list_containers(fast=False):
+            if info.name == name:
+                return info
+        raise RuntimeError(f"Container '{name}' not found")
 
     def list_containers(self, fast: bool = True) -> list[ContainerInfo]:
         # When a remote is set, pass "remote:" with no name so list scopes
@@ -354,14 +363,22 @@ class IncusRuntime(ContainerRuntime):
         result = self._run_subprocess(cmd)
         return result.returncode == 0
 
-    def container_ipv4(self, name: str) -> str | None:
-        try:
-            data = self._run_json(["list", self._q(name)])
-        except (subprocess.CalledProcessError, RuntimeError):
+    def device_property(self, name: str, device_name: str, key: str) -> str | None:
+        """Return a device property's value, or None if unset.
+
+        For a profile-inherited device that hasn't been overridden onto
+        the instance, ``incus config device get`` errors; we surface that
+        as None (the property isn't set at the instance level).
+        """
+        cmd = ["incus", "config", "device", "get", self._q(name), device_name, key]
+        result = self._run_subprocess(cmd)
+        if result.returncode != 0:
             return None
-        if not data:
-            return None
-        return self._parse_container(data[0]).ipv4
+        return (result.stdout or "").strip()
+
+    # container_ipv4 uses the base-class default (filter list_containers),
+    # which avoids the `incus list <remote>:<name>` filtering quirk; see
+    # _get_info for details.
 
     def add_disk(self, name: str, device_name: str, source: str, path: str, readonly: bool = False):
         props = {"source": source, "path": path}
@@ -380,7 +397,18 @@ class IncusRuntime(ContainerRuntime):
         # Delete existing image with same alias
         if self.image_exists(alias):
             self.image_delete(alias)
-        self._run(["publish", self._q(name), "--alias", alias])
+        # Publish to the *same* remote as the source instance. Without an
+        # explicit target remote, incus publishes the alias to the current
+        # default remote — which on Colima is a different remote name than
+        # ours (even though it's the same socket), and incus then rejects
+        # the cross-remote publish ("source and target servers must be
+        # different"). It also leaves the image where image_exists/delete
+        # (which qualify with our remote) can't see it.
+        args = ["publish", self._q(name)]
+        if self._remote:
+            args.append(self._q(""))  # e.g. "bubble-colima:" — target remote
+        args += ["--alias", alias]
+        self._run(args)
 
     def image_exists(self, alias: str) -> bool:
         try:

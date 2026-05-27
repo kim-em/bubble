@@ -293,16 +293,14 @@ def _resolve_auth_proxy_endpoint_for_allowlist(gh_level: str) -> tuple[str, int]
 
     Returns None when github auth is disabled, when injecting the raw
     token (no proxy needed), or when the daemon hasn't written the v2
-    endpoint file (legacy flow). On macOS we likewise return None: the
-    proxy listens on the Colima bridge IP, but the container reaches
-    it via the legacy proxy-device path, not a host iptables rule.
+    endpoint file (legacy flow). When set, the container needs an
+    explicit iptables ACCEPT for the endpoint so it can reach the
+    proxy directly (bridge IP on Linux; the Colima bridge IP on macOS,
+    reached via the VM's NAT).
     """
     import json
-    import platform
 
     if gh_level in ("off", "direct"):
-        return None
-    if platform.system() != "Linux":
         return None
     from .auth_proxy import AUTH_PROXY_ENDPOINT_FILE
 

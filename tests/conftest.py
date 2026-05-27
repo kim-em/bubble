@@ -16,6 +16,7 @@ class MockRuntime(ContainerRuntime):
         self._containers: dict[str, ContainerInfo] = {}
         self._images: set[str] = {"base"}
         self._devices: dict[str, set[str]] = {}
+        self._device_props: dict[str, dict[str, dict[str, str]]] = {}
 
     def is_available(self) -> bool:
         self.calls.append(("is_available",))
@@ -62,6 +63,13 @@ class MockRuntime(ContainerRuntime):
     def override_device(self, name: str, device_name: str, **props):
         self.calls.append(("override_device", name, device_name, props))
         self._devices.setdefault(name, set()).add(device_name)
+        self._device_props.setdefault(name, {}).setdefault(device_name, {}).update(
+            {k: str(v) for k, v in props.items()}
+        )
+
+    def device_property(self, name: str, device_name: str, key: str) -> str | None:
+        self.calls.append(("device_property", name, device_name, key))
+        return self._device_props.get(name, {}).get(device_name, {}).get(key)
 
     def remove_device(self, name: str, device_name: str):
         self.calls.append(("remove_device", name, device_name))
