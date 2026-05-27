@@ -1622,11 +1622,15 @@ def run_daemon(port: int = 0):
     _setup_logging()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     AUTH_PROXY_SOCKETS_DIR.mkdir(parents=True, exist_ok=True)
-    # The socket directory is bind-mounted into bubbles; keep it
-    # user-private on the host so other Unix users on the box can't
-    # walk it. Per-request token validation is the cross-bubble
-    # control inside the container.
-    os.chmod(str(AUTH_PROXY_SOCKETS_DIR), 0o700)
+    # The socket directory is bind-mounted into bubbles, where the
+    # container's idmap'd (unprivileged, non-root) user must be able to
+    # traverse it to reach gh.sock. Mode 0711 grants traverse without
+    # listing: other principals can't enumerate the directory, but can
+    # reach a known socket name — which is fine because every request is
+    # still token-validated (same model as the relay socket). 0700 would
+    # block the container user entirely (observed: gh "connect: permission
+    # denied").
+    os.chmod(str(AUTH_PROXY_SOCKETS_DIR), 0o711)
 
     if not port:
         from .config import load_config
