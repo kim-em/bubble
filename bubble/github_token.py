@@ -511,6 +511,15 @@ def _setup_auth_proxy_bridge(
                 detail("gh CLI will not have API access; git will still work.")
             # Don't fail — git via TCP still works without the gh mount.
 
+    # Punch a hole in the container's egress allowlist for the bridge
+    # endpoint. The network allowlist is applied at provision time, which
+    # runs *before* the auth-proxy daemon has written its endpoint file on
+    # a cold start — so apply_network can't have added this rule on the
+    # first bubble. Add it here (idempotently) where the endpoint is known
+    # and the daemon is up. On restart, reapply_network_after_restart adds
+    # it too (the endpoint file exists by then).
+    _allow_bridge_egress(runtime, container, host_ip, int(port))
+
     # Configure git: talk to the bridge TCP endpoint directly.
     endpoint_str = f"{host_ip}:{port}"
     payload = _AUTH_PROXY_GIT_CONFIG_BRIDGE_PAYLOAD.format(endpoint=endpoint_str)
@@ -536,6 +545,22 @@ def _setup_auth_proxy_bridge(
             f"(scoped to {owner}/{repo}, {mode_desc})."
         )
     return True
+
+
+def _allow_bridge_egress(runtime: ContainerRuntime, container: str, ip: str, port: int):
+    """Idempotently allow egress to the bridge auth-proxy in the container.
+
+    Inserted ahead of the allowlist's default ``OUTPUT DROP`` policy. The
+    ``-C`` guard makes a repeat application (e.g. when apply_network also
+    added it on a warm daemon) a no-op. Best-effort: never fails setup —
+    if iptables isn't present (``--no-network``), there's nothing to open.
+    """
+    rule = f"OUTPUT -d {ip} -p tcp --dport {port} -j ACCEPT"
+    script = f"iptables -C {rule} 2>/dev/null || iptables -A {rule} 2>/dev/null || true"
+    try:
+        runtime.exec(container, ["bash", "-c", script])
+    except RuntimeError:
+        pass
 
 
 def _setup_auth_proxy_legacy(
