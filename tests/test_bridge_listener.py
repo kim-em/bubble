@@ -211,6 +211,71 @@ def test_setup_auth_proxy_returns_false_without_endpoint(mock_runtime):
     assert proxy_devices == [], "local flow must never add a proxy device"
 
 
+def test_setup_auth_proxy_fails_closed_on_loopback_endpoint(mock_runtime):
+    """A loopback endpoint (daemon couldn't find the bridge) is unreachable
+    from the container => fail closed, no devices, no token-config exec."""
+    from bubble.github_token import setup_auth_proxy
+
+    _launch(mock_runtime)
+    loopback = {"tcp": {"host": "127.0.0.1", "port": 7654}, "version": 3}
+    with (
+        patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=loopback),
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok") as mock_gen,
+    ):
+        result = setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=True, config={})
+
+    assert result is False
+    mock_gen.assert_not_called()
+    assert [c for c in mock_runtime.calls if c[0] in ("add_device", "add_disk")] == []
+
+
+def test_setup_auth_proxy_fails_closed_when_egress_cannot_open(mock_runtime, bridge_endpoint):
+    """If the egress ACCEPT can't be installed on a restricted bubble,
+    setup fails closed instead of reporting a config the bubble can't use."""
+    from bubble.github_token import setup_auth_proxy
+
+    _launch(mock_runtime)
+    with (
+        patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
+        patch("bubble.github_token._allow_bridge_egress", return_value=False),
+        patch("bubble.auth_proxy.generate_auth_token", return_value="tok") as mock_gen,
+    ):
+        result = setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=True, config={})
+
+    assert result is False
+    mock_gen.assert_not_called()
+
+
+def test_endpoint_alive_health_check(monkeypatch):
+    """_ensure_auth_proxy_endpoint ignores a stale endpoint whose TCP
+    listener is dead, and trusts one that's live."""
+    import bubble.github_token as gt
+
+    endpoint = {"tcp": {"host": "10.156.104.1", "port": 7654}, "version": 3}
+    monkeypatch.setattr(gt, "_read_endpoint_file", lambda _p: endpoint)
+    monkeypatch.setattr("bubble.automation.is_auth_proxy_installed", lambda: True)
+
+    # Dead listener => None (fail closed).
+    monkeypatch.setattr(gt, "_endpoint_alive", lambda _e: False)
+    assert gt._ensure_auth_proxy_endpoint() is None
+
+    # Live listener => returns the endpoint.
+    monkeypatch.setattr(gt, "_endpoint_alive", lambda _e: True)
+    assert gt._ensure_auth_proxy_endpoint() == endpoint
+
+
+def test_allow_bridge_egress_no_iptables_is_ok(mock_runtime):
+    """No iptables in the container (unrestricted egress) => returns True."""
+    from bubble.github_token import _allow_bridge_egress
+    from bubble.runtime.incus import IncusError
+
+    def raise_127(*a, **kw):
+        raise IncusError(127, ["bash"], "", "iptables: not found")
+
+    mock_runtime.exec = raise_127
+    assert _allow_bridge_egress(mock_runtime, "c", "10.0.0.1", 7654) is True
+
+
 def test_token_has_no_ip_binding(tmp_path, monkeypatch):
     """Tokens are plain bearer credentials with no source-IP field."""
     from bubble import auth_proxy

@@ -1510,7 +1510,14 @@ def _resolve_tcp_bind() -> tuple[str, str | None]:
 
     Returns ``(bind_addr, bind_device)``. ``bind_device`` is the network
     interface name to restrict via SO_BINDTODEVICE, or None if no
-    restriction applies (macOS / unknown setups).
+    restriction applies (macOS).
+
+    Raises if no usable bridge address can be found. We deliberately do
+    NOT fall back to ``127.0.0.1``: containers can't reach the host's
+    loopback, so a loopback bind would produce a listener that bubbles
+    configure against but can never connect to. Failing here means the
+    daemon doesn't start, no endpoint file is written, and local auth
+    setup fails closed.
     """
     import platform
 
@@ -1521,21 +1528,20 @@ def _resolve_tcp_bind() -> tuple[str, str | None]:
         # bridge interface.
         from .runtime.colima import colima_bind_ip
 
-        return colima_bind_ip(), None
+        addr = colima_bind_ip()
+        if addr.startswith("127."):
+            raise RuntimeError(
+                "Could not determine the Colima bridge IP (got loopback). "
+                "Is the bubble-colima VM running? Refusing to bind a "
+                "container-unreachable loopback address."
+            )
+        return addr, None
 
     # Linux: bind to the incus bridge gateway IP and restrict the
     # listener to incusbr0 so it's unreachable from any other interface.
-    # Fall back to 127.0.0.1 if the bridge can't be discovered (e.g.
-    # incus not installed yet); in that fallback case the daemon is
-    # only reachable from host loopback, and bubble's auth-setup path
-    # falls back to the legacy proxy-device flow.
-    from .incus_bridge import BRIDGE_INTERFACE, BridgeDiscoveryError, bridge_gateway_ipv4
+    from .incus_bridge import BRIDGE_INTERFACE, bridge_gateway_ipv4
 
-    try:
-        return bridge_gateway_ipv4(), BRIDGE_INTERFACE
-    except BridgeDiscoveryError as exc:
-        logger.warning("Bridge discovery failed: %s; binding to 127.0.0.1", exc)
-        return "127.0.0.1", None
+    return bridge_gateway_ipv4(), BRIDGE_INTERFACE
 
 
 def _write_endpoint_file(tcp_host: str, tcp_port: int):

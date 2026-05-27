@@ -244,9 +244,12 @@ def _ensure_auth_proxy_endpoint() -> dict | None:
 
         {"tcp": {"host": "10.156.104.1", "port": 7654}, "version": 3}
 
-    or ``None`` if the daemon failed to start or wrote only the legacy
-    ``auth-proxy.port`` file (in which case local auth setup fails
-    closed — there is no proxy-device fallback).
+    or ``None`` if the daemon isn't actually listening (no endpoint file,
+    or a stale endpoint file left behind by a crashed daemon). The
+    endpoint is health-checked with a TCP connect before being trusted —
+    a stale file must not cause us to configure containers against a dead
+    listener. On ``None`` local auth setup fails closed (there is no
+    proxy-device fallback).
     """
     from .auth_proxy import AUTH_PROXY_ENDPOINT_FILE
     from .automation import install_auth_proxy_daemon, is_auth_proxy_installed
@@ -257,14 +260,41 @@ def _ensure_auth_proxy_endpoint() -> dict | None:
     import time
 
     for _ in range(10):
-        if AUTH_PROXY_ENDPOINT_FILE.exists():
-            try:
-                return json.loads(AUTH_PROXY_ENDPOINT_FILE.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
+        endpoint = _read_endpoint_file(AUTH_PROXY_ENDPOINT_FILE)
+        if endpoint and _endpoint_alive(endpoint):
+            return endpoint
         time.sleep(0.5)
 
     return None
+
+
+def _read_endpoint_file(path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _endpoint_alive(endpoint: dict) -> bool:
+    """TCP-connect to the endpoint to confirm a live daemon is listening.
+
+    Guards against a stale ``auth-proxy.endpoint`` file from a daemon
+    that crashed/was killed: without this we'd configure containers to
+    talk to a dead listener and report success.
+    """
+    import socket as _socket
+
+    tcp = endpoint.get("tcp") or {}
+    host, port = tcp.get("host"), tcp.get("port")
+    if not host or not isinstance(port, int):
+        return False
+    try:
+        with _socket.create_connection((host, port), timeout=2):
+            return True
+    except OSError:
+        return False
 
 
 def _resolve_rest_api(config: dict, gh_enabled: bool) -> bool:
@@ -397,15 +427,15 @@ def _setup_auth_proxy_bridge(
         if not machine_readable:
             detail("Warning: auth proxy endpoint file missing TCP info.")
         return False
-
-    token = generate_auth_token(
-        container,
-        owner,
-        repo,
-        rest_api=rest_api,
-        graphql_read=graphql_read,
-        graphql_write=graphql_write,
-    )
+    # A loopback endpoint is unreachable from inside the container (it's
+    # the container's own loopback, not the host). This shouldn't happen
+    # — the daemon refuses to bind loopback — but guard fail-closed so we
+    # never write a container config that can't possibly connect.
+    if host_ip.startswith("127."):
+        if not machine_readable:
+            detail(f"Warning: auth proxy bound to loopback {host_ip}; unreachable from bubbles.")
+            detail("No GitHub auth configured (fail-closed).")
+        return False
 
     # Punch a hole in the container's egress allowlist for the bridge
     # endpoint. The network allowlist is applied at provision time, which
@@ -415,8 +445,23 @@ def _setup_auth_proxy_bridge(
     # and the daemon is up. On restart, reapply_network_after_restart adds
     # it too (the endpoint file exists by then). git AND gh both reach the
     # daemon at this same endpoint (gh via the in-container forwarder), so
-    # one rule covers both.
-    _allow_bridge_egress(runtime, container, host_ip, int(port))
+    # one rule covers both. If egress can't be opened on a network-
+    # restricted bubble, fail closed rather than report a working setup
+    # the container can't actually use.
+    if not _allow_bridge_egress(runtime, container, host_ip, int(port)):
+        if not machine_readable:
+            detail("Warning: could not open egress to the auth proxy; the bubble's")
+            detail("network allowlist would block it. No GitHub auth configured.")
+        return False
+
+    token = generate_auth_token(
+        container,
+        owner,
+        repo,
+        rest_api=rest_api,
+        graphql_read=graphql_read,
+        graphql_write=graphql_write,
+    )
 
     # Configure git: talk to the bridge TCP endpoint directly.
     endpoint_str = f"{host_ip}:{port}"
@@ -447,20 +492,34 @@ def _setup_auth_proxy_bridge(
     return True
 
 
-def _allow_bridge_egress(runtime: ContainerRuntime, container: str, ip: str, port: int):
-    """Idempotently allow egress to the bridge auth-proxy in the container.
+def _allow_bridge_egress(runtime: ContainerRuntime, container: str, ip: str, port: int) -> bool:
+    """Ensure the container can reach the bridge auth-proxy endpoint.
 
-    Inserted ahead of the allowlist's default ``OUTPUT DROP`` policy. The
-    ``-C`` guard makes a repeat application (e.g. when apply_network also
-    added it on a warm daemon) a no-op. Best-effort: never fails setup —
-    if iptables isn't present (``--no-network``), there's nothing to open.
+    Idempotently inserts an ACCEPT ahead of the allowlist's default
+    ``OUTPUT DROP`` policy, then verifies it landed. Returns True when
+    the rule is in place OR when there's no iptables to configure (e.g.
+    ``--no-network`` bubbles, where egress is unrestricted anyway).
+    Returns False only when iptables is present but the rule could not
+    be installed — i.e. a restricted bubble that genuinely can't reach
+    the proxy, which the caller treats as a fail-closed error.
+
+    The probe distinguishes those cases: ``iptables`` exits 127 when the
+    binary is absent (unrestricted → True); otherwise we add and re-check
+    with ``-C`` (present → True, still-missing → False).
     """
     rule = f"OUTPUT -d {ip} -p tcp --dport {port} -j ACCEPT"
-    script = f"iptables -C {rule} 2>/dev/null || iptables -A {rule} 2>/dev/null || true"
+    script = (
+        f"command -v iptables >/dev/null 2>&1 || exit 127\n"
+        f"iptables -C {rule} 2>/dev/null && exit 0\n"
+        f"iptables -A {rule} 2>/dev/null || true\n"
+        f"iptables -C {rule} 2>/dev/null"
+    )
     try:
         runtime.exec(container, ["bash", "-c", script])
-    except RuntimeError:
-        pass
+        return True  # rule present (exit 0)
+    except RuntimeError as e:
+        # exit 127 => no iptables (unrestricted egress); treat as fine.
+        return getattr(e, "returncode", None) == 127
 
 
 def _setup_gh_proxy_bridge(
