@@ -86,28 +86,6 @@ def provision_container(
     runtime.launch(name, image_name)
     click.echo(" done.")
 
-    # Lock down the default eth0 NIC: stop hostile bubbles from
-    # spoofing MAC/IP to impersonate other bubbles on the bridge.
-    # Required by the bridge-listener auth-proxy flow, which trusts
-    # source IPs to bind tokens. Best-effort: log on failure but don't
-    # block bubble creation — incus versions that don't support these
-    # options fall back to the legacy proxy-device flow with no
-    # additional risk vs today.
-    try:
-        runtime.override_device(
-            name,
-            "eth0",
-            **{
-                "security.mac_filtering": "true",
-                "security.ipv4_filtering": "true",
-                "security.ipv6_filtering": "true",
-            },
-        )
-    except NotImplementedError:
-        pass
-    except Exception as e:
-        detail(f"Warning: failed to enable NIC filtering on eth0: {e}")
-
     detail("Waiting for network...", nl=False)
     from .images.builder import wait_for_container
 

@@ -6,7 +6,6 @@ helpers that support it: bridge discovery, token IP-binding, and the
 network allowlist's bridge ACCEPT rule.
 """
 
-import contextlib
 from unittest.mock import patch
 
 import pytest
@@ -139,26 +138,17 @@ def bridge_endpoint():
     }
 
 
-@contextlib.contextmanager
-def _bridge_preconditions(mock_runtime, *, container="c", ip="10.156.104.42", filtering=True):
-    """Set up the conditions the bridge flow requires: a Linux host, a
-    launched container with an eth0 IP, and (optionally) active NIC
-    filtering. Tests run on a macOS dev box, so platform.system must be
-    patched to "Linux"."""
+def _launch(mock_runtime, *, container="c", ip="10.156.104.42"):
     mock_runtime.launch(container, "base")
     mock_runtime._containers[container].ipv4 = ip
-    if filtering:
-        mock_runtime.override_device(container, "eth0", **{"security.ipv4_filtering": "true"})
-    with patch("platform.system", return_value="Linux"):
-        yield
 
 
-def test_setup_auth_proxy_bridge_skips_proxy_devices(mock_runtime, bridge_endpoint):
-    """Bridge flow must not add bubble-auth-proxy or bubble-gh-proxy."""
+def test_setup_auth_proxy_skips_proxy_devices(mock_runtime, bridge_endpoint):
+    """Local setup must not add any incus proxy-type device (the leak source)."""
     from bubble.github_token import setup_auth_proxy
 
+    _launch(mock_runtime)
     with (
-        _bridge_preconditions(mock_runtime),
         patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
         patch("bubble.auth_proxy.generate_auth_token", return_value="tok-bridge"),
     ):
@@ -168,142 +158,86 @@ def test_setup_auth_proxy_bridge_skips_proxy_devices(mock_runtime, bridge_endpoi
     added_proxy_devices = [
         call for call in mock_runtime.calls if call[0] == "add_device" and call[3] == "proxy"
     ]
-    assert added_proxy_devices == [], "bridge flow added a proxy device"
+    assert added_proxy_devices == [], "local flow must not add a proxy device"
 
 
-def test_setup_auth_proxy_bridge_issues_ip_bound_token(mock_runtime, bridge_endpoint):
-    """Token must carry the container's eth0 IPv4 in container_ip."""
+def test_setup_auth_proxy_adds_gh_socket_disk_mount(mock_runtime, bridge_endpoint):
+    """When gh+rest are enabled, the host socket dir is bind-mounted (disk, not proxy)."""
     from bubble.github_token import setup_auth_proxy
 
+    _launch(mock_runtime)
     with (
-        _bridge_preconditions(mock_runtime),
-        patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
-        patch("bubble.auth_proxy.generate_auth_token", return_value="tok-bridge") as mock_gen,
-    ):
-        setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=False, config={})
-
-    mock_gen.assert_called_once()
-    kwargs = mock_gen.call_args.kwargs
-    assert kwargs["container_ip"] == "10.156.104.42"
-
-
-def test_setup_auth_proxy_bridge_adds_gh_socket_disk_mount(mock_runtime, bridge_endpoint):
-    """When gh+rest are enabled, the host socket dir is bind-mounted."""
-    from bubble.github_token import setup_auth_proxy
-
-    with (
-        _bridge_preconditions(mock_runtime),
         patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
         patch("bubble.auth_proxy.generate_auth_token", return_value="tok-bridge"),
-        # Force REST+gh on.
         patch("bubble.github_token._resolve_rest_api", return_value=True),
     ):
         setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=True, config={})
 
-    disk_mounts = [c for c in mock_runtime.calls if c[0] == "add_disk"]
-    socket_mounts = [c for c in disk_mounts if c[2] == "bubble-proxy-sockets"]
+    socket_mounts = [
+        c for c in mock_runtime.calls if c[0] == "add_disk" and c[2] == "bubble-proxy-sockets"
+    ]
     assert len(socket_mounts) == 1
-    name, device, src, dst, *_ = socket_mounts[0][1:]
+    _name, _device, _src, dst, *_ = socket_mounts[0][1:]
     assert dst == "/run/bubble-proxy"
 
 
-def test_setup_auth_proxy_bridge_git_config_uses_bridge_url(mock_runtime, bridge_endpoint):
+def test_setup_auth_proxy_git_config_uses_bridge_url(mock_runtime, bridge_endpoint):
     """The .gitconfig payload routes through the bridge URL, not 127.0.0.1."""
     from bubble.github_token import setup_auth_proxy
 
+    _launch(mock_runtime)
     with (
-        _bridge_preconditions(mock_runtime),
         patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
         patch("bubble.auth_proxy.generate_auth_token", return_value="tok-bridge"),
     ):
         setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=False, config={})
 
-    exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
-    assert exec_calls, "no exec call recorded"
-    payload = " ".join(str(c[2]) for c in exec_calls)
+    payload = " ".join(str(c[2]) for c in mock_runtime.calls if c[0] == "exec")
     assert "http://10.156.104.1:7654/git/" in payload
+    assert "http://127.0.0.1:7654/git/" not in payload
 
 
-def test_bridge_skipped_without_nic_filtering(mock_runtime, bridge_endpoint):
-    """If NIC filtering isn't active, fall back to the legacy proxy-device
-    flow rather than trust unspoofable source IPs that aren't enforced."""
+def test_setup_auth_proxy_returns_false_without_endpoint(mock_runtime):
+    """No daemon endpoint => fail (no legacy proxy-device fallback for local)."""
     from bubble.github_token import setup_auth_proxy
 
-    with (
-        _bridge_preconditions(mock_runtime, filtering=False),
-        patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=bridge_endpoint),
-        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
-        patch("bubble.auth_proxy.generate_auth_token", return_value="tok-legacy"),
-    ):
-        setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=False, config={})
+    _launch(mock_runtime)
+    with patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=None):
+        result = setup_auth_proxy(
+            mock_runtime, "c", "kim-em", "bubble", gh_enabled=False, config={}
+        )
 
+    assert result is False
     proxy_devices = [c for c in mock_runtime.calls if c[0] == "add_device" and c[3] == "proxy"]
-    assert any(c[2] == "bubble-auth-proxy" for c in proxy_devices), (
-        "no NIC filtering => must fall back to legacy proxy-device flow"
-    )
+    assert proxy_devices == [], "local flow must never add a proxy device"
 
 
-def test_bridge_skipped_on_non_linux(mock_runtime, bridge_endpoint):
-    """On macOS the bridge flow is never used (its controls don't hold)."""
-    from bubble.github_token import setup_auth_proxy
-
-    mock_runtime.launch("c", "base")
-    mock_runtime._containers["c"].ipv4 = "10.156.104.42"
-    mock_runtime.override_device("c", "eth0", **{"security.ipv4_filtering": "true"})
-
-    with (
-        patch("platform.system", return_value="Darwin"),
-        # Endpoint mock would only be consulted on Linux; assert it isn't.
-        patch(
-            "bubble.github_token._ensure_auth_proxy_endpoint",
-            side_effect=AssertionError("endpoint must not be consulted on macOS"),
-        ),
-        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
-        patch("bubble.auth_proxy.generate_auth_token", return_value="tok-legacy"),
-    ):
-        setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=False, config={})
-
-    proxy_devices = [c for c in mock_runtime.calls if c[0] == "add_device" and c[3] == "proxy"]
-    assert any(c[2] == "bubble-auth-proxy" for c in proxy_devices)
-
-
-def test_token_persists_container_ip(tmp_path, monkeypatch):
-    """generate_auth_token writes container_ip into the token store."""
-    from bubble import auth_proxy
-
-    monkeypatch.setattr(auth_proxy, "AUTH_PROXY_TOKENS", tmp_path / "tokens.json")
-    token = auth_proxy.generate_auth_token("c", "kim-em", "bubble", container_ip="10.156.104.42")
-    info = auth_proxy.AuthTokenRegistry().lookup(token)
-    assert info is not None
-    assert info["container_ip"] == "10.156.104.42"
-
-
-def test_token_without_container_ip_is_legacy(tmp_path, monkeypatch):
-    """Tokens minted without container_ip are still accepted (back-compat)."""
+def test_token_has_no_ip_binding(tmp_path, monkeypatch):
+    """Tokens are plain bearer credentials with no source-IP field."""
     from bubble import auth_proxy
 
     monkeypatch.setattr(auth_proxy, "AUTH_PROXY_TOKENS", tmp_path / "tokens.json")
     token = auth_proxy.generate_auth_token("c", "kim-em", "bubble")
     info = auth_proxy.AuthTokenRegistry().lookup(token)
     assert info is not None
-    assert info["container_ip"] is None
+    assert "container_ip" not in info
+    assert info["owner"] == "kim-em"
+    assert info["repo"] == "bubble"
 
 
-def test_authenticate_rejects_ip_mismatch(tmp_path, monkeypatch):
-    """_authenticate sends 403 when a TCP request's source IP doesn't match."""
+def test_authenticate_accepts_valid_token_any_source(tmp_path, monkeypatch):
+    """_authenticate validates the bearer token and ignores source address."""
     from bubble import auth_proxy
 
     monkeypatch.setattr(auth_proxy, "AUTH_PROXY_TOKENS", tmp_path / "tokens.json")
-    token = auth_proxy.generate_auth_token("c", "kim-em", "bubble", container_ip="10.156.104.42")
+    token = auth_proxy.generate_auth_token("c", "kim-em", "bubble")
 
-    # Build a minimal handler-shaped stub with just enough surface to
-    # exercise _authenticate.
     class StubHandler:
         token_registry = auth_proxy.AuthTokenRegistry()
 
-        def __init__(self, source_ip, token):
+        def __init__(self, source_ip, tok):
             self.client_address = (source_ip, 12345)
-            self.headers = {"X-Bubble-Token": token}
+            self.headers = {"X-Bubble-Token": tok}
             self._errors = []
 
         def _get_container_token(self):
@@ -312,59 +246,13 @@ def test_authenticate_rejects_ip_mismatch(tmp_path, monkeypatch):
         def _send_error(self, code, msg):
             self._errors.append((code, msg))
 
-    h = StubHandler("10.156.104.42", token)
-    info = auth_proxy.AuthProxyHandler._authenticate(h)
-    assert info is not None, "matching IP must authenticate"
+    # Any source IP with a valid token authenticates.
+    for ip in ("10.156.104.42", "10.156.104.99", ""):
+        h = StubHandler(ip, token)
+        assert auth_proxy.AuthProxyHandler._authenticate(h) is not None
+        assert h._errors == []
 
-    h_bad = StubHandler("10.156.104.99", token)
-    info_bad = auth_proxy.AuthProxyHandler._authenticate(h_bad)
-    assert info_bad is None
-    assert h_bad._errors and h_bad._errors[0][0] == 403
-
-
-def test_authenticate_skips_ip_check_for_unix_socket(tmp_path, monkeypatch):
-    """Unix-socket peers (empty client_address) skip the IP check."""
-    from bubble import auth_proxy
-
-    monkeypatch.setattr(auth_proxy, "AUTH_PROXY_TOKENS", tmp_path / "tokens.json")
-    token = auth_proxy.generate_auth_token("c", "kim-em", "bubble", container_ip="10.156.104.42")
-
-    class StubHandler:
-        token_registry = auth_proxy.AuthTokenRegistry()
-
-        def __init__(self):
-            # UnixHTTPServer.get_request returns ("", 0) so source IP is "".
-            self.client_address = ("", 0)
-            self.headers = {"X-Bubble-Token": token}
-            self._errors = []
-
-        def _get_container_token(self):
-            return self.headers.get("X-Bubble-Token")
-
-        def _send_error(self, code, msg):
-            self._errors.append((code, msg))
-
-    h = StubHandler()
-    info = auth_proxy.AuthProxyHandler._authenticate(h)
-    assert info is not None
-    assert h._errors == []
-
-
-def test_setup_auth_proxy_falls_back_to_legacy_when_no_endpoint(mock_runtime):
-    """If the daemon hasn't written the v2 endpoint file, use the proxy-device path."""
-    from bubble.github_token import setup_auth_proxy
-
-    with (
-        patch("bubble.github_token._ensure_auth_proxy_endpoint", return_value=None),
-        patch("bubble.github_token._ensure_auth_proxy_running", return_value=7654),
-        patch("bubble.auth_proxy.generate_auth_token", return_value="tok-legacy"),
-    ):
-        result = setup_auth_proxy(
-            mock_runtime, "c", "kim-em", "bubble", gh_enabled=False, config={}
-        )
-
-    assert result is True
-    proxy_devices = [c for c in mock_runtime.calls if c[0] == "add_device" and c[3] == "proxy"]
-    assert any(c[2] == "bubble-auth-proxy" for c in proxy_devices), (
-        "legacy fallback must add bubble-auth-proxy device"
-    )
+    # An unknown token is rejected.
+    bad = StubHandler("10.156.104.42", "not-a-real-token")
+    assert auth_proxy.AuthProxyHandler._authenticate(bad) is None
+    assert bad._errors and bad._errors[0][0] == 403

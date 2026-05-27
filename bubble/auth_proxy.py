@@ -28,6 +28,18 @@ Security model:
 - Per-container token isolation via X-Bubble-Token or Authorization header
 - Rate limited + logged (reuses relay patterns)
 
+The security boundary is incus container isolation plus the secrecy of
+the per-container token. The token is a bearer credential: it is
+256-bit random, scoped to a single owner/repo, validated on every
+request, and stored only in the issuing container's filesystem (mode
+0600). The bridge listener is reachable by any container on the bridge
+(required for git), but reachability is not access — only a valid token
+grants the scoped GitHub operations. There is intentionally no
+source-IP binding: it would only matter after a container-root
+compromise had *also* stolen another bubble's token (which requires
+breaking incus isolation), and enforcing it forced fragile,
+platform-specific kernel/network preconditions for negligible gain.
+
 Listeners:
 - On Linux: TCP on the incus bridge gateway IP (typically 10.156.104.1),
   restricted to ``incusbr0`` via ``SO_BINDTODEVICE``. Containers reach
@@ -195,18 +207,17 @@ def generate_auth_token(
     rest_api: bool = True,
     graphql_read: str = "whitelisted",
     graphql_write: str = "whitelisted",
-    container_ip: str | None = None,
 ) -> str:
     """Generate an auth proxy token for a container.
 
     The token maps to (container_name, owner, repo, rest_api, graphql_read,
-    graphql_write, container_ip) — the proxy uses this to validate
-    requests and enforce the access policy.
+    graphql_write) — the proxy uses this to validate requests and enforce
+    the access policy.
 
-    ``container_ip`` (when set) binds the token to a specific source IP:
-    TCP requests from any other address are rejected with 403. This is
-    only meaningful when incus per-NIC ``security.ipv4_filtering`` is on
-    so source IPs cannot be spoofed by other bubbles.
+    The token is a 256-bit bearer credential: possession grants the
+    scoped access. It lives only in the issuing container's filesystem
+    (mode 0600); cross-container isolation is incus's job. There is no
+    source-IP binding — see the security notes in the module docstring.
 
     Uses file locking to prevent read-modify-write races.
     """
@@ -218,7 +229,6 @@ def generate_auth_token(
             "rest_api": rest_api,
             "graphql_read": graphql_read,
             "graphql_write": graphql_write,
-            "container_ip": container_ip,
         }
     )
 
@@ -717,16 +727,10 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             self.send_header(header, value)
 
     def _authenticate(self) -> dict | None:
-        """Authenticate the request via X-Bubble-Token + source IP check.
+        """Authenticate the request via its bearer token.
 
-        Returns the token info dict or None (sends error response).
-
-        For TCP connections, if the token carries a ``container_ip``,
-        the request's source IP must match (incus ``ipv4_filtering``
-        makes this trustable). For Unix-socket connections (used by
-        ``gh``), the IP check is skipped — the connecting peer has no
-        IP. Per-container token + per-bubble disk-mount permissions
-        are the controls there.
+        Returns the token info dict or None (sends error response). The
+        token is the capability; possession grants the scoped access.
         """
         token = self._get_container_token()
         if not token:
@@ -737,22 +741,6 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         if not info:
             self._send_error(403, "Invalid auth proxy token")
             return None
-
-        expected_ip = info.get("container_ip")
-        if expected_ip and self.client_address:
-            # client_address is ("", 0) for Unix-socket peers (see
-            # UnixHTTPServer), so the `expected_ip` check is effectively
-            # skipped there. For TCP peers it's (source_ip, source_port).
-            source_ip = self.client_address[0]
-            if source_ip and source_ip != expected_ip:
-                logger.warning(
-                    "AUTH_REJECT container=%s expected_ip=%s source_ip=%s",
-                    info.get("container"),
-                    expected_ip,
-                    source_ip,
-                )
-                self._send_error(403, "Source IP does not match token")
-                return None
 
         return info
 

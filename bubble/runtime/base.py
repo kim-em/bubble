@@ -85,48 +85,6 @@ class ContainerRuntime(ABC):
     def add_device(self, name: str, device_name: str, device_type: str, **props):
         """Add a device (disk, proxy, etc.) to a container."""
 
-    def override_device(self, name: str, device_name: str, **props):
-        """Override a profile-inherited device's properties on the instance.
-
-        Default implementation raises NotImplementedError; runtimes that
-        support per-instance device overrides (e.g. IncusRuntime) should
-        implement it. Used to apply per-NIC security filtering to the
-        default ``eth0`` without modifying the profile.
-        """
-        raise NotImplementedError("override_device not supported by this runtime")
-
-    @abstractmethod
-    def remove_device(self, name: str, device_name: str):
-        """Remove a device from a container.
-
-        Idempotent: succeeds (returns normally) if the device does not
-        exist. Used by bubble's stop/pop paths to ensure incus reaps
-        the device's helper processes before the container goes away.
-        """
-
-    @abstractmethod
-    def device_exists(self, name: str, device_name: str) -> bool:
-        """Check whether a named device is attached to a container."""
-
-    def device_property(self, name: str, device_name: str, key: str) -> str | None:
-        """Return a device property value, or None if unset/unavailable.
-
-        Default implementation returns None; runtimes that can introspect
-        device config (e.g. IncusRuntime) override it.
-        """
-        return None
-
-    def container_ipv4(self, name: str) -> str | None:
-        """Return the container's primary IPv4 address, or None.
-
-        Default implementation reads from :meth:`list_containers`. Subclasses
-        may override for a more efficient single-container lookup.
-        """
-        for info in self.list_containers(fast=False):
-            if info.name == name:
-                return info.ipv4
-        return None
-
     @abstractmethod
     def add_disk(self, name: str, device_name: str, source: str, path: str, readonly: bool = False):
         """Mount a host path into the container."""
