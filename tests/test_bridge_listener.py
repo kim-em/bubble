@@ -131,11 +131,7 @@ def test_allowlist_rejects_malformed_endpoint(mock_runtime):
 
 @pytest.fixture
 def bridge_endpoint():
-    return {
-        "tcp": {"host": "10.156.104.1", "port": 7654},
-        "unix_socket": "/home/kim/.bubble/proxy-sockets/gh.sock",
-        "version": 2,
-    }
+    return {"tcp": {"host": "10.156.104.1", "port": 7654}, "version": 3}
 
 
 def _launch(mock_runtime, *, container="c", ip="10.156.104.42"):
@@ -161,8 +157,9 @@ def test_setup_auth_proxy_skips_proxy_devices(mock_runtime, bridge_endpoint):
     assert added_proxy_devices == [], "local flow must not add a proxy device"
 
 
-def test_setup_auth_proxy_adds_gh_socket_disk_mount(mock_runtime, bridge_endpoint):
-    """When gh+rest are enabled, the host socket dir is bind-mounted (disk, not proxy)."""
+def test_setup_auth_proxy_gh_records_bridge_endpoint_no_disk(mock_runtime, bridge_endpoint):
+    """gh setup records the bridge endpoint for the in-container forwarder
+    and adds NO disk/proxy device."""
     from bubble.github_token import setup_auth_proxy
 
     _launch(mock_runtime)
@@ -173,12 +170,14 @@ def test_setup_auth_proxy_adds_gh_socket_disk_mount(mock_runtime, bridge_endpoin
     ):
         setup_auth_proxy(mock_runtime, "c", "kim-em", "bubble", gh_enabled=True, config={})
 
-    socket_mounts = [
-        c for c in mock_runtime.calls if c[0] == "add_disk" and c[2] == "bubble-proxy-sockets"
-    ]
-    assert len(socket_mounts) == 1
-    _name, _device, _src, dst, *_ = socket_mounts[0][1:]
-    assert dst == "/run/bubble-proxy"
+    # No devices of any kind for auth/gh (no disk mount, no proxy device).
+    assert [c for c in mock_runtime.calls if c[0] == "add_disk"] == []
+    assert [c for c in mock_runtime.calls if c[0] == "add_device"] == []
+    # gh config writes the bridge endpoint + the forwarder socket path.
+    payload = " ".join(str(c[2]) for c in mock_runtime.calls if c[0] == "exec")
+    assert "/etc/bubble/gh/bridge" in payload
+    assert "10.156.104.1:7654" in payload
+    assert "/home/user/.bubble/gh.sock" in payload
 
 
 def test_setup_auth_proxy_git_config_uses_bridge_url(mock_runtime, bridge_endpoint):

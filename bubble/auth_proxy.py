@@ -46,15 +46,17 @@ Listeners:
   the daemon directly through the bridge so no per-bubble incus proxy
   device is needed.
 - On macOS (Colima): TCP on the Colima bridge IP.
-- Plus: a Unix-socket listener at ``~/.bubble/proxy-sockets/gh.sock``
-  used by ``gh`` inside bubbles via a bind-mounted disk device.
 
-Listener endpoints are written to ``~/.bubble/auth-proxy.endpoint``
+``gh`` reaches this same TCP listener through a tiny unix→TCP forwarder
+that runs inside each container (see the gh tool wrapper) — gh wants a
+Unix socket, the forwarder gives it one locally and relays to the
+bridge. There is no host-side Unix socket and no incus ``proxy`` device.
+
+The listener endpoint is written to ``~/.bubble/auth-proxy.endpoint``
 (JSON). ``auth-proxy.port`` is also written for backwards compat.
 """
 
 import base64
-import contextlib
 import json
 import logging
 import os
@@ -82,13 +84,6 @@ AUTH_PROXY_PORT_FILE = DATA_DIR / "auth-proxy.port"
 AUTH_PROXY_ENDPOINT_FILE = DATA_DIR / "auth-proxy.endpoint"
 AUTH_PROXY_LOG = DATA_DIR / "auth-proxy.log"
 AUTH_PROXY_TOKENS = DATA_DIR / "auth-tokens.json"
-
-# Directory that holds the Unix-socket listener for `gh`. The whole dir
-# is bind-mounted into bubbles via a `disk` device so containers can
-# reach the proxy without an incus `proxy`-type device (which spawns a
-# `forkproxy` helper per bubble and leaks on stop/start cycles).
-AUTH_PROXY_SOCKETS_DIR = DATA_DIR / "proxy-sockets"
-AUTH_PROXY_GH_SOCKET = AUTH_PROXY_SOCKETS_DIR / "gh.sock"
 
 # Default port (configurable via config.toml)
 DEFAULT_PORT = 7654
@@ -1451,40 +1446,6 @@ class BridgeBoundHTTPServer(ThreadedHTTPServer):
         super().server_bind()
 
 
-class UnixHTTPServer(ThreadedHTTPServer):
-    """ThreadedHTTPServer over a Unix-domain socket.
-
-    Used by ``gh`` inside bubbles: each bubble has a ``disk``-type
-    device that bind-mounts ``AUTH_PROXY_SOCKETS_DIR`` into the
-    container. ``gh`` connects to the socket file inside; no incus
-    proxy device is needed (so no forkproxy helper).
-    """
-
-    address_family = socket.AF_UNIX
-
-    def __init__(self, socket_path: str, RequestHandlerClass):
-        # Remove any leftover socket file from a previous run.
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(socket_path)
-        super().__init__(socket_path, RequestHandlerClass)
-        # Make the socket world-readable so containers (with their own
-        # idmap'd uids) can connect; per-bubble token authentication is
-        # the access control.
-        os.chmod(socket_path, 0o666)
-
-    def get_request(self):
-        # Unix sockets don't have a meaningful client address; report
-        # an empty one so handlers can detect they came in over Unix
-        # and skip IP-based checks.
-        request, _ = super().get_request()
-        return request, ("", 0)
-
-    def server_close(self):
-        super().server_close()
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(self.server_address)
-
-
 # ---------------------------------------------------------------------------
 # Daemon
 # ---------------------------------------------------------------------------
@@ -1577,48 +1538,37 @@ def _resolve_tcp_bind() -> tuple[str, str | None]:
         return "127.0.0.1", None
 
 
-def _write_endpoint_file(tcp_host: str, tcp_port: int, unix_socket: str):
-    """Persist the listener endpoints for bubble's auth-setup code."""
+def _write_endpoint_file(tcp_host: str, tcp_port: int):
+    """Persist the TCP listener endpoint for bubble's auth-setup code."""
     payload = {
         "tcp": {"host": tcp_host, "port": tcp_port},
-        "unix_socket": unix_socket,
-        "version": 2,
+        "version": 3,
     }
     AUTH_PROXY_ENDPOINT_FILE.write_text(json.dumps(payload))
     os.chmod(str(AUTH_PROXY_ENDPOINT_FILE), 0o600)
-    # Backwards-compat: keep auth-proxy.port readable as an int so older
-    # bubble installs that still parse it don't break during the
-    # rolling migration.
+    # Backwards-compat: keep auth-proxy.port readable as an int.
     AUTH_PROXY_PORT_FILE.write_text(str(tcp_port))
     os.chmod(str(AUTH_PROXY_PORT_FILE), 0o600)
 
 
 def run_daemon(port: int = 0):
-    """Run the auth proxy daemon with a TCP listener and a Unix-socket listener.
+    """Run the auth proxy daemon: a single TCP listener.
 
-    The TCP listener serves git and (on the legacy path) the per-bubble
-    proxy device. The Unix-socket listener serves ``gh`` inside bubbles
-    via a bind-mounted ``disk`` device.
+    Containers reach it directly over the incus bridge. git talks to it
+    via ``url.insteadOf``; gh talks to it via a small unix→TCP forwarder
+    that runs inside each container (see the gh tool wrapper) — so there
+    is no host-side Unix socket and no incus ``proxy`` device anywhere.
 
-    On Linux the TCP listener is bound to the incus bridge gateway IP
-    and restricted to ``incusbr0`` via ``SO_BINDTODEVICE``; verified
-    failure-closed via ``getsockopt`` round-trip.
+    On Linux the listener is bound to the incus bridge gateway IP and
+    restricted to ``incusbr0`` via ``SO_BINDTODEVICE`` (verified
+    failure-closed via a ``getsockopt`` round-trip). On macOS it binds
+    the Colima bridge IP.
 
     Args:
         port: Port to listen on. 0 means use config or default.
     """
     _setup_logging()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    AUTH_PROXY_SOCKETS_DIR.mkdir(parents=True, exist_ok=True)
-    # The socket directory is bind-mounted into bubbles, where the
-    # container's idmap'd (unprivileged, non-root) user must be able to
-    # traverse it to reach gh.sock. Mode 0711 grants traverse without
-    # listing: other principals can't enumerate the directory, but can
-    # reach a known socket name — which is fine because every request is
-    # still token-validated (same model as the relay socket). 0700 would
-    # block the container user entirely (observed: gh "connect: permission
-    # denied").
-    os.chmod(str(AUTH_PROXY_SOCKETS_DIR), 0o711)
 
     if not port:
         from .config import load_config
@@ -1646,23 +1596,15 @@ def run_daemon(port: int = 0):
     else:
         tcp_server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
 
-    unix_socket_path = str(AUTH_PROXY_GH_SOCKET)
-    unix_server = UnixHTTPServer(unix_socket_path, AuthProxyHandler)
-
-    _write_endpoint_file(bind_addr, port, unix_socket_path)
+    _write_endpoint_file(bind_addr, port)
 
     logger.info(
-        "Auth proxy daemon started: tcp=%s:%d (device=%s) unix=%s",
+        "Auth proxy daemon started: tcp=%s:%d (device=%s)",
         bind_addr,
         port,
         bind_device or "(unrestricted)",
-        unix_socket_path,
     )
-    print(f"Auth proxy listening on {bind_addr}:{port} and unix:{unix_socket_path}")
-
-    # Serve Unix socket on a background thread; main thread serves TCP.
-    unix_thread = threading.Thread(target=unix_server.serve_forever, daemon=True)
-    unix_thread.start()
+    print(f"Auth proxy listening on {bind_addr}:{port}")
 
     try:
         tcp_server.serve_forever()
@@ -1670,7 +1612,5 @@ def run_daemon(port: int = 0):
         logger.info("Auth proxy daemon stopped")
     finally:
         tcp_server.shutdown()
-        unix_server.shutdown()
-        unix_server.server_close()
         AUTH_PROXY_PORT_FILE.unlink(missing_ok=True)
         AUTH_PROXY_ENDPOINT_FILE.unlink(missing_ok=True)
