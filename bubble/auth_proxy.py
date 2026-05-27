@@ -28,15 +28,26 @@ Security model:
 - Per-container token isolation via X-Bubble-Token or Authorization header
 - Rate limited + logged (reuses relay patterns)
 
-On macOS (Colima): TCP listener, port saved to ~/.bubble/auth-proxy.port.
-On Linux: TCP listener on 127.0.0.1 (Incus proxy needs TCP for HTTP).
+Listeners:
+- On Linux: TCP on the incus bridge gateway IP (typically 10.156.104.1),
+  restricted to ``incusbr0`` via ``SO_BINDTODEVICE``. Containers reach
+  the daemon directly through the bridge so no per-bubble incus proxy
+  device is needed.
+- On macOS (Colima): TCP on the Colima bridge IP.
+- Plus: a Unix-socket listener at ``~/.bubble/proxy-sockets/gh.sock``
+  used by ``gh`` inside bubbles via a bind-mounted disk device.
+
+Listener endpoints are written to ``~/.bubble/auth-proxy.endpoint``
+(JSON). ``auth-proxy.port`` is also written for backwards compat.
 """
 
 import base64
+import contextlib
 import json
 import logging
 import os
 import re
+import socket
 import ssl
 import threading
 import time
@@ -56,8 +67,16 @@ from .token_store import RateLimiter as _RateLimiter
 from .token_store import RateWindow, TokenStore, setup_file_logging
 
 AUTH_PROXY_PORT_FILE = DATA_DIR / "auth-proxy.port"
+AUTH_PROXY_ENDPOINT_FILE = DATA_DIR / "auth-proxy.endpoint"
 AUTH_PROXY_LOG = DATA_DIR / "auth-proxy.log"
 AUTH_PROXY_TOKENS = DATA_DIR / "auth-tokens.json"
+
+# Directory that holds the Unix-socket listener for `gh`. The whole dir
+# is bind-mounted into bubbles via a `disk` device so containers can
+# reach the proxy without an incus `proxy`-type device (which spawns a
+# `forkproxy` helper per bubble and leaks on stop/start cycles).
+AUTH_PROXY_SOCKETS_DIR = DATA_DIR / "proxy-sockets"
+AUTH_PROXY_GH_SOCKET = AUTH_PROXY_SOCKETS_DIR / "gh.sock"
 
 # Default port (configurable via config.toml)
 DEFAULT_PORT = 7654
@@ -176,12 +195,19 @@ def generate_auth_token(
     rest_api: bool = True,
     graphql_read: str = "whitelisted",
     graphql_write: str = "whitelisted",
+    container_ip: str | None = None,
 ) -> str:
     """Generate an auth proxy token for a container.
 
     The token maps to (container_name, owner, repo, rest_api, graphql_read,
-    graphql_write) — the proxy uses this to validate requests and enforce
-    the access policy.
+    graphql_write, container_ip) — the proxy uses this to validate
+    requests and enforce the access policy.
+
+    ``container_ip`` (when set) binds the token to a specific source IP:
+    TCP requests from any other address are rejected with 403. This is
+    only meaningful when incus per-NIC ``security.ipv4_filtering`` is on
+    so source IPs cannot be spoofed by other bubbles.
+
     Uses file locking to prevent read-modify-write races.
     """
     return TokenStore(AUTH_PROXY_TOKENS).generate(
@@ -192,6 +218,7 @@ def generate_auth_token(
             "rest_api": rest_api,
             "graphql_read": graphql_read,
             "graphql_write": graphql_write,
+            "container_ip": container_ip,
         }
     )
 
@@ -690,9 +717,16 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             self.send_header(header, value)
 
     def _authenticate(self) -> dict | None:
-        """Authenticate the request via X-Bubble-Token.
+        """Authenticate the request via X-Bubble-Token + source IP check.
 
         Returns the token info dict or None (sends error response).
+
+        For TCP connections, if the token carries a ``container_ip``,
+        the request's source IP must match (incus ``ipv4_filtering``
+        makes this trustable). For Unix-socket connections (used by
+        ``gh``), the IP check is skipped — the connecting peer has no
+        IP. Per-container token + per-bubble disk-mount permissions
+        are the controls there.
         """
         token = self._get_container_token()
         if not token:
@@ -703,6 +737,22 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         if not info:
             self._send_error(403, "Invalid auth proxy token")
             return None
+
+        expected_ip = info.get("container_ip")
+        if expected_ip and self.client_address:
+            # client_address is ("", 0) for Unix-socket peers (see
+            # UnixHTTPServer), so the `expected_ip` check is effectively
+            # skipped there. For TCP peers it's (source_ip, source_port).
+            source_ip = self.client_address[0]
+            if source_ip and source_ip != expected_ip:
+                logger.warning(
+                    "AUTH_REJECT container=%s expected_ip=%s source_ip=%s",
+                    info.get("container"),
+                    expected_ip,
+                    source_ip,
+                )
+                self._send_error(403, "Source IP does not match token")
+                return None
 
         return info
 
@@ -1379,6 +1429,74 @@ class ThreadedHTTPServer(HTTPServer):
             self._handler_semaphore.release()
 
 
+class BridgeBoundHTTPServer(ThreadedHTTPServer):
+    """ThreadedHTTPServer that restricts the listening socket to one
+    network interface via ``SO_BINDTODEVICE``.
+
+    The kernel rejects packets arriving on any other interface, even if
+    they're addressed to the bind IP — so a misrouted packet from the
+    LAN side, docker0, etc. cannot reach this listener. We also verify
+    the option round-trips via ``getsockopt`` and fail closed if it
+    didn't take effect (older kernels, namespaces, etc.).
+    """
+
+    def __init__(self, server_address, RequestHandlerClass, *, bind_device: str):
+        self._bind_device = bind_device
+        super().__init__(server_address, RequestHandlerClass)
+
+    def server_bind(self):
+        if not hasattr(socket, "SO_BINDTODEVICE"):
+            raise RuntimeError(
+                "SO_BINDTODEVICE is unavailable on this platform; refusing to "
+                "bind a bridge-restricted listener."
+            )
+        device_bytes = self._bind_device.encode("ascii") + b"\x00"
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, device_bytes)
+        # Verify the option actually took effect — fail closed if not.
+        bound = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, 16)
+        if not bound.startswith(self._bind_device.encode("ascii")):
+            raise RuntimeError(
+                f"SO_BINDTODEVICE did not bind to {self._bind_device!r}; "
+                f"getsockopt returned {bound!r}. Refusing to start."
+            )
+        # Now do the actual bind.
+        super().server_bind()
+
+
+class UnixHTTPServer(ThreadedHTTPServer):
+    """ThreadedHTTPServer over a Unix-domain socket.
+
+    Used by ``gh`` inside bubbles: each bubble has a ``disk``-type
+    device that bind-mounts ``AUTH_PROXY_SOCKETS_DIR`` into the
+    container. ``gh`` connects to the socket file inside; no incus
+    proxy device is needed (so no forkproxy helper).
+    """
+
+    address_family = socket.AF_UNIX
+
+    def __init__(self, socket_path: str, RequestHandlerClass):
+        # Remove any leftover socket file from a previous run.
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(socket_path)
+        super().__init__(socket_path, RequestHandlerClass)
+        # Make the socket world-readable so containers (with their own
+        # idmap'd uids) can connect; per-bubble token authentication is
+        # the access control.
+        os.chmod(socket_path, 0o666)
+
+    def get_request(self):
+        # Unix sockets don't have a meaningful client address; report
+        # an empty one so handlers can detect they came in over Unix
+        # and skip IP-based checks.
+        request, _ = super().get_request()
+        return request, ("", 0)
+
+    def server_close(self):
+        super().server_close()
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(self.server_address)
+
+
 # ---------------------------------------------------------------------------
 # Daemon
 # ---------------------------------------------------------------------------
@@ -1438,16 +1556,77 @@ def _get_github_token() -> str:
     return token
 
 
-def run_daemon(port: int = 0):
-    """Run the auth proxy daemon.
+def _resolve_tcp_bind() -> tuple[str, str | None]:
+    """Pick the TCP bind address for this platform.
 
-    Listens on TCP (both macOS and Linux — HTTP needs TCP).
+    Returns ``(bind_addr, bind_device)``. ``bind_device`` is the network
+    interface name to restrict via SO_BINDTODEVICE, or None if no
+    restriction applies (macOS / unknown setups).
+    """
+    import platform
+
+    if platform.system() == "Darwin":
+        # On macOS, incus runs inside a Colima VM; bind to the VMNet
+        # bridge IP so the VM can reach us. No SO_BINDTODEVICE — macOS
+        # doesn't support it, and the VMNet IP is already only on the
+        # bridge interface.
+        from .runtime.colima import colima_bind_ip
+
+        return colima_bind_ip(), None
+
+    # Linux: bind to the incus bridge gateway IP and restrict the
+    # listener to incusbr0 so it's unreachable from any other interface.
+    # Fall back to 127.0.0.1 if the bridge can't be discovered (e.g.
+    # incus not installed yet); in that fallback case the daemon is
+    # only reachable from host loopback, and bubble's auth-setup path
+    # falls back to the legacy proxy-device flow.
+    from .incus_bridge import BRIDGE_INTERFACE, BridgeDiscoveryError, bridge_gateway_ipv4
+
+    try:
+        return bridge_gateway_ipv4(), BRIDGE_INTERFACE
+    except BridgeDiscoveryError as exc:
+        logger.warning("Bridge discovery failed: %s; binding to 127.0.0.1", exc)
+        return "127.0.0.1", None
+
+
+def _write_endpoint_file(tcp_host: str, tcp_port: int, unix_socket: str):
+    """Persist the listener endpoints for bubble's auth-setup code."""
+    payload = {
+        "tcp": {"host": tcp_host, "port": tcp_port},
+        "unix_socket": unix_socket,
+        "version": 2,
+    }
+    AUTH_PROXY_ENDPOINT_FILE.write_text(json.dumps(payload))
+    os.chmod(str(AUTH_PROXY_ENDPOINT_FILE), 0o600)
+    # Backwards-compat: keep auth-proxy.port readable as an int so older
+    # bubble installs that still parse it don't break during the
+    # rolling migration.
+    AUTH_PROXY_PORT_FILE.write_text(str(tcp_port))
+    os.chmod(str(AUTH_PROXY_PORT_FILE), 0o600)
+
+
+def run_daemon(port: int = 0):
+    """Run the auth proxy daemon with a TCP listener and a Unix-socket listener.
+
+    The TCP listener serves git and (on the legacy path) the per-bubble
+    proxy device. The Unix-socket listener serves ``gh`` inside bubbles
+    via a bind-mounted ``disk`` device.
+
+    On Linux the TCP listener is bound to the incus bridge gateway IP
+    and restricted to ``incusbr0`` via ``SO_BINDTODEVICE``; verified
+    failure-closed via ``getsockopt`` round-trip.
 
     Args:
         port: Port to listen on. 0 means use config or default.
     """
     _setup_logging()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    AUTH_PROXY_SOCKETS_DIR.mkdir(parents=True, exist_ok=True)
+    # The socket directory is bind-mounted into bubbles; keep it
+    # user-private on the host so other Unix users on the box can't
+    # walk it. Per-request token validation is the cross-bubble
+    # control inside the container.
+    os.chmod(str(AUTH_PROXY_SOCKETS_DIR), 0o700)
 
     if not port:
         from .config import load_config
@@ -1467,29 +1646,39 @@ def run_daemon(port: int = 0):
     AuthProxyHandler.rate_limiter = rate_limiter
     AuthProxyHandler.token_refresher = token_refresher
 
-    # On macOS, Incus runs inside a Colima VM.  Bind to the VMNet bridge
-    # IP (e.g. 192.168.64.1) so the VM can reach us without exposing the
-    # service to the wider LAN.  Falls back to 0.0.0.0 if no bridge found.
-    import platform
-
-    if platform.system() == "Darwin":
-        from .runtime.colima import colima_bind_ip
-
-        bind_addr = colima_bind_ip()
+    bind_addr, bind_device = _resolve_tcp_bind()
+    if bind_device:
+        tcp_server = BridgeBoundHTTPServer(
+            (bind_addr, port), AuthProxyHandler, bind_device=bind_device
+        )
     else:
-        bind_addr = "127.0.0.1"
-    server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
+        tcp_server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
 
-    AUTH_PROXY_PORT_FILE.write_text(str(port))
-    os.chmod(str(AUTH_PROXY_PORT_FILE), 0o600)
+    unix_socket_path = str(AUTH_PROXY_GH_SOCKET)
+    unix_server = UnixHTTPServer(unix_socket_path, AuthProxyHandler)
 
-    logger.info("Auth proxy daemon started on %s:%d", bind_addr, port)
-    print(f"Auth proxy listening on {bind_addr}:{port}")
+    _write_endpoint_file(bind_addr, port, unix_socket_path)
+
+    logger.info(
+        "Auth proxy daemon started: tcp=%s:%d (device=%s) unix=%s",
+        bind_addr,
+        port,
+        bind_device or "(unrestricted)",
+        unix_socket_path,
+    )
+    print(f"Auth proxy listening on {bind_addr}:{port} and unix:{unix_socket_path}")
+
+    # Serve Unix socket on a background thread; main thread serves TCP.
+    unix_thread = threading.Thread(target=unix_server.serve_forever, daemon=True)
+    unix_thread.start()
 
     try:
-        server.serve_forever()
+        tcp_server.serve_forever()
     except KeyboardInterrupt:
         logger.info("Auth proxy daemon stopped")
     finally:
-        server.shutdown()
+        tcp_server.shutdown()
+        unix_server.shutdown()
+        unix_server.server_close()
         AUTH_PROXY_PORT_FILE.unlink(missing_ok=True)
+        AUTH_PROXY_ENDPOINT_FILE.unlink(missing_ok=True)

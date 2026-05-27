@@ -85,6 +85,16 @@ class ContainerRuntime(ABC):
     def add_device(self, name: str, device_name: str, device_type: str, **props):
         """Add a device (disk, proxy, etc.) to a container."""
 
+    def override_device(self, name: str, device_name: str, **props):
+        """Override a profile-inherited device's properties on the instance.
+
+        Default implementation raises NotImplementedError; runtimes that
+        support per-instance device overrides (e.g. IncusRuntime) should
+        implement it. Used to apply per-NIC security filtering to the
+        default ``eth0`` without modifying the profile.
+        """
+        raise NotImplementedError("override_device not supported by this runtime")
+
     @abstractmethod
     def remove_device(self, name: str, device_name: str):
         """Remove a device from a container.

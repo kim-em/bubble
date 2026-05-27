@@ -59,6 +59,10 @@ class MockRuntime(ContainerRuntime):
         self.calls.append(("add_device", name, device_name, device_type, props))
         self._devices.setdefault(name, set()).add(device_name)
 
+    def override_device(self, name: str, device_name: str, **props):
+        self.calls.append(("override_device", name, device_name, props))
+        self._devices.setdefault(name, set()).add(device_name)
+
     def remove_device(self, name: str, device_name: str):
         self.calls.append(("remove_device", name, device_name))
         # Idempotent: removing a non-existent device is a no-op.

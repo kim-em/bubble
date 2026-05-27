@@ -244,6 +244,51 @@ class IncusRuntime(ContainerRuntime):
             args.append(f"{k}={v}")
         self._run(args)
 
+    def override_device(self, name: str, device_name: str, **props):
+        """Copy a profile-inherited device onto the instance and set props.
+
+        Used to apply ``security.mac_filtering=true`` (etc.) to the
+        default ``eth0`` NIC without modifying the underlying profile.
+        Idempotent: if the device is already overridden, falls back to
+        ``set`` for each property.
+        """
+        args = [
+            "incus",
+            "config",
+            "device",
+            "override",
+            self._q(name),
+            device_name,
+        ]
+        for k, v in props.items():
+            args.append(f"{k}={v}")
+        result = subprocess.run(args, capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            return
+        stderr = (result.stderr or "").strip()
+        # "already exists" => fall back to per-key set
+        if "already exists" in stderr.lower() or "is already" in stderr.lower():
+            for k, v in props.items():
+                set_cmd = [
+                    "incus",
+                    "config",
+                    "device",
+                    "set",
+                    self._q(name),
+                    device_name,
+                    f"{k}={v}",
+                ]
+                set_result = subprocess.run(set_cmd, capture_output=True, text=True, check=False)
+                if set_result.returncode != 0:
+                    raise IncusError(
+                        set_result.returncode,
+                        set_cmd,
+                        set_result.stdout,
+                        set_result.stderr,
+                    )
+            return
+        raise IncusError(result.returncode, args, result.stdout, stderr)
+
     def remove_device(self, name: str, device_name: str):
         """Remove a device. Tolerates 'device doesn't exist' (idempotent)."""
         cmd = ["incus", "config", "device", "remove", self._q(name), device_name]
