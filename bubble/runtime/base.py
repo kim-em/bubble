@@ -86,6 +86,30 @@ class ContainerRuntime(ABC):
         """Add a device (disk, proxy, etc.) to a container."""
 
     @abstractmethod
+    def remove_device(self, name: str, device_name: str):
+        """Remove a device from a container.
+
+        Idempotent: succeeds (returns normally) if the device does not
+        exist. Used by bubble's stop/pop paths to ensure incus reaps
+        the device's helper processes before the container goes away.
+        """
+
+    @abstractmethod
+    def device_exists(self, name: str, device_name: str) -> bool:
+        """Check whether a named device is attached to a container."""
+
+    def container_ipv4(self, name: str) -> str | None:
+        """Return the container's primary IPv4 address, or None.
+
+        Default implementation reads from :meth:`list_containers`. Subclasses
+        may override for a more efficient single-container lookup.
+        """
+        for info in self.list_containers(fast=False):
+            if info.name == name:
+                return info.ipv4
+        return None
+
+    @abstractmethod
     def add_disk(self, name: str, device_name: str, source: str, path: str, readonly: bool = False):
         """Mount a host path into the container."""
 

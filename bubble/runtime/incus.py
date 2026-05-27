@@ -244,6 +244,32 @@ class IncusRuntime(ContainerRuntime):
             args.append(f"{k}={v}")
         self._run(args)
 
+    def remove_device(self, name: str, device_name: str):
+        """Remove a device. Tolerates 'device doesn't exist' (idempotent)."""
+        cmd = ["incus", "config", "device", "remove", self._q(name), device_name]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            return
+        stderr = (result.stderr or "").strip()
+        # incus phrases the missing-device error a couple of ways; tolerate both.
+        if "doesn't exist" in stderr.lower() or "not found" in stderr.lower():
+            return
+        raise IncusError(result.returncode, cmd, result.stdout, stderr)
+
+    def device_exists(self, name: str, device_name: str) -> bool:
+        cmd = ["incus", "config", "device", "show", self._q(name), device_name]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return result.returncode == 0
+
+    def container_ipv4(self, name: str) -> str | None:
+        try:
+            data = self._run_json(["list", self._q(name)])
+        except (subprocess.CalledProcessError, RuntimeError):
+            return None
+        if not data:
+            return None
+        return self._parse_container(data[0]).ipv4
+
     def add_disk(self, name: str, device_name: str, source: str, path: str, readonly: bool = False):
         props = {"source": source, "path": path}
         if readonly:

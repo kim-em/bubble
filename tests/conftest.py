@@ -15,6 +15,7 @@ class MockRuntime(ContainerRuntime):
         self.exec_responses: dict[str, str] = {}
         self._containers: dict[str, ContainerInfo] = {}
         self._images: set[str] = {"base"}
+        self._devices: dict[str, set[str]] = {}
 
     def is_available(self) -> bool:
         self.calls.append(("is_available",))
@@ -56,6 +57,21 @@ class MockRuntime(ContainerRuntime):
 
     def add_device(self, name: str, device_name: str, device_type: str, **props):
         self.calls.append(("add_device", name, device_name, device_type, props))
+        self._devices.setdefault(name, set()).add(device_name)
+
+    def remove_device(self, name: str, device_name: str):
+        self.calls.append(("remove_device", name, device_name))
+        # Idempotent: removing a non-existent device is a no-op.
+        self._devices.get(name, set()).discard(device_name)
+
+    def device_exists(self, name: str, device_name: str) -> bool:
+        self.calls.append(("device_exists", name, device_name))
+        return device_name in self._devices.get(name, set())
+
+    def container_ipv4(self, name: str) -> str | None:
+        self.calls.append(("container_ipv4", name))
+        info = self._containers.get(name)
+        return info.ipv4 if info else None
 
     def add_disk(self, name: str, device_name: str, source: str, path: str, readonly: bool = False):
         self.calls.append(("add_disk", name, device_name, source, path, readonly))
