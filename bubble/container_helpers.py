@@ -273,14 +273,53 @@ def apply_network(
     gh_level = get_github_level(config)
     if gh_level != "direct" and not (keep_github_domains and gh_level != "off"):
         domains = filter_github_domains(domains)
-    if domains:
+    # If the bridge-listener auth proxy is running, punch a hole for the
+    # bridge IP:port so the container can reach it directly. Bubbles
+    # using the legacy proxy-device flow don't need this (the proxy
+    # device delivers traffic on the container's own loopback).
+    auth_endpoint = _resolve_auth_proxy_endpoint_for_allowlist(gh_level)
+    if domains or auth_endpoint:
         try:
             from .network import apply_allowlist
 
-            apply_allowlist(runtime, name, domains)
+            apply_allowlist(runtime, name, domains, auth_proxy_endpoint=auth_endpoint)
             detail("Network allowlist applied.")
         except (RuntimeError, OSError, ValueError) as e:
             raise click.ClickException(f"Failed to apply network allowlist: {e}")
+
+
+def _resolve_auth_proxy_endpoint_for_allowlist(gh_level: str) -> tuple[str, int] | None:
+    """Return the bridge auth-proxy endpoint if the bridge flow is active.
+
+    Returns None when github auth is disabled, when injecting the raw
+    token (no proxy needed), or when the daemon hasn't written the v2
+    endpoint file (legacy flow). When set, the container needs an
+    explicit iptables ACCEPT for the endpoint so it can reach the
+    proxy directly (bridge IP on Linux; the Colima bridge IP on macOS,
+    reached via the VM's NAT).
+    """
+    import json
+
+    if gh_level in ("off", "direct"):
+        return None
+    from .auth_proxy import AUTH_PROXY_ENDPOINT_FILE
+
+    if not AUTH_PROXY_ENDPOINT_FILE.exists():
+        return None
+    try:
+        data = json.loads(AUTH_PROXY_ENDPOINT_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    tcp = data.get("tcp") or {}
+    host = tcp.get("host")
+    port = tcp.get("port")
+    if not host or not isinstance(port, int):
+        return None
+    # Don't punch a hole for loopback — that's the legacy bind fallback
+    # and the proxy device handles delivery internally.
+    if host == "127.0.0.1":
+        return None
+    return (host, port)
 
 
 def detect_project_dir(runtime: ContainerRuntime, name: str) -> str:

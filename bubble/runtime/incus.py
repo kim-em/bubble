@@ -4,10 +4,40 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 
 from .base import ContainerInfo, ContainerRuntime
+
+# Number of attempts and base backoff for transient incusd errors. Under
+# heavy host load the incusd REST socket intermittently drops requests
+# ("EOF", "connection refused"); these are not real failures, just the
+# daemon being momentarily overwhelmed. Retrying with backoff keeps bubble
+# working on busy machines (e.g. a shared box running many builds).
+_TRANSIENT_RETRIES = 5
+_TRANSIENT_BACKOFF_BASE = 0.5  # seconds: 0.5, 1, 2, 4, 8
+
+
+def _is_transient_incus_error(text: str) -> bool:
+    """True if *text* looks like a transient incusd connection hiccup.
+
+    These are socket-level failures talking to incusd, distinct from real
+    errors like "Instance not found" or "Device doesn't exist" which must
+    surface immediately.
+    """
+    if not text:
+        return False
+    low = text.lower()
+    # Examples seen under load:
+    #   Error: Put "http://unix.socket/1.0/instances/x": EOF
+    #   Error: Get "http://unix.socket/1.0/...": EOF
+    #   Error: Put "http://unix.socket/...": read ...: connection reset by peer
+    if "unix.socket" in low and ("eof" in low or "connection reset" in low):
+        return True
+    if "connection refused" in low and "unix.socket" in low:
+        return True
+    return False
 
 
 class IncusError(subprocess.CalledProcessError, RuntimeError):
@@ -54,32 +84,57 @@ class IncusRuntime(ContainerRuntime):
         # stay readable.
         return self.qualify(name)
 
-    def _run(self, args: list[str], check: bool = True, capture: bool = True) -> str:
-        """Run an incus command."""
-        cmd = ["incus"] + args
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=capture,
-                text=True,
-                check=check,
-                stdin=subprocess.DEVNULL,
-            )
-        except FileNotFoundError:
-            from ..setup import _ensure_dependencies
+    def _run_subprocess(
+        self, cmd: list[str], *, capture: bool = True
+    ) -> subprocess.CompletedProcess:
+        """Run *cmd*, retrying on transient incusd connection errors.
 
-            _ensure_dependencies()
-            # _ensure_dependencies exits if incus not found; if we get here, retry
-            result = subprocess.run(
-                cmd,
-                capture_output=capture,
-                text=True,
-                check=check,
-                stdin=subprocess.DEVNULL,
-            )
-        except subprocess.CalledProcessError as e:
-            raise IncusError(e.returncode, e.cmd, e.output, e.stderr) from None
-        return result.stdout.strip() if capture else ""
+        Returns the CompletedProcess (does not raise on nonzero exit — the
+        caller decides). Retries only when the daemon socket hiccups under
+        load; real nonzero exits (bad args, missing instance, etc.) return
+        immediately so callers see the actual error.
+        """
+        last: subprocess.CompletedProcess | None = None
+        for attempt in range(_TRANSIENT_RETRIES):
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=capture,
+                    text=True,
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                from ..setup import _ensure_dependencies
+
+                _ensure_dependencies()
+                # _ensure_dependencies exits if incus is missing; if we get
+                # here it was installed, so retry this attempt once.
+                result = subprocess.run(
+                    cmd,
+                    capture_output=capture,
+                    text=True,
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+            last = result
+            if result.returncode == 0:
+                return result
+            stderr = result.stderr or ""
+            if attempt < _TRANSIENT_RETRIES - 1 and _is_transient_incus_error(stderr):
+                time.sleep(_TRANSIENT_BACKOFF_BASE * (2**attempt))
+                continue
+            return result
+        assert last is not None  # loop runs at least once
+        return last
+
+    def _run(self, args: list[str], check: bool = True, capture: bool = True) -> str:
+        """Run an incus command (with transient-error retry)."""
+        cmd = ["incus"] + args
+        result = self._run_subprocess(cmd, capture=capture)
+        if check and result.returncode != 0:
+            raise IncusError(result.returncode, cmd, result.stdout, result.stderr)
+        return (result.stdout or "").strip() if capture else ""
 
     def _run_json(self, args: list[str]) -> dict | list:
         """Run an incus command and parse JSON output."""
@@ -142,11 +197,20 @@ class IncusRuntime(ContainerRuntime):
         )
 
     def _get_info(self, name: str) -> ContainerInfo:
-        """Get info for a single container."""
-        data = self._run_json(["list", self._q(name)])
-        if not data:
-            raise RuntimeError(f"Container '{name}' not found")
-        return self._parse_container(data[0])
+        """Get info for a single container.
+
+        Filters the full listing in Python rather than passing
+        ``<remote>:<name>`` as an incus list filter: on recent incus
+        versions ``incus list <remote>:<name>`` returns nothing (the
+        ``remote:name`` form isn't treated as a name filter), whereas
+        ``incus list <remote>:`` reliably scopes to the remote. This is
+        the same workaround the no-name path in ``list_containers``
+        already relies on.
+        """
+        for info in self.list_containers(fast=False):
+            if info.name == name:
+                return info
+        raise RuntimeError(f"Container '{name}' not found")
 
     def list_containers(self, fast: bool = True) -> list[ContainerInfo]:
         # When a remote is set, pass "remote:" with no name so list scopes
@@ -261,7 +325,18 @@ class IncusRuntime(ContainerRuntime):
         # Delete existing image with same alias
         if self.image_exists(alias):
             self.image_delete(alias)
-        self._run(["publish", self._q(name), "--alias", alias])
+        # Publish to the *same* remote as the source instance. Without an
+        # explicit target remote, incus publishes the alias to the current
+        # default remote — which on Colima is a different remote name than
+        # ours (even though it's the same socket), and incus then rejects
+        # the cross-remote publish ("source and target servers must be
+        # different"). It also leaves the image where image_exists/delete
+        # (which qualify with our remote) can't see it.
+        args = ["publish", self._q(name)]
+        if self._remote:
+            args.append(self._q(""))  # e.g. "bubble-colima:" — target remote
+        args += ["--alias", alias]
+        self._run(args)
 
     def image_exists(self, alias: str) -> bool:
         try:

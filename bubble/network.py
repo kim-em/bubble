@@ -18,21 +18,40 @@ from .runtime.base import ContainerRuntime
 
 # Valid domain pattern for allowlist entries
 _DOMAIN_RE = re.compile(r"^[a-zA-Z0-9.*-]+$")
+_IPV4_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
 
 
-def apply_allowlist(runtime: ContainerRuntime, container: str, domains: list[str]):
+def apply_allowlist(
+    runtime: ContainerRuntime,
+    container: str,
+    domains: list[str],
+    *,
+    auth_proxy_endpoint: tuple[str, int] | None = None,
+):
     """Apply network allowlist to a container using iptables.
 
     Resolves domain names to IPs and creates iptables rules that only
     allow outbound connections to those IPs.
+
+    ``auth_proxy_endpoint`` is an optional ``(ip, port)`` pair. When
+    set, an explicit ACCEPT rule is installed so the container can
+    reach the auth proxy listener directly (used by the bridge-listener
+    flow, where the container talks to the host's bridge gateway IP
+    instead of going through an incus proxy device).
     """
     # Validate domains to prevent shell injection
     for domain in domains:
         if not _DOMAIN_RE.match(domain):
             raise ValueError(f"Invalid domain in allowlist: {domain!r}")
+    if auth_proxy_endpoint is not None:
+        ip, port = auth_proxy_endpoint
+        if not _IPV4_RE.match(ip):
+            raise ValueError(f"Invalid auth proxy IP: {ip!r}")
+        if not isinstance(port, int) or not (0 < port < 65536):
+            raise ValueError(f"Invalid auth proxy port: {port!r}")
 
     # Build the allowlist script
-    script = _build_allowlist_script(domains)
+    script = _build_allowlist_script(domains, auth_proxy_endpoint=auth_proxy_endpoint)
     runtime.exec(container, ["bash", "-c", script])
 
 
@@ -49,7 +68,11 @@ def remove_allowlist(runtime: ContainerRuntime, container: str):
     )
 
 
-def _build_allowlist_script(domains: list[str]) -> str:
+def _build_allowlist_script(
+    domains: list[str],
+    *,
+    auth_proxy_endpoint: tuple[str, int] | None = None,
+) -> str:
     """Build a shell script that sets up iptables allowlist rules."""
     lines = [
         "#!/bin/bash",
@@ -78,19 +101,33 @@ def _build_allowlist_script(domains: list[str]) -> str:
         "  iptables -A OUTPUT -d $RESOLVER -p tcp --dport 53 -j ACCEPT",
         "fi",
         "",
-        "# Allow DNS to upstream servers (systemd-resolved forwards to these)",
-        "for UPSTREAM in $(resolvectl dns 2>/dev/null"
-        " | awk -F: '{print $2}'"
-        " | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+'); do",
-        "  iptables -A OUTPUT -d $UPSTREAM -p udp --dport 53 -j ACCEPT",
-        "  iptables -A OUTPUT -d $UPSTREAM -p tcp --dport 53 -j ACCEPT",
-        "done",
-        "",
-        "# Resolve and allow each domain (IPv4 only)",
-        "# Use /24 CIDR blocks instead of individual IPs because CDN domains",
-        "# (e.g. *.githubusercontent.com) rotate IPs within their allocation.",
-        "# A point-in-time resolution may miss IPs returned later.",
     ]
+    if auth_proxy_endpoint is not None:
+        ip, port = auth_proxy_endpoint
+        lines.extend(
+            [
+                "",
+                "# Allow direct access to the host's auth proxy (bridge flow)",
+                f"iptables -A OUTPUT -d {ip} -p tcp --dport {port} -j ACCEPT",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "# Allow DNS to upstream servers (systemd-resolved forwards to these)",
+            "for UPSTREAM in $(resolvectl dns 2>/dev/null"
+            " | awk -F: '{print $2}'"
+            " | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+'); do",
+            "  iptables -A OUTPUT -d $UPSTREAM -p udp --dport 53 -j ACCEPT",
+            "  iptables -A OUTPUT -d $UPSTREAM -p tcp --dport 53 -j ACCEPT",
+            "done",
+            "",
+            "# Resolve and allow each domain (IPv4 only)",
+            "# Use /24 CIDR blocks instead of individual IPs because CDN domains",
+            "# (e.g. *.githubusercontent.com) rotate IPs within their allocation.",
+            "# A point-in-time resolution may miss IPs returned later.",
+        ]
+    )
 
     for domain in domains:
         if domain.startswith("*."):

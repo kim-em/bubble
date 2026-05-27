@@ -15,6 +15,7 @@ class MockRuntime(ContainerRuntime):
         self.exec_responses: dict[str, str] = {}
         self._containers: dict[str, ContainerInfo] = {}
         self._images: set[str] = {"base"}
+        self._devices: dict[str, set[str]] = {}
 
     def is_available(self) -> bool:
         self.calls.append(("is_available",))
@@ -56,6 +57,7 @@ class MockRuntime(ContainerRuntime):
 
     def add_device(self, name: str, device_name: str, device_type: str, **props):
         self.calls.append(("add_device", name, device_name, device_type, props))
+        self._devices.setdefault(name, set()).add(device_name)
 
     def add_disk(self, name: str, device_name: str, source: str, path: str, readonly: bool = False):
         self.calls.append(("add_disk", name, device_name, source, path, readonly))

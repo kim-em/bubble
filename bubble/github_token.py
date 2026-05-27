@@ -13,10 +13,17 @@ The "direct" setting bypasses the proxy entirely: the host's actual
 GitHub token is injected into the container as GH_TOKEN and
 GITHUB_TOKEN environment variables, giving unrestricted access.
 
-For local containers, the proxy is exposed via Incus proxy devices.
-For remote/cloud containers, an SSH reverse tunnel forwards the
-local proxy port to the remote host, then an Incus proxy device
-on the remote exposes it into the container.
+For local containers (Linux or macOS/Colima), the container reaches the
+host auth-proxy daemon directly over the incus bridge IP: git via
+``url.insteadOf``, and gh via a small in-container ``socat`` forwarder
+(gh wants a Unix socket; the forwarder relays it to the same bridge
+TCP endpoint). No incus ``proxy``-type devices are created, so there
+are no per-bubble ``forkproxy`` helpers to leak.
+
+For remote/cloud containers, an SSH reverse tunnel forwards the local
+proxy port to the remote host, then an Incus proxy device on the remote
+exposes it into the container (a separate transport in
+``setup_auth_proxy_remote``).
 
 GitHub settings (each a strict superset of the one above):
   off:                      no GitHub access
@@ -26,25 +33,30 @@ GitHub settings (each a strict superset of the one above):
   allowlist-write-graphql:  + allowlisted GraphQL mutations (default)
   write-graphql:            + arbitrary GraphQL
   direct:                   raw token injection, no proxy
-
-When gh is installed and the github setting includes REST or higher,
-the proxy is also exposed as a Unix socket at /bubble/gh-proxy.sock
-and gh is configured to route through it via http_unix_socket.
 """
 
-import platform
+import json
 import shlex
 import subprocess
 
 from .output import detail
 from .runtime.base import ContainerRuntime
-from .runtime.colima import colima_bind_ip
 
-# Port inside the container where the auth proxy is exposed (TCP, for git)
+# Port inside the container where the auth proxy is exposed (legacy
+# proxy-device flow only — TCP, for git).
 _CONTAINER_PROXY_PORT = 7654
 
-# Unix socket path inside the container for gh CLI access
+# Unix socket path inside the container for gh CLI access (legacy
+# proxy-device flow only).
 _CONTAINER_GH_SOCKET = "/bubble/gh-proxy.sock"
+
+# Bridge-listener flow: gh's local Unix socket inside the container. The
+# gh wrapper (installed by the gh tool script) lazily runs a socat
+# unix→TCP forwarder on this path, relaying to the bridge endpoint
+# recorded at /etc/bubble/gh/bridge. User-owned so the unprivileged
+# container user can create/connect it. Must match the path the gh
+# wrapper uses.
+_CONTAINER_GH_SOCKET_BRIDGE = "/home/user/.bubble/gh.sock"
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +103,23 @@ cat >> /home/user/.gitconfig <<GITCONFIG
 [url "http://127.0.0.1:{port}/git/"]
 \tinsteadOf = https://github.com/
 [http "http://127.0.0.1:{port}/"]
+\textraHeader = X-Bubble-Token: $TOKEN
+GITCONFIG
+"""
+
+
+# Same as above but uses an arbitrary host:port endpoint — used by the
+# bridge-listener flow where the container reaches the daemon directly
+# via the incus bridge IP (no per-bubble proxy device).
+_AUTH_PROXY_GIT_CONFIG_BRIDGE_PAYLOAD = """\
+mkdir -p /home/user
+touch /home/user/.gitconfig
+chown user:user /home/user/.gitconfig
+chmod 600 /home/user/.gitconfig
+cat >> /home/user/.gitconfig <<GITCONFIG
+[url "http://{endpoint}/git/"]
+\tinsteadOf = https://github.com/
+[http "http://{endpoint}/"]
 \textraHeader = X-Bubble-Token: $TOKEN
 GITCONFIG
 """
@@ -182,6 +211,11 @@ def _ensure_auth_proxy_running() -> int | None:
     """Ensure the auth proxy daemon is running. Returns the port, or None.
 
     Installs the daemon if not already installed, then checks the port file.
+
+    This is the **legacy** signature kept for backwards-compat with
+    tests and the remote/cloud auth-setup paths. New code should call
+    :func:`_ensure_auth_proxy_endpoint` instead, which also reports the
+    Unix-socket listener path used by the bridge flow.
     """
     from .auth_proxy import AUTH_PROXY_PORT_FILE
     from .automation import install_auth_proxy_daemon, is_auth_proxy_installed
@@ -201,6 +235,66 @@ def _ensure_auth_proxy_running() -> int | None:
         time.sleep(0.5)
 
     return None
+
+
+def _ensure_auth_proxy_endpoint() -> dict | None:
+    """Ensure the daemon is running and return its endpoint metadata.
+
+    Returns a dict like::
+
+        {"tcp": {"host": "10.156.104.1", "port": 7654}, "version": 3}
+
+    or ``None`` if the daemon isn't actually listening (no endpoint file,
+    or a stale endpoint file left behind by a crashed daemon). The
+    endpoint is health-checked with a TCP connect before being trusted —
+    a stale file must not cause us to configure containers against a dead
+    listener. On ``None`` local auth setup fails closed (there is no
+    proxy-device fallback).
+    """
+    from .auth_proxy import AUTH_PROXY_ENDPOINT_FILE
+    from .automation import install_auth_proxy_daemon, is_auth_proxy_installed
+
+    if not is_auth_proxy_installed():
+        install_auth_proxy_daemon()
+
+    import time
+
+    for _ in range(10):
+        endpoint = _read_endpoint_file(AUTH_PROXY_ENDPOINT_FILE)
+        if endpoint and _endpoint_alive(endpoint):
+            return endpoint
+        time.sleep(0.5)
+
+    return None
+
+
+def _read_endpoint_file(path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _endpoint_alive(endpoint: dict) -> bool:
+    """TCP-connect to the endpoint to confirm a live daemon is listening.
+
+    Guards against a stale ``auth-proxy.endpoint`` file from a daemon
+    that crashed/was killed: without this we'd configure containers to
+    talk to a dead listener and report success.
+    """
+    import socket as _socket
+
+    tcp = endpoint.get("tcp") or {}
+    host, port = tcp.get("host"), tcp.get("port")
+    if not host or not isinstance(port, int):
+        return False
+    try:
+        with _socket.create_connection((host, port), timeout=2):
+            return True
+    except OSError:
+        return False
 
 
 def _resolve_rest_api(config: dict, gh_enabled: bool) -> bool:
@@ -266,29 +360,6 @@ def _describe_graphql_mode(graphql_read: str, graphql_write: str) -> str:
     return f"GraphQL read={graphql_read}, write={graphql_write}"
 
 
-def _wait_for_proxy_device(runtime: ContainerRuntime, container: str, port: int):
-    """Wait for a proxy device TCP listener to be ready inside a container.
-
-    Incus proxy devices may take a brief moment after add_device returns
-    before the TCP listener is actually accepting connections.  Does a
-    single retry-loop inside one ``incus exec`` call to avoid per-attempt
-    subprocess overhead.
-    """
-    try:
-        runtime.exec(
-            container,
-            [
-                "bash",
-                "-c",
-                f"for i in $(seq 1 20); do"
-                f" (echo > /dev/tcp/127.0.0.1/{port}) 2>/dev/null && exit 0;"
-                f" sleep 0.1; done; exit 1",
-            ],
-        )
-    except RuntimeError:
-        pass  # Best-effort; clone will produce a clearer error if still down
-
-
 def setup_auth_proxy(
     runtime: ContainerRuntime,
     container: str,
@@ -298,29 +369,91 @@ def setup_auth_proxy(
     gh_enabled: bool = False,
     config: dict | None = None,
 ) -> bool:
-    """Set up auth proxy access for a container.
+    """Set up auth proxy access for a local container via the bridge flow.
 
-    1. Ensure auth proxy daemon is running
-    2. Generate per-container token scoped to owner/repo
-    3. Add Incus proxy device exposing the proxy into the container
-    4. Configure git inside the container to use the proxy
-    5. If gh is enabled: add Unix socket proxy device and configure gh
+    The container reaches the host auth-proxy daemon directly over the
+    incus bridge (git) and a bind-mounted Unix socket (gh). No
+    ``proxy``-type incus devices are created, so there are no per-bubble
+    ``forkproxy`` helpers to leak on stop/start cycles.
+
+    (Remote/cloud bubbles use :func:`setup_auth_proxy_remote`, a separate
+    SSH-tunnelled transport.)
 
     Returns True if setup succeeded.
     """
-    from .auth_proxy import generate_auth_token
-
     rest_api = _resolve_rest_api(config or {}, gh_enabled)
     graphql_read, graphql_write = _resolve_graphql_config(config or {}, gh_enabled)
 
-    port = _ensure_auth_proxy_running()
-    if not port:
+    endpoint = _ensure_auth_proxy_endpoint()
+    if not endpoint:
         if not machine_readable:
             detail("Warning: auth proxy failed to start. No GitHub auth configured.")
             detail("Run 'bubble gh proxy start' to diagnose.")
         return False
+    return _setup_auth_proxy_bridge(
+        runtime,
+        container,
+        owner,
+        repo,
+        endpoint,
+        rest_api,
+        graphql_read,
+        graphql_write,
+        machine_readable,
+        gh_enabled,
+    )
 
-    # Generate per-container token with appropriate access policy
+
+def _setup_auth_proxy_bridge(
+    runtime: ContainerRuntime,
+    container: str,
+    owner: str,
+    repo: str,
+    endpoint: dict,
+    rest_api: bool,
+    graphql_read: str,
+    graphql_write: str,
+    machine_readable: bool,
+    gh_enabled: bool,
+) -> bool:
+    """Bridge-listener setup: no proxy-type devices, just a disk mount
+    for the gh socket plus a per-bubble bearer token."""
+    from .auth_proxy import generate_auth_token
+
+    tcp = endpoint.get("tcp") or {}
+    host_ip = tcp.get("host")
+    port = tcp.get("port")
+    if not host_ip or not port:
+        if not machine_readable:
+            detail("Warning: auth proxy endpoint file missing TCP info.")
+        return False
+    # A loopback endpoint is unreachable from inside the container (it's
+    # the container's own loopback, not the host). This shouldn't happen
+    # — the daemon refuses to bind loopback — but guard fail-closed so we
+    # never write a container config that can't possibly connect.
+    if host_ip.startswith("127."):
+        if not machine_readable:
+            detail(f"Warning: auth proxy bound to loopback {host_ip}; unreachable from bubbles.")
+            detail("No GitHub auth configured (fail-closed).")
+        return False
+
+    # Punch a hole in the container's egress allowlist for the bridge
+    # endpoint. The network allowlist is applied at provision time, which
+    # runs *before* the auth-proxy daemon has written its endpoint file on
+    # a cold start — so apply_network can't have added this rule on the
+    # first bubble. Add it here (idempotently) where the endpoint is known
+    # and the daemon is up. On restart, reapply_network_after_restart adds
+    # it too (the endpoint file exists by then). git AND gh both reach the
+    # daemon at this same endpoint (gh via the in-container forwarder), so
+    # one rule covers both. If egress can't be opened on a network-
+    # restricted bubble, fail closed rather than report a working setup
+    # the container can't actually use.
+    if not _allow_bridge_egress(runtime, container, host_ip, int(port)):
+        if not machine_readable:
+            detail("Warning: could not open egress to the auth proxy; the bubble's")
+            detail("network allowlist would block it. No GitHub auth configured.")
+        return False
+
     token = generate_auth_token(
         container,
         owner,
@@ -330,45 +463,9 @@ def setup_auth_proxy(
         graphql_write=graphql_write,
     )
 
-    # Add Incus proxy device: expose host TCP port into container
-    # On macOS (Colima), need to use the bridge IP where the auth proxy
-    # actually listens (colima_bind_ip), not host.lima.internal which may
-    # resolve to a different interface (vz NAT) that the proxy doesn't bind to.
-    if platform.system() == "Darwin":
-        host_ip = colima_bind_ip()
-    else:
-        host_ip = "127.0.0.1"
-
-    connect_addr = f"tcp:{host_ip}:{port}"
-    listen_addr = f"tcp:127.0.0.1:{_CONTAINER_PROXY_PORT}"
-
-    try:
-        runtime.add_device(
-            container,
-            "bubble-auth-proxy",
-            "proxy",
-            connect=connect_addr,
-            listen=listen_addr,
-            bind="container",
-        )
-    except Exception as e:
-        if not machine_readable:
-            detail(f"Warning: failed to add proxy device: {e}")
-            detail("No GitHub auth configured (fail-closed).")
-        return False
-
-    # Wait for the Incus proxy device TCP listener to be ready inside the
-    # container.  There's a small delay between add_device returning and
-    # the listener actually accepting connections.
-    _wait_for_proxy_device(runtime, container, _CONTAINER_PROXY_PORT)
-
-    # Configure git inside the container to use the proxy.
-    #
-    # Write user's .gitconfig directly via heredoc — `git config --global`
-    # would put the token in argv ("git config http... extraHeader X-Bubble-Token: <real>")
-    # and so would `su -c "..."` with the token expanded into the command.
-    # The heredoc body is fed to `cat` via the kernel's pipe, not argv.
-    payload = _AUTH_PROXY_GIT_CONFIG_PAYLOAD.format(port=_CONTAINER_PROXY_PORT)
+    # Configure git: talk to the bridge TCP endpoint directly.
+    endpoint_str = f"{host_ip}:{port}"
+    payload = _AUTH_PROXY_GIT_CONFIG_BRIDGE_PAYLOAD.format(endpoint=endpoint_str)
     try:
         runtime.exec(
             container,
@@ -381,56 +478,81 @@ def setup_auth_proxy(
             detail("No GitHub auth configured (fail-closed).")
         return False
 
-    # Set up gh CLI access via Unix socket proxy device
     if gh_enabled and rest_api:
-        _setup_gh_proxy(runtime, container, token, connect_addr, machine_readable, owner, repo)
+        _setup_gh_proxy_bridge(
+            runtime, container, token, host_ip, int(port), machine_readable, owner, repo
+        )
 
     if not machine_readable:
         mode_desc = _describe_graphql_mode(graphql_read, graphql_write)
-        detail(f"GitHub auth proxy configured (scoped to {owner}/{repo}, {mode_desc}).")
+        detail(
+            f"GitHub auth proxy configured via bridge {endpoint_str} "
+            f"(scoped to {owner}/{repo}, {mode_desc})."
+        )
     return True
 
 
-def _setup_gh_proxy(
+def _allow_bridge_egress(runtime: ContainerRuntime, container: str, ip: str, port: int) -> bool:
+    """Ensure the container can reach the bridge auth-proxy endpoint.
+
+    Idempotently inserts an ACCEPT ahead of the allowlist's default
+    ``OUTPUT DROP`` policy, then verifies it landed. Returns True when
+    the rule is in place OR when there's no iptables to configure (e.g.
+    ``--no-network`` bubbles, where egress is unrestricted anyway).
+    Returns False only when iptables is present but the rule could not
+    be installed — i.e. a restricted bubble that genuinely can't reach
+    the proxy, which the caller treats as a fail-closed error.
+
+    The probe distinguishes those cases: ``iptables`` exits 127 when the
+    binary is absent (unrestricted → True); otherwise we add and re-check
+    with ``-C`` (present → True, still-missing → False).
+    """
+    rule = f"OUTPUT -d {ip} -p tcp --dport {port} -j ACCEPT"
+    script = (
+        f"command -v iptables >/dev/null 2>&1 || exit 127\n"
+        f"iptables -C {rule} 2>/dev/null && exit 0\n"
+        f"iptables -A {rule} 2>/dev/null || true\n"
+        f"iptables -C {rule} 2>/dev/null"
+    )
+    try:
+        runtime.exec(container, ["bash", "-c", script])
+        return True  # rule present (exit 0)
+    except RuntimeError as e:
+        # exit 127 => no iptables (unrestricted egress); treat as fine.
+        return getattr(e, "returncode", None) == 127
+
+
+def _setup_gh_proxy_bridge(
     runtime: ContainerRuntime,
     container: str,
     token: str,
-    connect_addr: str,
+    host_ip: str,
+    port: int,
     machine_readable: bool,
     owner: str = "",
     repo: str = "",
 ):
-    """Set up gh CLI access via Unix socket proxy device.
+    """Configure ``gh`` to reach the bridge daemon via an in-container forwarder.
 
-    Adds a second Incus proxy device that exposes the auth proxy as a
-    Unix socket inside the container, and configures gh to use it via
-    GH_CONFIG_DIR and GH_TOKEN environment variables.
+    ``gh`` only speaks to a Unix socket (``http_unix_socket``), but the
+    daemon is a TCP listener on the bridge. We record the bridge endpoint
+    in ``/etc/bubble/gh/bridge`` and point gh's config at a user-owned
+    socket path; the gh wrapper (installed by the gh tool script) lazily
+    starts a ``socat`` unix→TCP forwarder to that endpoint on first use.
+    No incus device, no host-side socket — so no forkproxy.
     """
-    # Add Unix socket proxy device for gh
-    try:
-        runtime.add_device(
-            container,
-            "bubble-gh-proxy",
-            "proxy",
-            connect=connect_addr,
-            listen=f"unix:{_CONTAINER_GH_SOCKET}",
-            bind="container",
-            uid="1001",
-            gid="1001",
-            mode="0660",
-        )
-    except Exception as e:
-        if not machine_readable:
-            detail(f"Warning: failed to add gh proxy device: {e}")
-            detail("gh CLI will not have API access.")
-        return
-
-    # Configure GH_CONFIG_DIR and GH_TOKEN in the container via profile.d.
-    # GH_CONFIG_DIR points to /etc/bubble/gh/ (created by gh.sh tool script)
-    # GH_TOKEN is the per-container bubble proxy token — gh sends it as
-    # Authorization header, the proxy validates it and swaps in the real token.
-    # GH_REPO tells gh which repo to use, bypassing remote URL parsing.
-    payload = _gh_proxy_profile_payload(owner, repo)
+    # owner/repo are repo identifiers (no shell metacharacters); the
+    # endpoint is host:port. None of these are secret, so they may appear
+    # in argv. Only $TOKEN is read from stdin.
+    payload = _gh_proxy_profile_payload(owner, repo) + (
+        "\nmkdir -p /etc/bubble/gh"
+        f"\nprintf '%s' {shlex.quote(f'{host_ip}:{port}')} > /etc/bubble/gh/bridge"
+        "\ncat > /etc/bubble/gh/config.yml <<GHCONF\n"
+        'version: "1"\n'
+        f"http_unix_socket: {_CONTAINER_GH_SOCKET_BRIDGE}\n"
+        "GHCONF\n"
+        "chown -R 1001:1001 /etc/bubble/gh\n"
+    )
     try:
         runtime.exec(
             container,

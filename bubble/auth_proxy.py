@@ -28,8 +28,32 @@ Security model:
 - Per-container token isolation via X-Bubble-Token or Authorization header
 - Rate limited + logged (reuses relay patterns)
 
-On macOS (Colima): TCP listener, port saved to ~/.bubble/auth-proxy.port.
-On Linux: TCP listener on 127.0.0.1 (Incus proxy needs TCP for HTTP).
+The security boundary is incus container isolation plus the secrecy of
+the per-container token. The token is a bearer credential: it is
+256-bit random, scoped to a single owner/repo, validated on every
+request, and stored only in the issuing container's filesystem (mode
+0600). The bridge listener is reachable by any container on the bridge
+(required for git), but reachability is not access — only a valid token
+grants the scoped GitHub operations. There is intentionally no
+source-IP binding: it would only matter after a container-root
+compromise had *also* stolen another bubble's token (which requires
+breaking incus isolation), and enforcing it forced fragile,
+platform-specific kernel/network preconditions for negligible gain.
+
+Listeners:
+- On Linux: TCP on the incus bridge gateway IP (typically 10.156.104.1),
+  restricted to ``incusbr0`` via ``SO_BINDTODEVICE``. Containers reach
+  the daemon directly through the bridge so no per-bubble incus proxy
+  device is needed.
+- On macOS (Colima): TCP on the Colima bridge IP.
+
+``gh`` reaches this same TCP listener through a tiny unix→TCP forwarder
+that runs inside each container (see the gh tool wrapper) — gh wants a
+Unix socket, the forwarder gives it one locally and relays to the
+bridge. There is no host-side Unix socket and no incus ``proxy`` device.
+
+The listener endpoint is written to ``~/.bubble/auth-proxy.endpoint``
+(JSON). ``auth-proxy.port`` is also written for backwards compat.
 """
 
 import base64
@@ -37,6 +61,7 @@ import json
 import logging
 import os
 import re
+import socket
 import ssl
 import threading
 import time
@@ -56,6 +81,7 @@ from .token_store import RateLimiter as _RateLimiter
 from .token_store import RateWindow, TokenStore, setup_file_logging
 
 AUTH_PROXY_PORT_FILE = DATA_DIR / "auth-proxy.port"
+AUTH_PROXY_ENDPOINT_FILE = DATA_DIR / "auth-proxy.endpoint"
 AUTH_PROXY_LOG = DATA_DIR / "auth-proxy.log"
 AUTH_PROXY_TOKENS = DATA_DIR / "auth-tokens.json"
 
@@ -182,6 +208,12 @@ def generate_auth_token(
     The token maps to (container_name, owner, repo, rest_api, graphql_read,
     graphql_write) — the proxy uses this to validate requests and enforce
     the access policy.
+
+    The token is a 256-bit bearer credential: possession grants the
+    scoped access. It lives only in the issuing container's filesystem
+    (mode 0600); cross-container isolation is incus's job. There is no
+    source-IP binding — see the security notes in the module docstring.
+
     Uses file locking to prevent read-modify-write races.
     """
     return TokenStore(AUTH_PROXY_TOKENS).generate(
@@ -690,9 +722,10 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             self.send_header(header, value)
 
     def _authenticate(self) -> dict | None:
-        """Authenticate the request via X-Bubble-Token.
+        """Authenticate the request via its bearer token.
 
-        Returns the token info dict or None (sends error response).
+        Returns the token info dict or None (sends error response). The
+        token is the capability; possession grants the scoped access.
         """
         token = self._get_container_token()
         if not token:
@@ -1379,6 +1412,40 @@ class ThreadedHTTPServer(HTTPServer):
             self._handler_semaphore.release()
 
 
+class BridgeBoundHTTPServer(ThreadedHTTPServer):
+    """ThreadedHTTPServer that restricts the listening socket to one
+    network interface via ``SO_BINDTODEVICE``.
+
+    The kernel rejects packets arriving on any other interface, even if
+    they're addressed to the bind IP — so a misrouted packet from the
+    LAN side, docker0, etc. cannot reach this listener. We also verify
+    the option round-trips via ``getsockopt`` and fail closed if it
+    didn't take effect (older kernels, namespaces, etc.).
+    """
+
+    def __init__(self, server_address, RequestHandlerClass, *, bind_device: str):
+        self._bind_device = bind_device
+        super().__init__(server_address, RequestHandlerClass)
+
+    def server_bind(self):
+        if not hasattr(socket, "SO_BINDTODEVICE"):
+            raise RuntimeError(
+                "SO_BINDTODEVICE is unavailable on this platform; refusing to "
+                "bind a bridge-restricted listener."
+            )
+        device_bytes = self._bind_device.encode("ascii") + b"\x00"
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, device_bytes)
+        # Verify the option actually took effect — fail closed if not.
+        bound = self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, 16)
+        if not bound.startswith(self._bind_device.encode("ascii")):
+            raise RuntimeError(
+                f"SO_BINDTODEVICE did not bind to {self._bind_device!r}; "
+                f"getsockopt returned {bound!r}. Refusing to start."
+            )
+        # Now do the actual bind.
+        super().server_bind()
+
+
 # ---------------------------------------------------------------------------
 # Daemon
 # ---------------------------------------------------------------------------
@@ -1438,10 +1505,70 @@ def _get_github_token() -> str:
     return token
 
 
-def run_daemon(port: int = 0):
-    """Run the auth proxy daemon.
+def _resolve_tcp_bind() -> tuple[str, str | None]:
+    """Pick the TCP bind address for this platform.
 
-    Listens on TCP (both macOS and Linux — HTTP needs TCP).
+    Returns ``(bind_addr, bind_device)``. ``bind_device`` is the network
+    interface name to restrict via SO_BINDTODEVICE, or None if no
+    restriction applies (macOS).
+
+    Raises if no usable bridge address can be found. We deliberately do
+    NOT fall back to ``127.0.0.1``: containers can't reach the host's
+    loopback, so a loopback bind would produce a listener that bubbles
+    configure against but can never connect to. Failing here means the
+    daemon doesn't start, no endpoint file is written, and local auth
+    setup fails closed.
+    """
+    import platform
+
+    if platform.system() == "Darwin":
+        # On macOS, incus runs inside a Colima VM; bind to the VMNet
+        # bridge IP so the VM can reach us. No SO_BINDTODEVICE — macOS
+        # doesn't support it, and the VMNet IP is already only on the
+        # bridge interface.
+        from .runtime.colima import colima_bind_ip
+
+        addr = colima_bind_ip()
+        if addr.startswith("127."):
+            raise RuntimeError(
+                "Could not determine the Colima bridge IP (got loopback). "
+                "Is the bubble-colima VM running? Refusing to bind a "
+                "container-unreachable loopback address."
+            )
+        return addr, None
+
+    # Linux: bind to the incus bridge gateway IP and restrict the
+    # listener to incusbr0 so it's unreachable from any other interface.
+    from .incus_bridge import BRIDGE_INTERFACE, bridge_gateway_ipv4
+
+    return bridge_gateway_ipv4(), BRIDGE_INTERFACE
+
+
+def _write_endpoint_file(tcp_host: str, tcp_port: int):
+    """Persist the TCP listener endpoint for bubble's auth-setup code."""
+    payload = {
+        "tcp": {"host": tcp_host, "port": tcp_port},
+        "version": 3,
+    }
+    AUTH_PROXY_ENDPOINT_FILE.write_text(json.dumps(payload))
+    os.chmod(str(AUTH_PROXY_ENDPOINT_FILE), 0o600)
+    # Backwards-compat: keep auth-proxy.port readable as an int.
+    AUTH_PROXY_PORT_FILE.write_text(str(tcp_port))
+    os.chmod(str(AUTH_PROXY_PORT_FILE), 0o600)
+
+
+def run_daemon(port: int = 0):
+    """Run the auth proxy daemon: a single TCP listener.
+
+    Containers reach it directly over the incus bridge. git talks to it
+    via ``url.insteadOf``; gh talks to it via a small unix→TCP forwarder
+    that runs inside each container (see the gh tool wrapper) — so there
+    is no host-side Unix socket and no incus ``proxy`` device anywhere.
+
+    On Linux the listener is bound to the incus bridge gateway IP and
+    restricted to ``incusbr0`` via ``SO_BINDTODEVICE`` (verified
+    failure-closed via a ``getsockopt`` round-trip). On macOS it binds
+    the Colima bridge IP.
 
     Args:
         port: Port to listen on. 0 means use config or default.
@@ -1467,29 +1594,29 @@ def run_daemon(port: int = 0):
     AuthProxyHandler.rate_limiter = rate_limiter
     AuthProxyHandler.token_refresher = token_refresher
 
-    # On macOS, Incus runs inside a Colima VM.  Bind to the VMNet bridge
-    # IP (e.g. 192.168.64.1) so the VM can reach us without exposing the
-    # service to the wider LAN.  Falls back to 0.0.0.0 if no bridge found.
-    import platform
-
-    if platform.system() == "Darwin":
-        from .runtime.colima import colima_bind_ip
-
-        bind_addr = colima_bind_ip()
+    bind_addr, bind_device = _resolve_tcp_bind()
+    if bind_device:
+        tcp_server = BridgeBoundHTTPServer(
+            (bind_addr, port), AuthProxyHandler, bind_device=bind_device
+        )
     else:
-        bind_addr = "127.0.0.1"
-    server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
+        tcp_server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
 
-    AUTH_PROXY_PORT_FILE.write_text(str(port))
-    os.chmod(str(AUTH_PROXY_PORT_FILE), 0o600)
+    _write_endpoint_file(bind_addr, port)
 
-    logger.info("Auth proxy daemon started on %s:%d", bind_addr, port)
+    logger.info(
+        "Auth proxy daemon started: tcp=%s:%d (device=%s)",
+        bind_addr,
+        port,
+        bind_device or "(unrestricted)",
+    )
     print(f"Auth proxy listening on {bind_addr}:{port}")
 
     try:
-        server.serve_forever()
+        tcp_server.serve_forever()
     except KeyboardInterrupt:
         logger.info("Auth proxy daemon stopped")
     finally:
-        server.shutdown()
+        tcp_server.shutdown()
         AUTH_PROXY_PORT_FILE.unlink(missing_ok=True)
+        AUTH_PROXY_ENDPOINT_FILE.unlink(missing_ok=True)

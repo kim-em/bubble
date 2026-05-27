@@ -72,8 +72,12 @@ def test_setup_auth_proxy_local_does_not_leak_token(
     import bubble.github_token as gt
     import bubble.runtime.incus as incus_mod
 
-    monkeypatch.setattr(gt, "_ensure_auth_proxy_running", lambda: 7654)
-    monkeypatch.setattr(gt, "_wait_for_proxy_device", lambda *a, **kw: None)
+    endpoint = {
+        "tcp": {"host": "10.156.104.1", "port": 7654},
+        "unix_socket": "/home/kim/.bubble/proxy-sockets/gh.sock",
+        "version": 2,
+    }
+    monkeypatch.setattr(gt, "_ensure_auth_proxy_endpoint", lambda: endpoint)
     monkeypatch.setattr("bubble.auth_proxy.generate_auth_token", lambda *a, **kw: SENSITIVE_TOKEN)
 
     runtime = incus_mod.IncusRuntime()

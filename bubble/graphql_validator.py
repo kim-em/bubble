@@ -91,8 +91,13 @@ ALLOWED_REPO_FIELDS: set[str] = {
     "releases",
     # Scalar fields used by gh repo view (RepositoryInfo)
     "name",
+    "nameWithOwner",
     "owner",
     "description",
+    "sshUrl",
+    "isEmpty",
+    "pushedAt",
+    "diskUsage",
     "url",
     "defaultBranchRef",
     "hasIssuesEnabled",
