@@ -17,6 +17,7 @@ def test_available_tools():
     tools = available_tools()
     assert "claude" in tools
     assert "codex" in tools
+    assert "pi" in tools
     assert "elan" in tools
     assert "gh" in tools
     assert "vscode" in tools
@@ -34,7 +35,7 @@ def test_resolve_tools_yes():
 
 def test_resolve_tools_no():
     config = {
-        "tools": {"claude": "no", "codex": "no", "elan": "no", "gh": "no"},
+        "tools": {"claude": "no", "codex": "no", "pi": "no", "elan": "no", "gh": "no"},
         "editor": "shell",
     }
     enabled = resolve_tools(config)
@@ -132,6 +133,11 @@ def test_tool_runtime_domains_combined():
     assert "api.openai.com" in domains
 
 
+def test_tool_runtime_domains_pi():
+    # The pi agent talks to OpenRouter, so openrouter.ai must be allowlisted.
+    assert "openrouter.ai" in tool_runtime_domains(["pi"])
+
+
 def test_tool_runtime_domains_no_duplicates():
     domains = tool_runtime_domains(["claude", "codex"])
     # Each domain should appear exactly once
@@ -164,6 +170,7 @@ def test_load_pins():
     assert "NODE_SHA256_ARM64" in pins
     assert "CLAUDE_CODE_VERSION" in pins
     assert "CODEX_VERSION" in pins
+    assert "PI_VERSION" in pins
 
 
 def test_pins_are_nonempty():
@@ -190,6 +197,9 @@ def test_tool_script_uses_pinned_npm_versions():
 
     script = tool_script("codex")
     assert "@openai/codex@${CODEX_VERSION}" in script
+
+    script = tool_script("pi")
+    assert "@mariozechner/pi-coding-agent@${PI_VERSION}" in script
 
 
 def test_tool_script_verifies_node_checksum():

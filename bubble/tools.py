@@ -41,6 +41,15 @@ TOOLS = {
         ],
         "priority": 50,
     },
+    "pi": {
+        # Pi coding agent (badlogic/pi-mono): an agentic loop over arbitrary
+        # models, typically via OpenRouter — so its runtime egress is openrouter.ai.
+        "script": "pi.sh",
+        "host_cmd": "pi",
+        "network_domains": ["registry.npmjs.org", "nodejs.org"],
+        "runtime_domains": ["openrouter.ai"],
+        "priority": 50,
+    },
     "elan": {
         "script": "elan.sh",
         "host_cmd": "elan",
@@ -276,6 +285,14 @@ def fetch_latest_pins() -> dict:
     )
     pins["CODEX_VERSION"] = data["version"]
 
+    # Pi coding agent: latest npm version
+    data = json.loads(
+        urllib.request.urlopen(
+            "https://registry.npmjs.org/@mariozechner/pi-coding-agent/latest"
+        ).read()
+    )
+    pins["PI_VERSION"] = data["version"]
+
     # Validate that all required keys were found
     required = {
         "NODE_VERSION",
@@ -283,6 +300,7 @@ def fetch_latest_pins() -> dict:
         "NODE_SHA256_ARM64",
         "CLAUDE_CODE_VERSION",
         "CODEX_VERSION",
+        "PI_VERSION",
     }
     missing = required - set(pins.keys())
     if missing:
