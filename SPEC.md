@@ -677,6 +677,7 @@ Each tool has:
 | `elan` | 10 | `elan` | — |
 | `claude` | 50 | `claude` | `api.anthropic.com` |
 | `codex` | 50 | `codex` | `api.openai.com` |
+| `pi` | 50 | `pi` | `openrouter.ai` |
 | `gh` | 50 | `gh` | — |
 | `vscode` | 90 | `code` | VS Code marketplace domains |
 | `emacs` | 90 | `emacs` | — |
