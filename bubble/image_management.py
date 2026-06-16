@@ -82,7 +82,7 @@ def maybe_rebuild_tools(runtime: ContainerRuntime, notices=None):
 
     if notices:
         notices.begin()
-    step("Tools configuration changed, rebuilding base image...")
+    step("Base image configuration changed, rebuilding base image...")
     build_image(runtime, "base", force=True, still_needed=_tools_still_stale, quiet=True)
 
 

@@ -209,6 +209,30 @@ def test_tool_script_verifies_node_checksum():
     assert "nodejs.org/dist" in script
 
 
+def test_tools_hash_changes_with_base_script(tmp_path, monkeypatch):
+    """Verify that changing the base image script changes the tools hash.
+
+    base.sh content is not otherwise tracked for drift, so folding it into
+    tools_hash ensures edits (e.g. adding a system package) reach existing
+    users via the synchronous tools rebuild path.
+    """
+    h1 = tools_hash(["claude"])
+
+    fake_base = tmp_path / "base.sh"
+    fake_base.write_text("#!/bin/bash\n# different content\n")
+    monkeypatch.setattr("bubble.tools.BASE_SCRIPT", fake_base)
+    h2 = tools_hash(["claude"])
+    assert h1 != h2
+
+
+def test_base_image_installs_jq():
+    """jq must ship in the base image so in-container scripts can parse JSON."""
+    from bubble.tools import BASE_SCRIPT
+
+    contents = BASE_SCRIPT.read_text()
+    assert "jq" in contents.split("apt-get install", 1)[1].split("\n\n", 1)[0]
+
+
 def test_tools_hash_changes_with_pins(tmp_path, monkeypatch):
     """Verify that changing pins changes the tools hash."""
     h1 = tools_hash(["claude"])
@@ -492,6 +516,70 @@ def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, t
     deleted_names = {c[1] for c in delete_calls}
     # Dynamic toolchain images should also be purged
     assert "lean-v4-16-0" in deleted_names
+
+
+def test_maybe_rebuild_tools_triggers_on_stale_hash(mock_runtime, monkeypatch, tmp_data_dir):
+    """A stale tools-hash (e.g. base.sh changed on upgrade) forces a base rebuild.
+
+    This is the path by which existing users with an already-built base image
+    pick up base.sh changes like the newly-added jq package.
+    """
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+
+    from bubble.config import load_config, save_config
+
+    config = load_config()
+    config["editor"] = "shell"
+    save_config(config)
+
+    from bubble.images.builder import TOOLS_HASH_FILE
+
+    TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TOOLS_HASH_FILE.write_text("stale-hash\n")
+
+    calls = []
+    monkeypatch.setattr(
+        "bubble.images.builder.build_image",
+        lambda runtime, name, **kw: calls.append((name, kw)),
+    )
+
+    from bubble.image_management import maybe_rebuild_tools
+
+    maybe_rebuild_tools(mock_runtime)
+
+    assert calls, "expected a base rebuild to be triggered"
+    name, kw = calls[0]
+    assert name == "base"
+    assert kw.get("force") is True
+
+
+def test_maybe_rebuild_tools_noop_when_hash_matches(mock_runtime, monkeypatch, tmp_data_dir):
+    """No rebuild when the stored tools-hash already matches the current one."""
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+
+    from bubble.config import load_config, save_config
+
+    config = load_config()
+    config["editor"] = "shell"
+    save_config(config)
+
+    from bubble.images.builder import TOOLS_HASH_FILE
+    from bubble.tools import resolve_tools, tools_hash
+
+    TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TOOLS_HASH_FILE.write_text(tools_hash(resolve_tools(config)) + "\n")
+
+    calls = []
+    monkeypatch.setattr(
+        "bubble.images.builder.build_image",
+        lambda runtime, name, **kw: calls.append((name, kw)),
+    )
+
+    from bubble.image_management import maybe_rebuild_tools
+
+    maybe_rebuild_tools(mock_runtime)
+
+    assert calls == []
 
 
 def test_collect_derived_images_recursive():

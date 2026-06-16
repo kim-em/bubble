@@ -39,7 +39,7 @@ bubble/
 ├── images/
 │   ├── builder.py      # Image build via IMAGES registry dict (recursive parent building)
 │   └── scripts/
-│       ├── base.sh     # Ubuntu 24.04 + git + ssh + build-essential (user: "user")
+│       ├── base.sh     # Ubuntu 24.04 + git + curl + jq + ssh + build-essential (user: "user")
 │       ├── lean.sh     # Fallback elan install (skipped if elan tool already installed)
 │       ├── lean-toolchain.sh  # Installs one specific Lean toolchain (for versioned images)
 │       └── tools/      # Per-tool install scripts (claude.sh, codex.sh, elan.sh, emacs.sh, neovim.sh, vscode.sh)
