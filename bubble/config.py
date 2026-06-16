@@ -20,6 +20,15 @@ import tomli_w
 # Override with BUBBLE_HOME environment variable
 DATA_DIR = Path(os.environ.get("BUBBLE_HOME", Path.home() / ".bubble"))
 CONFIG_FILE = DATA_DIR / "config.toml"
+
+# The auth-proxy daemon is a host singleton, installed via launchd/systemd
+# with no BUBBLE_HOME in its environment, so it always runs against the
+# default ~/.bubble and writes its endpoint/port/token/log files there.
+# Callers (e.g. `bubble open`) may run under a custom BUBBLE_HOME, but must
+# resolve those daemon files against the daemon's fixed location rather than
+# their own DATA_DIR — otherwise they look for an endpoint the daemon never
+# wrote and write tokens the daemon never reads. See issue #304.
+AUTH_PROXY_DIR = Path.home() / ".bubble"
 REGISTRY_FILE = DATA_DIR / "registry.json"
 GIT_DIR = DATA_DIR / "git"
 REPOS_FILE = DATA_DIR / "repos.json"

@@ -156,7 +156,15 @@ def tmp_data_dir(tmp_path, monkeypatch):
     try:
         import bubble.auth_proxy as auth_proxy_mod
 
+        # These files are pinned to the fixed singleton ~/.bubble
+        # (AUTH_PROXY_DIR), not DATA_DIR, so they don't follow BUBBLE_HOME
+        # (issue #304). Patch all four explicitly to keep tests off the
+        # real ~/.bubble.
         monkeypatch.setattr(auth_proxy_mod, "AUTH_PROXY_PORT_FILE", data_dir / "auth-proxy.port")
+        monkeypatch.setattr(
+            auth_proxy_mod, "AUTH_PROXY_ENDPOINT_FILE", data_dir / "auth-proxy.endpoint"
+        )
+        monkeypatch.setattr(auth_proxy_mod, "AUTH_PROXY_LOG", data_dir / "auth-proxy.log")
         monkeypatch.setattr(auth_proxy_mod, "AUTH_PROXY_TOKENS", data_dir / "auth-tokens.json")
     except ImportError:
         pass
