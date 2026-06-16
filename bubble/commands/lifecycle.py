@@ -94,13 +94,9 @@ def _cleanup_cache_copies(name: str):
     ``~/.bubble/shared-cache-copies/<name>/``. No-op when the directory is
     absent (Linux hosts, or non-overlay bubbles).
     """
-    import shutil
+    from ..provisioning import remove_cache_copies
 
-    from ..provisioning import cache_copies_dir
-
-    copies = cache_copies_dir(name)
-    if copies.exists():
-        shutil.rmtree(copies, ignore_errors=True)
+    remove_cache_copies(name)
 
 
 def _cleanup_tokens(name: str, remote_host_spec: str = ""):

@@ -1247,6 +1247,11 @@ def _open_single(
             runtime.delete(name, force=True)
         except Exception:
             pass
+        # Drop any per-bubble shared-cache copy seeded before the failure
+        # (macOS overlay path) so it isn't orphaned on host disk.
+        from .provisioning import remove_cache_copies
+
+        remove_cache_copies(name)
         raise
 
 

@@ -1886,3 +1886,22 @@ class TestSharedCacheOverlay:
 
         # Should not raise even though nothing was seeded.
         _cleanup_cache_copies("never-seeded")
+
+    def test_cache_copies_dir_rejects_path_traversal(self, tmp_data_dir):
+        """A custom name with separators/.. can't escape the cache-copies base."""
+        import pytest
+
+        from bubble.provisioning import cache_copies_dir
+
+        # Names that resolve outside the base must be rejected. (A name like
+        # "a/b" stays under the base and is harmless, so it is not listed here.)
+        for evil in ("../escape", "../../etc", "..", "foo/../../bar"):
+            with pytest.raises(ValueError, match="Unsafe container name"):
+                cache_copies_dir(evil)
+
+    def test_remove_cache_copies_ignores_unsafe_name(self, tmp_data_dir):
+        """remove_cache_copies swallows unsafe names rather than deleting outside base."""
+        from bubble.provisioning import remove_cache_copies
+
+        # Must not raise and must not touch anything outside the base.
+        remove_cache_copies("../escape")

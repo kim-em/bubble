@@ -17,8 +17,39 @@ def cache_copies_dir(container_name: str) -> Path:
 
     Used by the macOS/Colima seeded-copy path (see :func:`seed_cache_copy`) and
     cleaned up on ``bubble pop``.
+
+    Custom bubble names (``--name``) reach here unsanitized, and this directory
+    feeds a ``shutil.rmtree`` on pop, so assert the resolved path stays under the
+    base — a name containing ``/`` or ``..`` must not let a delete escape.
     """
-    return DATA_DIR / "shared-cache-copies" / container_name
+    base = (DATA_DIR / "shared-cache-copies").resolve()
+    target = (base / container_name).resolve()
+    if target != base and base not in target.parents:
+        raise ValueError(f"Unsafe container name for cache copies: {container_name!r}")
+    return target
+
+
+def remove_cache_copies(container_name: str) -> None:
+    """Best-effort removal of a bubble's seeded shared-cache copies.
+
+    No-op when the directory is absent (Linux hosts, non-overlay bubbles, or
+    bubbles opened before this existed). Pop must stay robust, so a failed
+    delete warns rather than aborting — an orphaned copy is recoverable disk
+    space, not a correctness problem.
+    """
+    try:
+        copies = cache_copies_dir(container_name)
+    except ValueError:
+        return
+    if not copies.exists():
+        return
+    try:
+        shutil.rmtree(copies)
+    except OSError as e:
+        click.echo(
+            f"Warning: could not remove cache copies at {copies}: {e}",
+            err=True,
+        )
 
 
 def mount_overlaps(target: Path, user_targets: set[Path]) -> bool:
