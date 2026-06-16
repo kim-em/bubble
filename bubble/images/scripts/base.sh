@@ -8,7 +8,7 @@ echo "BUBBLE_PROGRESS: Installing system packages..."
 apt-get update -qq
 apt-get install -y -qq \
     git curl build-essential cmake openssh-server \
-    ca-certificates netcat-openbsd iptables < /dev/null
+    ca-certificates netcat-openbsd iptables jq < /dev/null
 
 # Create user (no sudo, no password)
 echo "BUBBLE_PROGRESS: Creating user account..."

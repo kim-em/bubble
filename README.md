@@ -161,7 +161,7 @@ Images are built automatically on first use. Any enabled [tools](#tools) are ins
 
 | Image | Contents |
 |-------|----------|
-| `base` | Ubuntu 24.04, git, openssh-server, build-essential, plus configured tools |
+| `base` | Ubuntu 24.04, git, curl, jq, openssh-server, build-essential, plus configured tools |
 | `lean` | base + leantar (+ elan fallback if not installed as a tool) |
 | `python` | base + uv, ruff |
 | `lean-v4.X.Y` | lean + specific toolchain pre-installed (built lazily on demand) |

@@ -13,6 +13,7 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent / "images" / "scripts" / "tools"
 PINS_FILE = SCRIPTS_DIR / "pins.json"
+BASE_SCRIPT = SCRIPTS_DIR.parent / "base.sh"
 
 # Registry of available tools.
 # Each entry maps a tool name to:
@@ -186,13 +187,21 @@ def resolve_tools(config: dict) -> list[str]:
 def tools_hash(enabled_tools: list[str]) -> str:
     """Compute a stable hash of the enabled tool set, their scripts, and pins.
 
-    Includes tool names, script contents, and pinned versions so that changes
-    to install scripts or version pins trigger rebuilds.
+    Includes tool names, script contents, pinned versions, and the base image
+    script so that changes to install scripts, version pins, or the base image
+    setup (e.g. adding a system package) trigger rebuilds. The base image
+    script is folded in here because base.sh content is not otherwise tracked
+    for drift, so edits to it would not reach existing users without a manual
+    rebuild.
     """
     h = hashlib.sha256()
     # Include pins so version bumps trigger rebuilds
     pins = load_pins()
     h.update(json.dumps(pins, sort_keys=True).encode())
+    h.update(b"\x00")
+    # Include the base image script so base.sh edits trigger a rebuild
+    if BASE_SCRIPT.exists():
+        h.update(BASE_SCRIPT.read_bytes())
     h.update(b"\x00")
     for name in _sort_by_priority(enabled_tools):
         h.update(name.encode())
