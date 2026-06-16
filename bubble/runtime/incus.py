@@ -199,17 +199,25 @@ class IncusRuntime(ContainerRuntime):
     def _get_info(self, name: str) -> ContainerInfo:
         """Get info for a single container.
 
-        Filters the full listing in Python rather than passing
-        ``<remote>:<name>`` as an incus list filter: on recent incus
-        versions ``incus list <remote>:<name>`` returns nothing (the
-        ``remote:name`` form isn't treated as a name filter), whereas
-        ``incus list <remote>:`` reliably scopes to the remote. This is
-        the same workaround the no-name path in ``list_containers``
-        already relies on.
+        Passes the remote scope and the name filter as *separate*
+        arguments (``incus list <remote>: name=<name>``). Concatenating
+        them into one token (``incus list <remote>:<name>``) breaks on
+        recent incus versions: a ``list`` argument that doesn't end in
+        ``:`` is treated as a name filter on the *default* remote, so it
+        matches nothing on a non-default remote (e.g. ``bubble-colima``
+        on macOS). The bare ``<remote>:`` token reliably scopes the list
+        to the remote, the same way the no-name path in
+        ``list_containers`` already relies on.
+
+        ``name=<name>`` is matched as a substring on some incus versions,
+        so we still confirm an exact name match before returning.
         """
-        for info in self.list_containers(fast=False):
-            if info.name == name:
-                return info
+        scope = [self._q("")] if self._remote else []
+        data = self._run_json(["list", *scope, f"name={name}"])
+        if isinstance(data, list):
+            for c in data:
+                if c.get("name") == name:
+                    return self._parse_container(c)
         raise RuntimeError(f"Container '{name}' not found")
 
     def list_containers(self, fast: bool = True) -> list[ContainerInfo]:
