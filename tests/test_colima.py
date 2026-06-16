@@ -121,7 +121,7 @@ class TestEnsureIncusRemote:
         from bubble.runtime import colima as colima_mod
 
         bogus_remotes = {
-            colima_mod.BUBBLE_INCUS_REMOTE: {"Addr": "unix:///somewhere/else.sock"},
+            colima_mod.BUBBLE_INCUS_REMOTE: {"Addrs": ["unix:///somewhere/else.sock"]},
         }
         fake = _FakeRun(
             {
@@ -139,12 +139,36 @@ class TestEnsureIncusRemote:
         err = capsys.readouterr().err
         assert "Refusing to overwrite" in err
 
+    def test_noop_when_alias_points_at_us_via_scalar_addr(self, fake_socket, monkeypatch):
+        from bubble.runtime import colima as colima_mod
+
+        # Accept a legacy/scalar `Addr` as a fallback for the `Addrs` list.
+        expected_addr = f"unix://{fake_socket}"
+        good_remotes = {
+            colima_mod.BUBBLE_INCUS_REMOTE: {"Addr": expected_addr},
+        }
+        fake = _FakeRun(
+            {
+                ("incus", "remote", "list"): _completed(stdout=json.dumps(good_remotes)),
+            }
+        )
+        monkeypatch.setattr(colima_mod.subprocess, "run", fake)
+        colima_mod._ensure_incus_remote()
+
+        cmds = [tuple(c[:3]) for c in fake.calls]
+        assert ("incus", "remote", "add") not in cmds
+        assert ("incus", "remote", "switch") not in cmds
+
     def test_noop_when_alias_already_points_at_us(self, fake_socket, monkeypatch):
         from bubble.runtime import colima as colima_mod
 
         expected_addr = f"unix://{fake_socket}"
         good_remotes = {
-            colima_mod.BUBBLE_INCUS_REMOTE: {"Addr": expected_addr},
+            colima_mod.BUBBLE_INCUS_REMOTE: {
+                "Addrs": [expected_addr],
+                "LastWorkingAddr": "http://unix.socket",
+                "AuthType": "tls",
+            },
         }
         fake = _FakeRun(
             {
