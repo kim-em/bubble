@@ -153,7 +153,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 - **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
 - **Bubble-in-bubble relay**: Containers can open new bubbles on the host, but only for repos already cloned in `~/.bubble/git/`. Disable with `bubble security set relay off`
 - **GitHub auth proxy**: Host token never enters containers. Git and REST API are repo-scoped. **GraphQL queries are read-only but account-wide** — can read any data the host token can access. API access can be set to `off`, `on` (read-only, the default), or `read-write` (enables mutations) via `bubble security set github-api`
-- **Shared mathlib cache**: The mathlib cache at `~/.bubble/mathlib-cache/` is shared across Lean containers. Modes: `on` (default) = read-write (a compromised container could poison cached artifacts), `off` = read-only (prevents poisoning), `overlay` = read-only with per-container writable overlay. This cache is *not* shared with `lake exe cache` run outside a bubble. Configure with `bubble security set shared-cache`. If you suspect poisoning, delete `~/.bubble/mathlib-cache/`.
+- **Shared mathlib cache**: The mathlib cache at `~/.bubble/mathlib-cache/` is shared across Lean containers. Modes: `on` (default) = read-write (a compromised container could poison cached artifacts), `off` = read-only (prevents poisoning), `overlay` = per-container writable view with isolated writes (overlayfs on Linux; a clonefile-seeded writable copy on macOS/Colima, where overlayfs can't run over virtiofs). This cache is *not* shared with `lake exe cache` run outside a bubble. Configure with `bubble security set shared-cache`. If you suspect poisoning, delete `~/.bubble/mathlib-cache/`.
 
 ## Images
 
