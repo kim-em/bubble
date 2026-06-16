@@ -206,11 +206,20 @@ def _ensure_incus_remote():
             remotes = {}
 
     if BUBBLE_INCUS_REMOTE in remotes:
-        existing_addr = remotes[BUBBLE_INCUS_REMOTE].get("Addr", "")
-        if existing_addr != expected_addr:
+        # `incus remote list --format=json` reports addresses under `Addrs`
+        # (a list). Older/other formats may use a scalar `Addr`, so accept
+        # both.
+        entry = remotes[BUBBLE_INCUS_REMOTE]
+        existing_addrs = entry.get("Addrs") or []
+        if isinstance(existing_addrs, str):
+            existing_addrs = [existing_addrs]
+        scalar_addr = entry.get("Addr")
+        if scalar_addr:
+            existing_addrs = [*existing_addrs, scalar_addr]
+        if expected_addr not in existing_addrs:
             print(
                 f"Refusing to overwrite incus remote '{BUBBLE_INCUS_REMOTE}': "
-                f"its address is {existing_addr!r}, expected {expected_addr!r}. "
+                f"its address is {existing_addrs!r}, expected {expected_addr!r}. "
                 f"Remove it (`incus remote remove {BUBBLE_INCUS_REMOTE}`) and "
                 "retry.",
                 file=sys.stderr,
