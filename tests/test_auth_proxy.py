@@ -25,6 +25,48 @@ from bubble.auth_proxy import (
 )
 
 # ---------------------------------------------------------------------------
+# Daemon file location (issue #304)
+# ---------------------------------------------------------------------------
+
+
+class TestDaemonFileLocation:
+    """The auth-proxy daemon is a host singleton pinned to ~/.bubble.
+
+    Its endpoint/port/token/log files must resolve against that fixed
+    location even when the caller runs under a custom BUBBLE_HOME, or the
+    caller looks for an endpoint the daemon never wrote and writes tokens
+    the daemon never reads (issue #304).
+    """
+
+    def test_files_ignore_bubble_home(self, tmp_path, monkeypatch):
+        import importlib
+        from pathlib import Path
+
+        import bubble.auth_proxy
+        import bubble.config
+
+        fixed = Path.home() / ".bubble"
+        try:
+            monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
+            importlib.reload(bubble.config)
+            importlib.reload(bubble.auth_proxy)
+
+            # DATA_DIR follows BUBBLE_HOME ...
+            assert bubble.config.DATA_DIR == tmp_path
+            # ... but the daemon's files stay at the fixed singleton location.
+            assert bubble.config.AUTH_PROXY_DIR == fixed
+            assert bubble.auth_proxy.AUTH_PROXY_ENDPOINT_FILE == fixed / "auth-proxy.endpoint"
+            assert bubble.auth_proxy.AUTH_PROXY_PORT_FILE == fixed / "auth-proxy.port"
+            assert bubble.auth_proxy.AUTH_PROXY_TOKENS == fixed / "auth-tokens.json"
+            assert bubble.auth_proxy.AUTH_PROXY_LOG == fixed / "auth-proxy.log"
+        finally:
+            # Restore default module state for subsequent tests.
+            monkeypatch.delenv("BUBBLE_HOME", raising=False)
+            importlib.reload(bubble.config)
+            importlib.reload(bubble.auth_proxy)
+
+
+# ---------------------------------------------------------------------------
 # Token management
 # ---------------------------------------------------------------------------
 
@@ -1669,7 +1711,14 @@ class TestApiProxyIntegration:
 
 @pytest.fixture
 def auth_proxy_env(tmp_path, monkeypatch):
-    """Set BUBBLE_HOME to tmp_path and reload auth_proxy module."""
+    """Isolate the auth_proxy daemon's files into tmp_path.
+
+    The daemon's endpoint/port/token/log files are pinned to the fixed
+    singleton location ~/.bubble (AUTH_PROXY_DIR), independent of
+    BUBBLE_HOME (see issue #304), so setting BUBBLE_HOME alone would leave
+    these tests writing the real ~/.bubble/auth-tokens.json. Monkeypatch
+    the module constants directly to keep the tests hermetic.
+    """
     import importlib
 
     import bubble.auth_proxy
@@ -1678,4 +1727,10 @@ def auth_proxy_env(tmp_path, monkeypatch):
     monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
     importlib.reload(bubble.config)
     importlib.reload(bubble.auth_proxy)
+    monkeypatch.setattr(bubble.auth_proxy, "AUTH_PROXY_PORT_FILE", tmp_path / "auth-proxy.port")
+    monkeypatch.setattr(
+        bubble.auth_proxy, "AUTH_PROXY_ENDPOINT_FILE", tmp_path / "auth-proxy.endpoint"
+    )
+    monkeypatch.setattr(bubble.auth_proxy, "AUTH_PROXY_LOG", tmp_path / "auth-proxy.log")
+    monkeypatch.setattr(bubble.auth_proxy, "AUTH_PROXY_TOKENS", tmp_path / "auth-tokens.json")
     return tmp_path

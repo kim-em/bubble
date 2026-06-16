@@ -76,14 +76,18 @@ from urllib.request import (
     build_opener,
 )
 
-from .config import DATA_DIR
+from .config import AUTH_PROXY_DIR
 from .token_store import RateLimiter as _RateLimiter
 from .token_store import RateWindow, TokenStore, setup_file_logging
 
-AUTH_PROXY_PORT_FILE = DATA_DIR / "auth-proxy.port"
-AUTH_PROXY_ENDPOINT_FILE = DATA_DIR / "auth-proxy.endpoint"
-AUTH_PROXY_LOG = DATA_DIR / "auth-proxy.log"
-AUTH_PROXY_TOKENS = DATA_DIR / "auth-tokens.json"
+# The daemon is a host singleton that always uses ~/.bubble (see
+# AUTH_PROXY_DIR in config.py). Both the daemon and callers running under a
+# custom BUBBLE_HOME must resolve these files against that fixed location so
+# they agree on where the endpoint and per-container tokens live.
+AUTH_PROXY_PORT_FILE = AUTH_PROXY_DIR / "auth-proxy.port"
+AUTH_PROXY_ENDPOINT_FILE = AUTH_PROXY_DIR / "auth-proxy.endpoint"
+AUTH_PROXY_LOG = AUTH_PROXY_DIR / "auth-proxy.log"
+AUTH_PROXY_TOKENS = AUTH_PROXY_DIR / "auth-tokens.json"
 
 # Default port (configurable via config.toml)
 DEFAULT_PORT = 7654
@@ -1574,7 +1578,7 @@ def run_daemon(port: int = 0):
         port: Port to listen on. 0 means use config or default.
     """
     _setup_logging()
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    AUTH_PROXY_DIR.mkdir(parents=True, exist_ok=True)
 
     if not port:
         from .config import load_config
