@@ -156,6 +156,108 @@ def test_build_lean_toolchain_lock(mock_runtime, monkeypatch, tmp_data_dir):
     assert len(launch_calls) == 0
 
 
+def test_toolchain_build_rebuilds_missing_lean_base_under_base_lock(
+    mock_runtime, monkeypatch, tmp_data_dir
+):
+    """Regression for issue #314.
+
+    When a base rebuild has purged the ``lean`` image, building a toolchain
+    image must (a) rebuild ``lean`` first, and (b) hold the ``base`` build lock
+    across the whole base->toolchain dependency so a concurrent base rebuild
+    can't delete ``lean`` between the rebuild and the launch-from-lean. We
+    assert the ``base`` lock is still held immediately after the ``lean``
+    rebuild — in the old code the lean rebuild ran outside the lock, leaving
+    ``base`` unlocked and lettable a concurrent rebuild purge ``lean``.
+    """
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
+
+    from bubble.config import load_config, save_config
+
+    config = load_config()
+    config["tools"] = {"claude": "no", "codex": "no"}
+    save_config(config)
+
+    from bubble.images import builder
+
+    # base exists, lean was just purged by a base rebuild
+    mock_runtime._images = {"base"}
+
+    observed = {}
+    real_build_image = builder.build_image
+
+    def wrapped_build_image(runtime, image_name, **kwargs):
+        result = real_build_image(runtime, image_name, **kwargs)
+        if image_name == "lean":
+            # We're now in the window between rebuilding `lean` and launching
+            # the toolchain builder from it. The `base` lock must be held so a
+            # concurrent base rebuild can't purge `lean` here.
+            observed["base_locked_after_lean_rebuild"] = is_build_locked("base")
+        return result
+
+    monkeypatch.setattr("bubble.images.builder.build_image", wrapped_build_image)
+
+    # Fail loudly if the toolchain builder launches from a missing image —
+    # exactly the `Image "lean" not found` failure from the issue.
+    real_launch = mock_runtime.launch
+
+    def strict_launch(name, image, **kwargs):
+        if image not in mock_runtime._images:
+            raise RuntimeError(f'Image "{image}" not found')
+        return real_launch(name, image, **kwargs)
+
+    monkeypatch.setattr(mock_runtime, "launch", strict_launch)
+
+    build_lean_toolchain_image(mock_runtime, "v4.16.0")
+
+    assert mock_runtime.image_exists("lean")  # lean rebuilt first
+    assert mock_runtime.image_exists("lean-v4.16.0")  # toolchain built from it
+    assert observed.get("base_locked_after_lean_rebuild") is True
+
+
+def test_toolchain_build_builds_missing_base_and_lean_without_deadlock(
+    mock_runtime, monkeypatch, tmp_data_dir
+):
+    """When both `base` and `lean` are absent, building a toolchain image must
+    build base, then lean, then the toolchain — without self-deadlocking.
+
+    The lean rebuild runs while we hold a shared `base` lock; the recursive
+    build of the missing `base` must therefore happen *before* that shared lock
+    is taken, or build_image("base")'s exclusive lock would deadlock against our
+    shared one (flock is per-fd).
+    """
+    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
+    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
+    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
+
+    from bubble.config import load_config, save_config
+
+    config = load_config()
+    config["tools"] = {"claude": "no", "codex": "no"}
+    save_config(config)
+
+    # Nothing built yet — fresh setup.
+    mock_runtime._images = set()
+
+    # Run in a worker thread so a deadlock surfaces as a join timeout rather
+    # than hanging the whole test session.
+    done = threading.Event()
+
+    def build():
+        build_lean_toolchain_image(mock_runtime, "v4.16.0")
+        done.set()
+
+    t = threading.Thread(target=build, daemon=True)
+    t.start()
+    t.join(timeout=10)
+
+    assert done.is_set(), "build_lean_toolchain_image deadlocked"
+    assert mock_runtime.image_exists("base")
+    assert mock_runtime.image_exists("lean")
+    assert mock_runtime.image_exists("lean-v4.16.0")
+
+
 def test_shared_lock_blocks_exclusive():
     """A shared lock on an image should block an exclusive lock on that image."""
     order = []
