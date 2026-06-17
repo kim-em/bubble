@@ -1692,9 +1692,15 @@ class TestSharedCacheOverlay:
         assert shared_calls[0][4] == "/shared/mathlib-cache"  # path
         assert shared_calls[0][5] is True  # readonly=True
 
-    def test_shared_cache_overlay_mounts_readonly_at_staging(self, mock_runtime, tmp_data_dir):
+    def test_shared_cache_overlay_mounts_readonly_at_staging(
+        self, mock_runtime, tmp_data_dir, monkeypatch
+    ):
         """shared_cache=overlay mounts read-only at a staging path, not the final path."""
+        import bubble.provisioning as provisioning
         from bubble.provisioning import provision_container
+
+        # Force the Linux overlayfs path regardless of the host running the test.
+        monkeypatch.setattr(provisioning.platform, "system", lambda: "Linux")
 
         ref_path = tmp_data_dir / "repo.git"
         ref_path.mkdir()
@@ -1717,9 +1723,12 @@ class TestSharedCacheOverlay:
         assert shared_calls[0][4] == "/shared/mathlib-cache-ro"
         assert shared_calls[0][5] is True  # readonly=True
 
-    def test_shared_cache_overlay_sets_up_overlayfs(self, mock_runtime, tmp_data_dir):
+    def test_shared_cache_overlay_sets_up_overlayfs(self, mock_runtime, tmp_data_dir, monkeypatch):
         """shared_cache=overlay runs overlayfs mount command inside container."""
+        import bubble.provisioning as provisioning
         from bubble.provisioning import provision_container
+
+        monkeypatch.setattr(provisioning.platform, "system", lambda: "Linux")
 
         ref_path = tmp_data_dir / "repo.git"
         ref_path.mkdir()
@@ -1771,3 +1780,128 @@ class TestSharedCacheOverlay:
         env_cmd = " ".join(env_execs[0][2])
         assert "MATHLIB_CACHE_DIR" in env_cmd
         assert "/shared/mathlib-cache" in env_cmd
+
+    def test_shared_cache_overlay_macos_seeds_writable_copy(
+        self, mock_runtime, tmp_data_dir, monkeypatch
+    ):
+        """On macOS, overlay mode mounts a per-bubble writable copy, not overlayfs."""
+        import bubble.provisioning as provisioning
+        from bubble.provisioning import provision_container
+
+        monkeypatch.setattr(provisioning.platform, "system", lambda: "Darwin")
+
+        # Seed the shared cache with a file so we can confirm it's cloned.
+        shared = tmp_data_dir / "mathlib-cache"
+        shared.mkdir()
+        (shared / "seed.txt").write_text("cached olean")
+
+        ref_path = tmp_data_dir / "repo.git"
+        ref_path.mkdir()
+        config = {"security": {"shared_cache": "overlay"}}
+
+        provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            config,
+            hook=self._make_hook(),
+        )
+
+        # The cache is mounted read-write at the final path (no -ro staging).
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        shared_calls = [c for c in disk_calls if "shared-mathlib" in c[2]]
+        assert len(shared_calls) == 1
+        assert shared_calls[0][4] == "/shared/mathlib-cache"  # final path
+        assert shared_calls[0][5] is False  # read-write
+
+        # The mount source is a per-bubble copy, not the shared cache itself.
+        seed_source = Path(shared_calls[0][3])
+        assert seed_source != shared
+        expected = tmp_data_dir / "shared-cache-copies" / "test-container" / "mathlib-cache"
+        assert seed_source == expected
+        # And it was seeded from the shared cache contents.
+        assert (seed_source / "seed.txt").read_text() == "cached olean"
+        assert seed_source.stat().st_mode & 0o777 == 0o770
+
+        # No overlayfs mount is attempted on macOS.
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        overlay_execs = [c for c in exec_calls if "mount -t overlay" in " ".join(c[2])]
+        assert overlay_execs == []
+
+    def test_shared_cache_overlay_macos_replaces_stale_copy(
+        self, mock_runtime, tmp_data_dir, monkeypatch
+    ):
+        """A leftover copy from a crashed run is replaced, not nested into."""
+        import bubble.provisioning as provisioning
+        from bubble.provisioning import provision_container
+
+        monkeypatch.setattr(provisioning.platform, "system", lambda: "Darwin")
+
+        shared = tmp_data_dir / "mathlib-cache"
+        shared.mkdir()
+        (shared / "fresh.txt").write_text("new")
+
+        # Pre-existing stale copy with different contents.
+        stale = tmp_data_dir / "shared-cache-copies" / "test-container" / "mathlib-cache"
+        stale.mkdir(parents=True)
+        (stale / "stale.txt").write_text("old")
+
+        ref_path = tmp_data_dir / "repo.git"
+        ref_path.mkdir()
+        config = {"security": {"shared_cache": "overlay"}}
+
+        provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            config,
+            hook=self._make_hook(),
+        )
+
+        assert (stale / "fresh.txt").read_text() == "new"
+        assert not (stale / "stale.txt").exists()
+        # Not nested: no mathlib-cache/mathlib-cache directory.
+        assert not (stale / "mathlib-cache").exists()
+
+    def test_cleanup_cache_copies_removes_seed_dir(self, tmp_data_dir):
+        """destroy_bubble's cleanup removes a bubble's seeded cache copies."""
+        from bubble.commands.lifecycle import _cleanup_cache_copies
+        from bubble.provisioning import cache_copies_dir
+
+        copies = cache_copies_dir("test-container")
+        (copies / "mathlib-cache").mkdir(parents=True)
+        (copies / "mathlib-cache" / "x").write_text("data")
+        assert copies.exists()
+
+        _cleanup_cache_copies("test-container")
+        assert not copies.exists()
+
+    def test_cleanup_cache_copies_noop_when_absent(self, tmp_data_dir):
+        """Cleanup is a no-op when no seeded copies exist (Linux/non-overlay)."""
+        from bubble.commands.lifecycle import _cleanup_cache_copies
+
+        # Should not raise even though nothing was seeded.
+        _cleanup_cache_copies("never-seeded")
+
+    def test_cache_copies_dir_rejects_path_traversal(self, tmp_data_dir):
+        """A custom name with separators/.. can't escape the cache-copies base."""
+        import pytest
+
+        from bubble.provisioning import cache_copies_dir
+
+        # Names that resolve outside the base must be rejected. (A name like
+        # "a/b" stays under the base and is harmless, so it is not listed here.)
+        for evil in ("../escape", "../../etc", "..", "foo/../../bar"):
+            with pytest.raises(ValueError, match="Unsafe container name"):
+                cache_copies_dir(evil)
+
+    def test_remove_cache_copies_ignores_unsafe_name(self, tmp_data_dir):
+        """remove_cache_copies swallows unsafe names rather than deleting outside base."""
+        from bubble.provisioning import remove_cache_copies
+
+        # Must not raise and must not touch anything outside the base.
+        remove_cache_copies("../escape")

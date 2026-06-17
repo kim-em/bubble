@@ -2,12 +2,54 @@
 
 import platform
 import shlex
+import shutil
+import subprocess
 from pathlib import Path
 
 import click
 
 from .config import DATA_DIR
 from .security import SETTINGS, get_setting, is_enabled
+
+
+def cache_copies_dir(container_name: str) -> Path:
+    """Host directory holding a bubble's per-container shared-cache copies.
+
+    Used by the macOS/Colima seeded-copy path (see :func:`seed_cache_copy`) and
+    cleaned up on ``bubble pop``.
+
+    Custom bubble names (``--name``) reach here unsanitized, and this directory
+    feeds a ``shutil.rmtree`` on pop, so assert the resolved path stays under the
+    base — a name containing ``/`` or ``..`` must not let a delete escape.
+    """
+    base = (DATA_DIR / "shared-cache-copies").resolve()
+    target = (base / container_name).resolve()
+    if target != base and base not in target.parents:
+        raise ValueError(f"Unsafe container name for cache copies: {container_name!r}")
+    return target
+
+
+def remove_cache_copies(container_name: str) -> None:
+    """Best-effort removal of a bubble's seeded shared-cache copies.
+
+    No-op when the directory is absent (Linux hosts, non-overlay bubbles, or
+    bubbles opened before this existed). Pop must stay robust, so a failed
+    delete warns rather than aborting — an orphaned copy is recoverable disk
+    space, not a correctness problem.
+    """
+    try:
+        copies = cache_copies_dir(container_name)
+    except ValueError:
+        return
+    if not copies.exists():
+        return
+    try:
+        shutil.rmtree(copies)
+    except OSError as e:
+        click.echo(
+            f"Warning: could not remove cache copies at {copies}: {e}",
+            err=True,
+        )
 
 
 def mount_overlaps(target: Path, user_targets: set[Path]) -> bool:
@@ -61,6 +103,42 @@ def _setup_overlay(runtime, container: str, lower_path: str, mount_path: str):
             f" && chown user:user {q_upper}",
         ],
     )
+
+
+def seed_cache_copy(host_path: Path, container_name: str, host_dir_name: str) -> Path:
+    """Create a per-bubble writable copy of a shared cache, seeded from it.
+
+    Used on macOS/Colima, where the shared cache reaches the container over
+    virtiofs and overlayfs-over-virtiofs can't perform copy-up (issue #306) —
+    writes through the overlay fail with EACCES even though the mount is rw.
+    Instead we hand the container its own writable copy of the cache.
+
+    The copy is seeded with ``cp -c`` so APFS clonefile makes it cheap: it is
+    created instantly and shares storage with the shared cache until a file is
+    modified, preserving the speedup that overlay mode exists for. On a
+    filesystem without clone support we fall back to a plain recursive copy.
+    Writes stay isolated to this bubble and are dropped on ``bubble pop``.
+    """
+    seed_path = cache_copies_dir(container_name) / host_dir_name
+    # Start fresh in case a stale copy lingers from a crashed run; cp needs the
+    # destination to not exist so it clones host_path *as* seed_path.
+    if seed_path.exists():
+        shutil.rmtree(seed_path)
+    seed_path.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["cp", "-cR", str(host_path), str(seed_path)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        # Some cp builds reject -c on unsupported filesystems instead of
+        # falling back to a normal copy; retry without clonefile.
+        shutil.rmtree(seed_path, ignore_errors=True)
+        subprocess.run(["cp", "-R", str(host_path), str(seed_path)], check=True)
+    # Match the shared cache's group-writable mode so the UID-mapped container
+    # user can write to the copy.
+    seed_path.chmod(0o770)
+    return seed_path
 
 
 def provision_container(
@@ -136,7 +214,25 @@ def provision_container(
             host_path.mkdir(parents=True, exist_ok=True)
             # Make group-writable so container user can write with UID mapping
             host_path.chmod(0o770)
-            if use_overlay:
+            if use_overlay and platform.system() == "Darwin":
+                # macOS/Colima: overlayfs-over-virtiofs can't copy-up, so a
+                # real overlay is unwritable (issue #306). Give the container a
+                # per-bubble writable copy seeded (cheaply, via clonefile) from
+                # the shared cache instead — same read-from-cache + isolated-
+                # writes behaviour overlay mode promises.
+                from .output import detail
+
+                detail("Seeding per-bubble cache copy (overlay unavailable on macOS)...", nl=False)
+                seed_path = seed_cache_copy(host_path, name, host_dir_name)
+                click.echo(" done.")
+                runtime.add_disk(
+                    name,
+                    f"shared-{host_dir_name}",
+                    str(seed_path),
+                    container_path,
+                    readonly=False,
+                )
+            elif use_overlay:
                 # Mount shared cache read-only at a staging path; overlayfs
                 # will provide writable access at the expected container_path
                 lower_path = f"{container_path}-ro"

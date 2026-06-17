@@ -82,8 +82,21 @@ def destroy_bubble(name: str, info: dict | None = None, on_progress=None) -> tup
 
     remove_ssh_config(name)
     _cleanup_tokens(name)
+    _cleanup_cache_copies(name)
     unregister_bubble(name)
     return True, ""
+
+
+def _cleanup_cache_copies(name: str):
+    """Remove any per-bubble shared-cache copies seeded for this container.
+
+    These are created by the macOS/Colima overlay path (issue #306) under
+    ``~/.bubble/shared-cache-copies/<name>/``. No-op when the directory is
+    absent (Linux hosts, or non-overlay bubbles).
+    """
+    from ..provisioning import remove_cache_copies
+
+    remove_cache_copies(name)
 
 
 def _cleanup_tokens(name: str, remote_host_spec: str = ""):

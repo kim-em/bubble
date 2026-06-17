@@ -346,9 +346,12 @@ of the versioned image for next time.
 > Three modes are available via `bubble security set shared-cache`:
 > - `on` (default): shared read-write — fastest, but vulnerable to cache
 >   poisoning across containers
-> - `overlay`: shared cache mounted read-only with a per-container writable
->   overlayfs layer — fast reads from the shared cache with isolated writes
->   that don't affect other containers (recommended for security-conscious use)
+> - `overlay`: per-container writable view of the shared cache with isolated
+>   writes that don't affect other containers — fast reads with no cross-
+>   container poisoning (recommended for security-conscious use). On Linux this
+>   is an overlayfs mount (shared cache as lowerdir); on macOS/Colima, where
+>   overlayfs can't run over virtiofs, each bubble instead gets a writable copy
+>   seeded from the shared cache via APFS clonefile (cheap, copy-on-write).
 > - `off`: shared cache mounted read-only — prevents future poisoning
 >
 > If you suspect the cache has already been compromised, delete
