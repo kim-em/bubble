@@ -566,13 +566,10 @@ def build_lean_toolchain_image(
     if not LEAN_VERSION_RE.fullmatch(version):
         raise ValueError(f"Invalid Lean toolchain version: {version!r}")
 
-    # Ensure base lean image exists
-    if not runtime.image_exists(base_lean_image):
-        if base_lean_image in IMAGES:
-            build_image(runtime, base_lean_image)
-        elif not runtime.image_exists("lean"):
-            build_image(runtime, "lean")
-            base_lean_image = "lean"
+    # If the requested base lean image is unknown and absent, fall back to the
+    # plain `lean` image (which we know how to rebuild from scratch).
+    if base_lean_image not in IMAGES and not runtime.image_exists(base_lean_image):
+        base_lean_image = "lean"
 
     alias = f"lean-{version}"
     # Incus container names only allow alphanumeric + hyphens
@@ -583,10 +580,35 @@ def build_lean_toolchain_image(
     # (root-first to avoid deadlock), preventing any ancestor rebuild
     # from racing with this toolchain build.
     with ExitStack() as stack:
-        # Lock ancestors of the base lean image first (e.g. "base" for "lean")
         if base_lean_image in IMAGES:
-            for ancestor in _ancestor_chain(base_lean_image):
+            ancestors = _ancestor_chain(base_lean_image)
+            # Build any missing managed ancestors (e.g. "base") *before* taking
+            # their shared locks. build_image() acquires its own exclusive lock
+            # per image, so building an ancestor while we already hold its shared
+            # lock would self-deadlock (flock conflicts across fds, even within
+            # one process). After this, the shared-lock acquisitions below wait
+            # out any in-flight rebuild, leaving every ancestor present.
+            for ancestor in ancestors:
+                if not runtime.image_exists(ancestor):
+                    build_image(runtime, ancestor, quiet=True)
+            # Hold shared locks on the ancestors (root-first to avoid deadlock)
+            # for the rest of the build.
+            for ancestor in ancestors:
                 stack.enter_context(_build_lock(ancestor, shared=True))
+
+        # Ensure the base lean image itself exists, now that its ancestors are
+        # present and locked. Building it here, *while holding the ancestor
+        # locks*, closes the race in issue #314: a concurrent base rebuild purges
+        # `lean` right after rebuilding `base`, so if we built `lean` unlocked
+        # and then launched from it, the rebuild could delete `lean` in between
+        # and the launch would fail with `Image "lean" not found`. The ancestor
+        # locks block that rebuild until this toolchain build completes. The
+        # ancestors already exist, so build_image() won't recurse into them and
+        # only needs an exclusive lock on `base_lean_image` (which we don't yet
+        # hold) — no self-deadlock.
+        if base_lean_image in IMAGES and not runtime.image_exists(base_lean_image):
+            build_image(runtime, base_lean_image, quiet=True)
+
         # Then the base lean image itself
         stack.enter_context(_build_lock(base_lean_image, shared=True))
         stack.enter_context(_build_lock(safe_alias))
