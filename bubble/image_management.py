@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import sys
 
+import click
+
 from .config import load_config
 from .hooks import select_hook
 from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit, is_build_locked
@@ -128,8 +130,15 @@ def maybe_rebuild_customize(notices=None):
     )
 
 
-def detect_and_build_image(runtime, ref_path, t):
-    """Detect language hook and ensure image exists. Returns (hook, image_name)."""
+def detect_and_build_image(runtime, ref_path, t, restricted_network: bool = True):
+    """Detect language hook and ensure image exists. Returns (hook, image_name).
+
+    ``restricted_network`` is True when the container will run under the
+    network allowlist (the default). It governs the missing-toolchain-image
+    fallback: under the allowlist, elan cannot download a toolchain inside the
+    container, so a missing ``lean-vX.Y.Z`` image is built synchronously rather
+    than falling back to the plain ``lean`` image.
+    """
     if t.kind == "pr":
         hook_ref = f"refs/pull/{t.ref}/head"
     elif t.kind in ("branch", "commit"):
@@ -149,15 +158,42 @@ def detect_and_build_image(runtime, ref_path, t):
     is_toolchain_image = image_name.startswith("lean-v")
     if not runtime.image_exists(image_name):
         if is_toolchain_image:
-            # Toolchain-specific image doesn't exist yet — fall back to base lean
-            # and build the toolchain image in the background for next time.
             version = image_name[len("lean-") :]
-            detail(
-                f"Toolchain {version} image not cached, using lean image"
-                f" (building {image_name} in background for next time)"
-            )
-            pending_toolchain_build = version
-            image_name = "lean"
+            if restricted_network:
+                # Under the network allowlist, falling back to the plain `lean`
+                # image would force elan to download this toolchain inside the
+                # container, where the repo-scoped auth proxy blocks GitHub
+                # release assets and every lake/elan call hangs ~300s. Build the
+                # toolchain image now instead — image builds run with open
+                # network, so the toolchain is fetched and baked in here.
+                step(f"Building {image_name} image (one-time setup, may take a few minutes)...")
+                from .images.builder import build_lean_toolchain_image
+
+                try:
+                    build_lean_toolchain_image(runtime, version)
+                    detail(f"{image_name} image ready.")
+                except Exception as e:
+                    # Fail fast: falling back to the plain `lean` image here
+                    # would put us right back in the blocked-download hang this
+                    # build was meant to avoid. Surface an actionable error
+                    # instead.
+                    raise click.ClickException(
+                        f"Could not build the {image_name} toolchain image ({e}).\n"
+                        f"Without it, elan would try to download {version} inside"
+                        " the container, which the network allowlist blocks.\n"
+                        "Retry once the network recovers, or rerun with"
+                        " --no-network to allow the in-container download."
+                    ) from e
+            else:
+                # No network restriction — elan can download the toolchain in
+                # the container, so use the plain lean image immediately and
+                # build the toolchain image in the background for next time.
+                detail(
+                    f"Toolchain {version} image not cached, using lean image"
+                    f" (building {image_name} in background for next time)"
+                )
+                pending_toolchain_build = version
+                image_name = "lean"
         if not runtime.image_exists(image_name):
             step(f"Building {image_name} image (one-time setup, may take a few minutes)...")
             from .images.builder import build_image

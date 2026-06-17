@@ -38,6 +38,7 @@ from .git_store import (
     ensure_rev_available,
     fetch_ref,
     init_bare_repo,
+    refresh_mirror_ref,
 )
 from .image_management import (
     detect_and_build_image,
@@ -250,6 +251,11 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
                 fetch_ref(t.org_repo, f"refs/pull/{t.ref}/head:refs/pull/{t.ref}/head")
             except subprocess.CalledProcessError:
                 click.echo("  Warning: could not prefetch PR ref; continuing with normal clone.")
+        else:
+            # Refresh the branch / default-branch ref so language and toolchain
+            # detection reads the current commit rather than a stale mirror
+            # snapshot (which would otherwise pick the wrong toolchain image).
+            refresh_mirror_ref(t.org_repo, t.kind, t.ref)
 
     return ref_path, mount_name
 
@@ -1075,7 +1081,7 @@ def _open_single(
         notices.finish()
     ensure_dirs()
     ref_path, mount_name = _resolve_ref_source(t, no_clone)
-    hook, image_name = detect_and_build_image(runtime, ref_path, t)
+    hook, image_name = detect_and_build_image(runtime, ref_path, t, restricted_network=network)
 
     # Pre-fetch dependency bare repos for Lake pre-population
     dep_mounts = {}  # repo_name -> host_path
