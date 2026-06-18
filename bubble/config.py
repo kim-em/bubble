@@ -294,7 +294,25 @@ class SafeConfigDir:
         return any((self.base_dir / item).exists() for item in self.credential_items)
 
 
-CLAUDE_CONFIG_DIR = Path.home() / ".claude"
+def claude_config_dir() -> Path:
+    """Resolve Claude Code's host-side config directory.
+
+    Claude Code honors $CLAUDE_CONFIG_DIR for a non-default config location
+    (the standard way to keep separate personal/work logins), falling back to
+    ~/.claude. We mirror that here so the host-side mount source and skill
+    install location track the same directory Claude Code itself uses.
+
+    The path is taken verbatim (matching Claude Code, which does not expand a
+    quoted ~ or normalize the value); the common forms — an absolute path or a
+    shell-expanded unquoted ~ — already arrive resolved. The container side
+    stays /home/user/.claude, since in-container claude reads ~/.claude by
+    default ($CLAUDE_CONFIG_DIR is not set inside the container).
+    """
+    value = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(value) if value else Path.home() / ".claude"
+
+
+CLAUDE_CONFIG_DIR = claude_config_dir()
 
 CLAUDE_CONFIG = SafeConfigDir(
     base_dir=CLAUDE_CONFIG_DIR,
@@ -528,7 +546,7 @@ def maybe_symlink_ai_projects(config: dict | None = None, notices=None) -> None:
     if notices:
         notices.begin()
     click.echo(
-        "~/.claude/projects is git-tracked. AI sessions within bubbles are stored\n"
+        f"{claude_projects} is git-tracked. AI sessions within bubbles are stored\n"
         "in ~/.bubble/ai-projects. To link that directory into the git-tracked\n"
         "location (existing data is merged, not overwritten), run:\n"
         "\n"

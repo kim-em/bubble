@@ -363,6 +363,65 @@ class TestMountProvisioning:
         assert len(user_disk_calls) == 0
 
 
+class TestClaudeConfigDirEnvVar:
+    """Test that claude_config_dir() honors the $CLAUDE_CONFIG_DIR env var."""
+
+    def test_env_var_overrides_default(self, tmp_path, monkeypatch):
+        """When $CLAUDE_CONFIG_DIR is set, the host-side dir resolves from it."""
+        from bubble.config import claude_config_dir
+
+        work_dir = tmp_path / "work-claude"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(work_dir))
+        assert claude_config_dir() == work_dir
+
+    def test_falls_back_to_home_claude(self, monkeypatch):
+        """Without the env var, the dir falls back to ~/.claude."""
+        from bubble.config import claude_config_dir
+
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        assert claude_config_dir() == Path.home() / ".claude"
+
+    def test_empty_env_var_falls_back(self, monkeypatch):
+        """An empty $CLAUDE_CONFIG_DIR falls back to ~/.claude (not an empty path)."""
+        from bubble.config import claude_config_dir
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")
+        assert claude_config_dir() == Path.home() / ".claude"
+
+    def test_value_taken_verbatim(self, monkeypatch):
+        """The value is used verbatim (mirroring Claude Code; no ~ expansion)."""
+        from bubble.config import claude_config_dir
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/work-claude")
+        # Not expanded — Path keeps the literal leading "~" segment.
+        assert claude_config_dir() == Path("~/work-claude")
+
+    def test_mounts_use_env_dir_as_source(self, tmp_path, monkeypatch):
+        """claude_config_mounts() mounts files from the $CLAUDE_CONFIG_DIR dir.
+
+        This exercises the full path the issue is about: with the env var set,
+        credential and config seeding reads from the work directory, not
+        ~/.claude.
+        """
+        work_dir = tmp_path / "work-claude"
+        work_dir.mkdir()
+        (work_dir / "CLAUDE.md").write_text("# work")
+        (work_dir / ".credentials.json").write_text("{}")
+
+        # Point the live SafeConfigDir at the work dir, as the import-time
+        # resolution would when $CLAUDE_CONFIG_DIR is set.
+        monkeypatch.setattr("bubble.config.CLAUDE_CONFIG.base_dir", work_dir)
+
+        mounts = claude_config_mounts()
+        by_target = {m.target: m for m in mounts}
+        assert by_target["/home/user/.claude/.credentials.json"].source == str(
+            work_dir / ".credentials.json"
+        )
+        assert by_target["/home/user/.claude/CLAUDE.md"].source == str(work_dir / "CLAUDE.md")
+        # Container side is unchanged.
+        assert all(m.target.startswith("/home/user/.claude/") for m in mounts)
+
+
 class TestClaudeConfigMounts:
     """Test automatic ~/.claude config mounting."""
 

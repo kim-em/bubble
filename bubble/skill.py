@@ -2,11 +2,13 @@
 
 import difflib
 from importlib import resources
-from pathlib import Path
+
+from .config import claude_config_dir
 
 SKILL_NAME = "bubble"
 SKILL_FILENAME = "SKILL.md"
-CLAUDE_DIR = Path.home() / ".claude"
+# Honor $CLAUDE_CONFIG_DIR so the skill installs where Claude Code looks.
+CLAUDE_DIR = claude_config_dir()
 SKILLS_DIR = CLAUDE_DIR / "skills" / SKILL_NAME
 INSTALLED_SKILL = SKILLS_DIR / SKILL_FILENAME
 
@@ -18,7 +20,7 @@ def _bundled_skill_content() -> str:
 
 
 def claude_code_detected() -> bool:
-    """Check if Claude Code is set up (i.e. ~/.claude/ exists)."""
+    """Check if Claude Code is set up (i.e. its config dir exists)."""
     return CLAUDE_DIR.is_dir()
 
 
@@ -58,7 +60,7 @@ def diff_skill() -> str:
 def install_skill() -> str:
     """Install or update the skill file. Returns a status message."""
     if not claude_code_detected():
-        return "~/.claude/ not found — Claude Code not detected. Skipping skill install."
+        return f"{CLAUDE_DIR} not found — Claude Code not detected. Skipping skill install."
 
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     content = _bundled_skill_content()
