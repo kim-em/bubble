@@ -44,6 +44,15 @@ def test_bundled_skill_content():
     assert "name: bubble" in content
 
 
+def test_skill_dir_honors_claude_config_dir(tmp_path, monkeypatch):
+    """The skill install location resolves from $CLAUDE_CONFIG_DIR when set."""
+    from bubble.config import claude_config_dir
+
+    work_dir = tmp_path / "work-claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(work_dir))
+    assert claude_config_dir() == work_dir
+
+
 def test_claude_code_detected(tmp_claude_dir):
     assert skill.claude_code_detected() is True
 
