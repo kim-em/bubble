@@ -34,7 +34,43 @@ def _get_pr_metadata(owner: str, repo: str, pr_number: str) -> tuple[str, str, s
     return None
 
 
-def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
+def fetch_pr_metadata(t):
+    """Fetch ``(head_ref, head_repo, clone_url)`` for a PR target, or None.
+
+    Thin public wrapper around :func:`_get_pr_metadata` so callers can
+    fetch PR metadata once and reuse it (for fork detection before auth
+    setup and again for checkout) rather than querying GitHub twice.
+    """
+    if t.kind != "pr":
+        return None
+    return _get_pr_metadata(t.owner, t.repo, t.ref)
+
+
+def pr_fork_repo(t, pr_meta=None) -> str | None:
+    """Return the PR head repo ``owner/repo`` when it's a fork, else None.
+
+    For a PR target whose head lives in a fork (head repo != base repo),
+    returns that fork's ``owner/repo``. Used to auto-authorize git
+    fetch/push to the fork so the standard fork-PR workflow works inside a
+    bubble. Returns None for non-PR targets, same-repo PRs, or when the PR
+    metadata can't be fetched (e.g. gh unavailable).
+
+    ``pr_meta`` may be a previously-fetched ``(head_ref, head_repo,
+    clone_url)`` tuple to avoid re-querying GitHub.
+    """
+    if t.kind != "pr":
+        return None
+    if pr_meta is None:
+        pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
+    if not pr_meta:
+        return None
+    _head_ref, head_repo, _clone_url = pr_meta
+    if head_repo and head_repo.lower() != t.org_repo.lower():
+        return head_repo
+    return None
+
+
+def clone_and_checkout(runtime, name, t, mount_name, short, pr_meta=None) -> str:
     """Clone the repo and checkout the appropriate ref. Returns the checkout branch name."""
     url = github_url(t.org_repo)
     q_short = shlex.quote(short)
@@ -68,7 +104,8 @@ def clone_and_checkout(runtime, name, t, mount_name, short) -> str:
         checkout_branch = branch_name
     elif t.kind == "pr":
         step(f"Checking out PR #{t.ref}...")
-        pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
+        if pr_meta is None:
+            pr_meta = _get_pr_metadata(t.owner, t.repo, t.ref)
         pr_checkout_ok = False
         if pr_meta:
             head_ref, head_repo, clone_url = pr_meta

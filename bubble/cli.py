@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .clone import clone_and_checkout
+from .clone import clone_and_checkout, fetch_pr_metadata, pr_fork_repo
 from .config import (
     claude_config_mounts,
     codex_config_mounts,
@@ -310,6 +310,63 @@ def _resolve_ai_prompt_locally(target: str, new_branch: str | None = None) -> st
     return prompt
 
 
+def _resolve_push_repos(t, allow_push, pr_meta=None) -> list[str]:
+    """Resolve the set of fork repos the bubble may git fetch/push to.
+
+    Combines explicit ``--allow-push owner/repo`` flags with the head repo
+    of a fork-headed PR target (auto-detected). Returns a normalized,
+    de-duplicated list of lower-cased ``owner/repo`` strings. Malformed
+    ``--allow-push`` values are warned about and skipped.
+
+    ``--allow-push`` is an explicit, human-controlled grant: the named
+    repo gets git fetch+push (no REST/GraphQL). It is validated for shape
+    only, not verified to be a fork of the base — the launcher is trusted
+    to name the contributor's own throwaway fork. The auto-detected PR
+    fork, by contrast, is exactly the PR's head repo from the GitHub API.
+
+    ``pr_meta`` may be a previously-fetched PR metadata tuple to avoid
+    re-querying GitHub.
+    """
+    from .auth_proxy import normalize_push_repos
+
+    repos: list[str] = []
+    for raw in allow_push or ():
+        spec = (raw or "").strip()
+        parts = spec.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            click.echo(f"Warning: ignoring --allow-push '{raw}' (expected OWNER/REPO)", err=True)
+            continue
+        repos.append(spec)
+
+    if t is not None:
+        try:
+            fork = pr_fork_repo(t, pr_meta)
+        except Exception:
+            fork = None
+        if fork:
+            repos.append(fork)
+
+    return normalize_push_repos(repos)
+
+
+def _resolve_remote_push_repos(target, allow_push) -> list[str]:
+    """Resolve fork repos for a remote bubble, parsing the target locally.
+
+    The PR head repo is detected here (on the local machine, which has the
+    gh CLI) rather than on the remote, so the locally-issued proxy token
+    carries the fork scope.
+    """
+    t = None
+    try:
+        from .repo_registry import RepoRegistry
+        from .target import parse_target
+
+        t = parse_target(target, RepoRegistry())
+    except Exception:
+        t = None
+    return _resolve_push_repos(t, allow_push)
+
+
 def _open_remote(
     remote_host,
     target,
@@ -330,6 +387,7 @@ def _open_remote(
     base_ref=None,
     ephemeral=False,
     github_security=None,
+    allow_push=(),
 ):
     """Open a bubble on a remote host, then connect locally."""
     from .remote import remote_open
@@ -395,6 +453,7 @@ def _open_remote(
         if org_repo and "/" in org_repo:
             owner, repo = org_repo.split("/", 1)
         gh_enabled = "gh" in resolve_tools(config)
+        push_repos = _resolve_remote_push_repos(target, allow_push)
         auth_ok = setup_gh_token(
             None,
             name,
@@ -403,6 +462,7 @@ def _open_remote(
             remote_host=remote_host,
             gh_enabled=gh_enabled,
             config=config,
+            push_repos=push_repos,
         )
         if not auth_ok and network:
             click.echo(
@@ -630,6 +690,18 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
     ),
 )
 @click.option(
+    "--allow-push",
+    "allow_push",
+    type=str,
+    multiple=True,
+    metavar="OWNER/REPO",
+    help=(
+        "Allow git fetch/push to an additional fork repo (repeatable)."
+        " REST and GraphQL stay scoped to the base repo. A fork-headed PR"
+        " target adds its head repo automatically."
+    ),
+)
+@click.option(
     "--ai-prompt-stdin",
     is_flag=True,
     hidden=True,
@@ -669,6 +741,7 @@ def open_cmd(
     claude_config,
     codex_config,
     github_security,
+    allow_push,
     ai_prompt_stdin,
     skip_auth_setup,
 ):
@@ -733,6 +806,7 @@ def open_cmd(
                 claude_config=claude_config,
                 codex_config=codex_config,
                 github_security=github_security,
+                allow_push=allow_push,
                 ai_prompt_stdin=ai_prompt_stdin,
                 skip_auth_setup=skip_auth_setup,
             )
@@ -791,7 +865,8 @@ def _open_single(
     claude_config,
     codex_config,
     github_security,
-    ai_prompt_stdin,
+    allow_push=(),
+    ai_prompt_stdin=False,
     skip_auth_setup=False,
 ):
     """Open a single bubble target."""
@@ -970,6 +1045,7 @@ def _open_single(
             base_ref=base_ref,
             ephemeral=ephemeral,
             github_security=github_security,
+            allow_push=allow_push,
         )
         return
 
@@ -1117,6 +1193,12 @@ def _open_single(
 
     # Provision, clone, and finalize
     short = repo_short_name(t.org_repo)
+    # Fetch PR metadata once (fork detection for the auth token + checkout).
+    # Only needed locally: remote orchestration (skip_auth_setup) sets up the
+    # token on the controlling machine and lets clone fetch its own metadata.
+    pr_meta = None
+    if t.kind == "pr" and not skip_auth_setup:
+        pr_meta = fetch_pr_metadata(t)
     try:
         provision_container(
             runtime,
@@ -1163,6 +1245,12 @@ def _open_single(
                 from .tools import resolve_tools
 
                 gh_enabled = "gh" in resolve_tools(config)
+                # Authorize git fetch/push to the contributor's fork(s):
+                # explicit --allow-push flags plus a fork-headed PR's head
+                # repo. Resolved before clone because, for local bubbles,
+                # github.com is stripped from the egress allowlist and the
+                # fork-PR fetch during clone routes through the proxy.
+                push_repos = _resolve_push_repos(t, allow_push, pr_meta)
                 auth_ok = setup_gh_token(
                     runtime,
                     name,
@@ -1171,6 +1259,7 @@ def _open_single(
                     machine_readable=machine_readable,
                     gh_enabled=gh_enabled,
                     config=config,
+                    push_repos=push_repos,
                 )
                 if not auth_ok and network:
                     raise click.ClickException(
@@ -1180,7 +1269,7 @@ def _open_single(
                         "or use `--no-network` to skip network allowlisting."
                     )
 
-        checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short)
+        checkout_branch = clone_and_checkout(runtime, name, t, mount_name, short, pr_meta=pr_meta)
 
         # After clone completes, re-tighten network by removing the temporary
         # github.com access that was granted for the clone. This must happen on

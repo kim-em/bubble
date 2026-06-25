@@ -13,6 +13,8 @@ Access policies (per-container):
   rest_api:       whether repo-scoped REST API access is allowed
   graphql_read:   "whitelisted", "unrestricted", or "none"
   graphql_write:  "whitelisted", "unrestricted", or "none"
+  push_repos:     additional owner/repo forks allowed for git fetch+push
+                  only (REST/GraphQL stay scoped to the base owner/repo)
 
 Security model:
 - Git: strict 4-pattern allowlist (git smart HTTP protocol only)
@@ -199,6 +201,26 @@ logger = logging.getLogger("bubble.auth_proxy")
 # ---------------------------------------------------------------------------
 
 
+def normalize_push_repos(push_repos) -> list[str]:
+    """Normalize a list of ``owner/repo`` fork specs for token storage.
+
+    Lower-cases each entry, drops blanks and anything not shaped like
+    ``owner/repo``, and de-duplicates while preserving order. Returns a
+    list of lower-cased ``owner/repo`` strings (possibly empty).
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in push_repos or []:
+        spec = (raw or "").strip().lower()
+        parts = spec.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            continue
+        if spec not in seen:
+            seen.add(spec)
+            result.append(spec)
+    return result
+
+
 def generate_auth_token(
     container_name: str,
     owner: str,
@@ -206,12 +228,19 @@ def generate_auth_token(
     rest_api: bool = True,
     graphql_read: str = "whitelisted",
     graphql_write: str = "whitelisted",
+    push_repos: list[str] | None = None,
 ) -> str:
     """Generate an auth proxy token for a container.
 
     The token maps to (container_name, owner, repo, rest_api, graphql_read,
-    graphql_write) — the proxy uses this to validate requests and enforce
-    the access policy.
+    graphql_write, push_repos) — the proxy uses this to validate requests
+    and enforce the access policy.
+
+    ``push_repos`` is a set of additional ``owner/repo`` forks the
+    container may git fetch from and push to. REST and GraphQL stay scoped
+    to the base ``owner/repo``; the forks get git access only. This
+    unblocks the fork-PR workflow (push commits to the contributor's fork
+    while reviews/CI live on the base repo).
 
     The token is a 256-bit bearer credential: possession grants the
     scoped access. It lives only in the issuing container's filesystem
@@ -228,6 +257,7 @@ def generate_auth_token(
             "rest_api": rest_api,
             "graphql_read": graphql_read,
             "graphql_write": graphql_write,
+            "push_repos": normalize_push_repos(push_repos),
         }
     )
 
@@ -274,8 +304,18 @@ class ProxyRateLimiter(_RateLimiter):
 # ---------------------------------------------------------------------------
 
 
-def validate_path(path: str, query: str, owner: str, repo: str) -> str | None:
+def validate_path(
+    path: str,
+    query: str,
+    owner: str,
+    repo: str,
+    push_repos: list[str] | None = None,
+) -> str | None:
     """Validate a request path against the git smart HTTP allowlist.
+
+    Git (both fetch and push) is allowed against the base ``owner/repo``
+    and against any repo in ``push_repos`` (the contributor's forks). REST
+    and GraphQL remain base-scoped and are validated elsewhere.
 
     Returns an error message string, or None if the path is valid.
     """
@@ -304,8 +344,10 @@ def validate_path(path: str, query: str, owner: str, repo: str) -> str | None:
     if path_repo.endswith(".git"):
         path_repo = path_repo[:-4]
 
-    # Validate owner/repo matches the allowed repo
-    if path_owner.lower() != owner.lower() or path_repo.lower() != repo.lower():
+    # Validate owner/repo matches the base repo or one of the allowed forks.
+    allowed = {f"{owner.lower()}/{repo.lower()}"}
+    allowed.update(push_repos or [])
+    if f"{path_owner.lower()}/{path_repo.lower()}" not in allowed:
         return f"Repository mismatch: {path_owner}/{path_repo} != {owner}/{repo}"
 
     # Validate query string
@@ -765,6 +807,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         rest_api = info.get("rest_api", False)
         graphql_read = info.get("graphql_read", "none")
         graphql_write = info.get("graphql_write", "none")
+        push_repos = info.get("push_repos") or []
 
         # Rate limit
         if not self.rate_limiter.check(container):
@@ -786,7 +829,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         # Route: git smart HTTP (/git/...)
         if path.startswith("/git/"):
-            self._handle_git_request(method, path, query, body, container, owner, repo)
+            self._handle_git_request(method, path, query, body, container, owner, repo, push_repos)
             return
 
         # Route: GraphQL (/graphql)
@@ -818,9 +861,14 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             return self._read_chunked()
         return b""
 
-    def _handle_git_request(self, method, path, query, body, container, owner, repo):
-        """Handle git smart HTTP requests (always allowed for valid tokens)."""
-        error = validate_path(path, query, owner, repo)
+    def _handle_git_request(
+        self, method, path, query, body, container, owner, repo, push_repos=None
+    ):
+        """Handle git smart HTTP requests (always allowed for valid tokens).
+
+        Git is allowed against the base repo and any fork in ``push_repos``.
+        """
+        error = validate_path(path, query, owner, repo, push_repos)
         if error:
             self._send_error(403, error)
             logger.info("BLOCKED %s %s container=%s reason=%s", method, path, container, error)
