@@ -149,7 +149,9 @@ The auth proxy (`auth_proxy.py`) provides repo-scoped GitHub authentication with
 
 **Remote/cloud bubbles:** SSH reverse tunnel forwards the local proxy port. Incus proxy devices on the remote expose both TCP and Unix socket endpoints.
 
-**Token management:** Per-container tokens in `~/.bubble/auth-tokens.json` map to `{container, owner, repo, rest_api, graphql_read, graphql_write}`. Tokens are cleaned up on `bubble pop`. The daemon is managed via launchd/systemd.
+**Token management:** Per-container tokens in `~/.bubble/auth-tokens.json` map to `{container, owner, repo, rest_api, graphql_read, graphql_write, push_repos}`. Tokens are cleaned up on `bubble pop`. The daemon is managed via launchd/systemd.
+
+**Fork-PR write support:** `push_repos` is a set of additional `owner/repo` forks the container may git **fetch and push** to (REST/GraphQL stay scoped to the base `owner/repo`). It is populated from two sources: a fork-headed PR target's head repo (auto-detected via the GitHub API in `clone.pr_fork_repo`), and the repeatable `--allow-push owner/repo` flag (an explicit, human-declared grant validated for shape only). This unblocks the standard fork-PR workflow — push commits to the contributor's own fork while reviews/CI live on the base repo. Push to the base repo is unchanged (the proxy forwards it; GitHub rejects it when the host token lacks base write). `createPullRequest` is a base mutation (`repositoryId` = base, head as `headRefName` like `login:branch`), so a cross-repo PR opens under the base scope with no fork GraphQL. Forks must be resolved into the token *before* clone, because local bubbles strip github.com from the egress allowlist and route the fork-PR fetch through the proxy.
 
 ### Security Model
 The `user` account has no sudo and a locked password. Network allowlisting is applied on container creation. SSH keys are injected via `incus file push` (not shell interpolation). All user-supplied values in shell commands are quoted with `shlex.quote()`. Each container mounts only its specific bare repo, not the entire git store.

@@ -92,6 +92,30 @@ class TestAuthTokenManagement:
         tokens = bubble.auth_proxy._load_tokens()
         assert tokens[token]["rest_api"] is False
 
+    def test_generate_token_default_no_push_repos(self, auth_proxy_env):
+        import bubble.auth_proxy
+
+        token = bubble.auth_proxy.generate_auth_token("c1", "o", "r")
+        tokens = bubble.auth_proxy._load_tokens()
+        assert tokens[token]["push_repos"] == []
+
+    def test_generate_token_with_push_repos(self, auth_proxy_env):
+        import bubble.auth_proxy
+
+        token = bubble.auth_proxy.generate_auth_token(
+            "c1", "base-owner", "base-repo", push_repos=["Login/Fork", "other/repo"]
+        )
+        tokens = bubble.auth_proxy._load_tokens()
+        # Normalized: lower-cased, de-duplicated, order preserved.
+        assert tokens[token]["push_repos"] == ["login/fork", "other/repo"]
+
+    def test_normalize_push_repos_drops_malformed(self):
+        from bubble.auth_proxy import normalize_push_repos
+
+        assert normalize_push_repos(None) == []
+        assert normalize_push_repos(["", "  ", "noslash", "a/b/c", "/x", "y/"]) == []
+        assert normalize_push_repos(["A/B", "a/b", " c/d "]) == ["a/b", "c/d"]
+
     def test_generate_multiple_tokens(self, auth_proxy_env):
         import bubble.auth_proxy
 
@@ -228,6 +252,59 @@ class TestValidatePath:
             "/git/owner/my-repo/info/refs", "service=git-upload-pack", "owner", "my-repo"
         )
         assert err is None
+
+    # --- Fork (push_repos) patterns ---
+
+    def test_fork_fetch_allowed(self):
+        err = validate_path(
+            "/git/login/fork/info/refs",
+            "service=git-upload-pack",
+            "base-owner",
+            "base-repo",
+            push_repos=["login/fork"],
+        )
+        assert err is None
+
+    def test_fork_push_allowed(self):
+        err = validate_path(
+            "/git/login/fork/git-receive-pack",
+            "",
+            "base-owner",
+            "base-repo",
+            push_repos=["login/fork"],
+        )
+        assert err is None
+
+    def test_fork_match_case_insensitive(self):
+        err = validate_path(
+            "/git/Login/Fork.git/info/refs",
+            "service=git-receive-pack",
+            "base-owner",
+            "base-repo",
+            push_repos=["login/fork"],
+        )
+        assert err is None
+
+    def test_base_still_allowed_with_push_repos(self):
+        err = validate_path(
+            "/git/base-owner/base-repo/git-receive-pack",
+            "",
+            "base-owner",
+            "base-repo",
+            push_repos=["login/fork"],
+        )
+        assert err is None
+
+    def test_third_repo_still_rejected_with_push_repos(self):
+        err = validate_path(
+            "/git/other/repo/info/refs",
+            "service=git-upload-pack",
+            "base-owner",
+            "base-repo",
+            push_repos=["login/fork"],
+        )
+        assert err is not None
+        assert "mismatch" in err.lower()
 
     # --- Blocked patterns ---
 
@@ -393,6 +470,57 @@ class TestAuthProxyHandler:
             "/git/hacker/evil-repo/info/refs?service=git-upload-pack",
             headers={"X-Bubble-Token": "valid-token"},
             token_info={"container": "c1", "owner": "owner", "repo": "repo"},
+        )
+        handler._proxy_request("GET")
+        assert 403 in handler._responses
+
+    def test_fork_push_forwarded(self):
+        """A push to a fork in push_repos is forwarded, not blocked."""
+        handler = self._make_handler(
+            "POST",
+            "/git/login/fork/git-receive-pack",
+            headers={"X-Bubble-Token": "valid-token", "Content-Length": "0"},
+            token_info={
+                "container": "c1",
+                "owner": "owner",
+                "repo": "repo",
+                "push_repos": ["login/fork"],
+            },
+        )
+        forwarded = {}
+        handler._forward_to_github = lambda *a, **kw: forwarded.setdefault("url", a[1])
+        handler._proxy_request("POST")
+        assert 403 not in handler._responses
+        assert forwarded.get("url", "").endswith("/login/fork/git-receive-pack")
+
+    def test_fork_rest_still_blocked(self):
+        """REST stays base-scoped even when the fork is in push_repos."""
+        handler = self._make_handler(
+            "GET",
+            "/repos/login/fork/pulls",
+            headers={"X-Bubble-Token": "valid-token"},
+            token_info={
+                "container": "c1",
+                "owner": "owner",
+                "repo": "repo",
+                "rest_api": True,
+                "push_repos": ["login/fork"],
+            },
+        )
+        handler._proxy_request("GET")
+        assert 403 in handler._responses
+
+    def test_third_repo_git_still_blocked_with_push_repos(self):
+        handler = self._make_handler(
+            "GET",
+            "/git/other/repo/info/refs?service=git-upload-pack",
+            headers={"X-Bubble-Token": "valid-token"},
+            token_info={
+                "container": "c1",
+                "owner": "owner",
+                "repo": "repo",
+                "push_repos": ["login/fork"],
+            },
         )
         handler._proxy_request("GET")
         assert 403 in handler._responses

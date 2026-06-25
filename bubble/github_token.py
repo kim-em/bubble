@@ -368,6 +368,7 @@ def setup_auth_proxy(
     machine_readable: bool = False,
     gh_enabled: bool = False,
     config: dict | None = None,
+    push_repos: list[str] | None = None,
 ) -> bool:
     """Set up auth proxy access for a local container via the bridge flow.
 
@@ -375,6 +376,9 @@ def setup_auth_proxy(
     incus bridge (git) and a bind-mounted Unix socket (gh). No
     ``proxy``-type incus devices are created, so there are no per-bubble
     ``forkproxy`` helpers to leak on stop/start cycles.
+
+    ``push_repos`` lists additional ``owner/repo`` forks the container may
+    git fetch from and push to (REST/GraphQL stay scoped to owner/repo).
 
     (Remote/cloud bubbles use :func:`setup_auth_proxy_remote`, a separate
     SSH-tunnelled transport.)
@@ -401,6 +405,7 @@ def setup_auth_proxy(
         graphql_write,
         machine_readable,
         gh_enabled,
+        push_repos,
     )
 
 
@@ -415,6 +420,7 @@ def _setup_auth_proxy_bridge(
     graphql_write: str,
     machine_readable: bool,
     gh_enabled: bool,
+    push_repos: list[str] | None = None,
 ) -> bool:
     """Bridge-listener setup: no proxy-type devices, just a disk mount
     for the gh socket plus a per-bubble bearer token."""
@@ -461,6 +467,7 @@ def _setup_auth_proxy_bridge(
         rest_api=rest_api,
         graphql_read=graphql_read,
         graphql_write=graphql_write,
+        push_repos=push_repos,
     )
 
     # Configure git: talk to the bridge TCP endpoint directly.
@@ -489,6 +496,8 @@ def _setup_auth_proxy_bridge(
             f"GitHub auth proxy configured via bridge {endpoint_str} "
             f"(scoped to {owner}/{repo}, {mode_desc})."
         )
+        if push_repos:
+            detail(f"  git fetch/push also allowed to fork(s): {', '.join(push_repos)}")
     return True
 
 
@@ -572,12 +581,16 @@ def setup_auth_proxy_remote(
     machine_readable: bool = False,
     gh_enabled: bool = False,
     config: dict | None = None,
+    push_repos: list[str] | None = None,
 ) -> bool:
     """Set up auth proxy access for a container on a remote host.
 
     Tunnels the local auth proxy to the remote host via SSH reverse
     port forwarding, adds an Incus proxy device on the remote to
     expose the tunneled port into the container, and configures git.
+
+    ``push_repos`` lists additional ``owner/repo`` forks the container may
+    git fetch from and push to (REST/GraphQL stay scoped to owner/repo).
 
     The host GitHub token never leaves the local machine.
 
@@ -611,6 +624,7 @@ def setup_auth_proxy_remote(
         rest_api=rest_api,
         graphql_read=graphql_read,
         graphql_write=graphql_write,
+        push_repos=push_repos,
     )
 
     # Add Incus proxy device on the remote: tunneled port → container
@@ -679,6 +693,8 @@ def setup_auth_proxy_remote(
         detail(
             f"GitHub auth proxy configured (scoped to {owner}/{repo}, {mode_desc}, via SSH tunnel)."
         )
+        if push_repos:
+            detail(f"  git fetch/push also allowed to fork(s): {', '.join(push_repos)}")
     return True
 
 
@@ -834,6 +850,7 @@ def setup_gh_token(
     gh_enabled: bool = False,
     config: dict | None = None,
     token_inject: bool = False,
+    push_repos: list[str] | None = None,
 ) -> bool:
     """Set up GitHub auth for a container.
 
@@ -874,6 +891,7 @@ def setup_gh_token(
             machine_readable,
             gh_enabled=gh_enabled,
             config=config,
+            push_repos=push_repos,
         )
 
     if runtime:
@@ -885,6 +903,7 @@ def setup_gh_token(
             machine_readable,
             gh_enabled=gh_enabled,
             config=config,
+            push_repos=push_repos,
         )
 
     return False

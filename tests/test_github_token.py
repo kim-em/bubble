@@ -65,6 +65,7 @@ def test_setup_gh_token_local_with_owner_repo(mock_runtime):
             False,
             gh_enabled=False,
             config=None,
+            push_repos=None,
         )
 
 
@@ -105,6 +106,7 @@ def test_setup_gh_token_remote_calls_proxy_remote():
             False,
             gh_enabled=False,
             config=None,
+            push_repos=None,
         )
 
 
@@ -135,6 +137,7 @@ def test_setup_auth_proxy_remote_starts_tunnel():
             rest_api=False,
             graphql_read="none",
             graphql_write="none",
+            push_repos=None,
         )
 
         # Two SSH calls: incus device add + incus exec (writing .gitconfig)
