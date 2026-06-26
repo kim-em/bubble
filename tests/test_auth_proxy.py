@@ -285,6 +285,18 @@ class TestValidatePath:
         )
         assert err is None
 
+    def test_fork_match_mixed_case_push_repos(self):
+        # A mixed-case fork passed straight to validate_path must still match (the allow-set is
+        # case-insensitive). Regression guard for the "kim-em/TauCeti" 403 seen in the worker.
+        err = validate_path(
+            "/git/kim-em/TauCeti/git-receive-pack",
+            "",
+            "FormalFrontier",
+            "TauCeti",
+            push_repos=["kim-em/TauCeti"],
+        )
+        assert err is None
+
     def test_base_still_allowed_with_push_repos(self):
         err = validate_path(
             "/git/base-owner/base-repo/git-receive-pack",

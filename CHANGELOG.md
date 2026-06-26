@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Fix `--allow-push` fork validation rejecting mixed-case fork names
+  - `validate_path` now lower-cases `push_repos` entries before the allow-set membership test, so a fork like `kim-em/TauCeti` is no longer 403'd as a `Repository mismatch` when passed un-normalized (the token-creation path already normalized; this makes the validator self-contained)
 - Remove `--native` mode entirely
   - `bubble --native <target>` is no longer accepted (use `bubble open` for containerized bubbles)
   - `bubble.native` module deleted; `check_native_clean`, `open_editor_native`, and `NATIVE_DIR` removed
