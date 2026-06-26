@@ -344,9 +344,11 @@ def validate_path(
     if path_repo.endswith(".git"):
         path_repo = path_repo[:-4]
 
-    # Validate owner/repo matches the base repo or one of the allowed forks.
+    # Validate owner/repo matches the base repo or an allowed fork, case-insensitively on all three.
+    # push_repos is lower-cased at token creation; lower-case it here too so validate_path is self-
+    # contained — a caller passing a mixed-case fork (e.g. "Login/Fork") isn't 403'd as a mismatch.
     allowed = {f"{owner.lower()}/{repo.lower()}"}
-    allowed.update(push_repos or [])
+    allowed.update(r.lower() for r in (push_repos or []))
     if f"{path_owner.lower()}/{path_repo.lower()}" not in allowed:
         return f"Repository mismatch: {path_owner}/{path_repo} != {owner}/{repo}"
 
