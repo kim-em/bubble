@@ -201,11 +201,12 @@ default_host = ""        # e.g. "user@myserver" or "user@host:2222"
 [tools]
 claude = "auto"     # "yes" | "no" | "auto" (detect from host)
 codex = "auto"
+vibe = "auto"       # Mistral Vibe / Leanstral (Lean 4 agent)
 ```
 
 ### Tools
 
-Tools like Claude Code and OpenAI Codex can be installed in container images. Each tool defaults to `"auto"`, which installs it if the corresponding command is found on your host.
+Coding agents like Claude Code, OpenAI Codex, and Mistral Vibe (the home of the Leanstral Lean 4 agent) can be installed in container images. Each tool defaults to `"auto"`, which installs it if the corresponding command is found on your host.
 
 ```bash
 bubble tools list                  # show all tools and their settings

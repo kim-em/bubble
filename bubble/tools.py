@@ -51,6 +51,16 @@ TOOLS = {
         "runtime_domains": ["openrouter.ai"],
         "priority": 50,
     },
+    "vibe": {
+        # Mistral Vibe (mistralai/mistral-vibe): a CLI coding agent, and the
+        # home of the Leanstral Lean 4 agent (`vibe --agent lean`). Python-based,
+        # installed via uv rather than npm; its runtime egress is api.mistral.ai.
+        "script": "vibe.sh",
+        "host_cmd": "vibe",
+        "network_domains": ["astral.sh", "pypi.org", "files.pythonhosted.org"],
+        "runtime_domains": ["api.mistral.ai"],
+        "priority": 50,
+    },
     "elan": {
         "script": "elan.sh",
         "host_cmd": "elan",
@@ -302,6 +312,10 @@ def fetch_latest_pins() -> dict:
     )
     pins["PI_VERSION"] = data["version"]
 
+    # Mistral Vibe: latest PyPI version
+    data = json.loads(urllib.request.urlopen("https://pypi.org/pypi/mistral-vibe/json").read())
+    pins["VIBE_VERSION"] = data["info"]["version"]
+
     # Validate that all required keys were found
     required = {
         "NODE_VERSION",
@@ -310,6 +324,7 @@ def fetch_latest_pins() -> dict:
         "CLAUDE_CODE_VERSION",
         "CODEX_VERSION",
         "PI_VERSION",
+        "VIBE_VERSION",
     }
     missing = required - set(pins.keys())
     if missing:

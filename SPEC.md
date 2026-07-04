@@ -681,6 +681,7 @@ Each tool has:
 | `claude` | 50 | `claude` | `api.anthropic.com` |
 | `codex` | 50 | `codex` | `api.openai.com` |
 | `pi` | 50 | `pi` | `openrouter.ai` |
+| `vibe` | 50 | `vibe` | `api.mistral.ai` |
 | `gh` | 50 | `gh` | — |
 | `vscode` | 90 | `code` | VS Code marketplace domains |
 | `emacs` | 90 | `emacs` | — |

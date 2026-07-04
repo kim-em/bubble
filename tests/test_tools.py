@@ -18,6 +18,7 @@ def test_available_tools():
     assert "claude" in tools
     assert "codex" in tools
     assert "pi" in tools
+    assert "vibe" in tools
     assert "elan" in tools
     assert "gh" in tools
     assert "vscode" in tools
@@ -35,7 +36,14 @@ def test_resolve_tools_yes():
 
 def test_resolve_tools_no():
     config = {
-        "tools": {"claude": "no", "codex": "no", "pi": "no", "elan": "no", "gh": "no"},
+        "tools": {
+            "claude": "no",
+            "codex": "no",
+            "pi": "no",
+            "vibe": "no",
+            "elan": "no",
+            "gh": "no",
+        },
         "editor": "shell",
     }
     enabled = resolve_tools(config)
@@ -138,6 +146,11 @@ def test_tool_runtime_domains_pi():
     assert "openrouter.ai" in tool_runtime_domains(["pi"])
 
 
+def test_tool_runtime_domains_vibe():
+    # Mistral Vibe (and Leanstral) talk to the Mistral API.
+    assert "api.mistral.ai" in tool_runtime_domains(["vibe"])
+
+
 def test_tool_runtime_domains_no_duplicates():
     domains = tool_runtime_domains(["claude", "codex"])
     # Each domain should appear exactly once
@@ -171,6 +184,7 @@ def test_load_pins():
     assert "CLAUDE_CODE_VERSION" in pins
     assert "CODEX_VERSION" in pins
     assert "PI_VERSION" in pins
+    assert "VIBE_VERSION" in pins
 
 
 def test_pins_are_nonempty():
@@ -200,6 +214,10 @@ def test_tool_script_uses_pinned_npm_versions():
 
     script = tool_script("pi")
     assert "@mariozechner/pi-coding-agent@${PI_VERSION}" in script
+
+    # vibe is Python, installed via uv rather than npm, but still pinned.
+    script = tool_script("vibe")
+    assert "mistral-vibe==${VIBE_VERSION}" in script
 
 
 def test_tool_script_verifies_node_checksum():
