@@ -62,6 +62,13 @@ jobs:
           sudo incus admin init --minimal
           # Allow non-root access (CI-only, ephemeral VM)
           sudo chmod 666 /var/lib/incus/unix.socket
+          # Incus 7.2+ refuses to run without a readable ~/.config/incus, and
+          # the sudo init above can leave that dir root-owned — which makes
+          # client commands (e.g. `incus storage list`) fail for the runner
+          # user and trips bubble's "not initialized" path. Give the runner
+          # ownership of its own config dir.
+          mkdir -p "$HOME/.config/incus"
+          sudo chown -R "$(id -u):$(id -g)" "$HOME/.config/incus"
           # Ensure IP forwarding and NAT for container internet access
           sudo sysctl -w net.ipv4.ip_forward=1
           sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/8 -o eth0 -j MASQUERADE
