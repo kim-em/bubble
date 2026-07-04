@@ -1,0 +1,39 @@
+name: Update tool pins
+
+on:
+  schedule:
+    # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+
+      - name: Refresh pinned tool versions
+        run: bubble tools update
+
+      - name: Open pull request if pins changed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/update-tool-pins
+          delete-branch: true
+          title: "chore: update pinned tool versions"
+          commit-message: "chore: update pinned tool versions"
+          body: |
+            Automated weekly refresh of `bubble/images/scripts/tools/pins.json`
+            via `bubble tools update`, pulling the latest Node.js LTS and
+            coding-agent releases (Claude Code, Codex, Pi, Mistral Vibe).
+
+            Merging bumps the versions baked into the `base` image on the next
+            rebuild. Review the diff, then merge if the new versions look sane.
