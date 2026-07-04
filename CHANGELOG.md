@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Add `vibe` (Mistral Vibe) as an installable coding-agent tool
+  - Mistral Vibe is the home of Leanstral, Mistral's open-source Lean 4 agent (`vibe --agent lean`, after a one-time `/leanstall` inside the bubble)
+  - Python-based, installed via `uv` (bootstrapped if absent) rather than npm; version pinned as `VIBE_VERSION` and refreshed by `bubble tools update` from PyPI
+  - Auto-installed when `vibe` is present on the host; runtime egress adds `api.mistral.ai`
 - Fix `--allow-push` fork validation rejecting mixed-case fork names
   - `validate_path` now lower-cases `push_repos` entries before the allow-set membership test, so a fork like `kim-em/TauCeti` is no longer 403'd as a `Repository mismatch` when passed un-normalized (the token-creation path already normalized; this makes the validator self-contained)
 - Remove `--native` mode entirely
