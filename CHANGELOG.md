@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.7.25 — 2026-07-04
 - Add `vibe` (Mistral Vibe) as an installable coding-agent tool
   - Mistral Vibe is the home of Leanstral, Mistral's open-source Lean 4 agent (`vibe --agent lean`, after a one-time `/leanstall` inside the bubble)
   - Python-based, installed via `uv` (bootstrapped if absent) rather than npm; version pinned as `VIBE_VERSION` and refreshed by `bubble tools update` from PyPI
   - Auto-installed when `vibe` is present on the host; runtime egress adds `api.mistral.ai`
+- Refresh pinned tool versions: Claude Code 2.1.201, Codex 0.142.5, Node.js 22.23.1
+- Add a weekly GitHub Actions job that runs `bubble tools update` and opens a PR when tool pins drift
+- Add fork-PR write support via per-token `push_repos` (#320)
+  - A fork-headed PR target, or an explicit `--allow-push owner/repo`, grants the container git fetch/push to that fork while REST/GraphQL stay scoped to the base repo — unblocking the standard push-to-your-fork PR workflow
 - Fix `--allow-push` fork validation rejecting mixed-case fork names
   - `validate_path` now lower-cases `push_repos` entries before the allow-set membership test, so a fork like `kim-em/TauCeti` is no longer 403'd as a `Repository mismatch` when passed un-normalized (the token-creation path already normalized; this makes the validator self-contained)
 - Remove `--native` mode entirely
