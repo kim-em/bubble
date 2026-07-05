@@ -1151,6 +1151,86 @@ class TestVibeConfigProvisioning:
         assert [c for c in disk_calls if "vibe" in c[2]] == []
 
 
+class TestCredentialOptOutEndToEnd:
+    """`--no-<x>-credentials` suppresses the mount even under default (auto)
+    security, exercised end-to-end through `bubble open`."""
+
+    def _capture_vibe_mounts(self, tmp_path, monkeypatch, *cli_args, config=None):
+        from contextlib import ExitStack
+        from unittest.mock import patch
+
+        from click.testing import CliRunner
+
+        from bubble.cli import main
+        from bubble.target import Target
+
+        vibe_dir = tmp_path / ".vibe"
+        vibe_dir.mkdir()
+        (vibe_dir / "config.toml").write_text("[mistral]\napi_key = 'secret'\n")
+        monkeypatch.setattr("bubble.config.VIBE_CONFIG.base_dir", vibe_dir)
+
+        captured = {}
+
+        def _capture_provision(*args, **kw):
+            captured["vibe_mounts"] = kw.get("vibe_mounts")
+            raise SystemExit(0)
+
+        with ExitStack() as stack:
+            # Default posture is auto (nothing locked off) unless config overrides.
+            stack.enter_context(patch("bubble.cli.load_config", return_value=config or {}))
+            stack.enter_context(
+                patch("bubble.cli.get_host_git_identity", return_value=("T", "t@t.com"))
+            )
+            rt = stack.enter_context(patch("bubble.cli.get_runtime"))
+            rt.return_value.list_containers.return_value = []
+            stack.enter_context(patch("bubble.cli.find_existing_container", return_value=None))
+            stack.enter_context(patch("bubble.cli.print_warnings"))
+            stack.enter_context(patch("bubble.cli.maybe_rebuild_base_image"))
+            stack.enter_context(patch("bubble.cli.maybe_rebuild_tools"))
+            stack.enter_context(patch("bubble.cli.maybe_rebuild_customize"))
+            stack.enter_context(patch("bubble.cli.maybe_symlink_ai_projects"))
+            stack.enter_context(patch("bubble.cli.RepoRegistry"))
+            target = Target(
+                owner="kim-em", repo="bubble", kind="repo", ref="", original="kim-em/bubble"
+            )
+            stack.enter_context(patch("bubble.cli.parse_target", return_value=target))
+            stack.enter_context(
+                patch("bubble.cli._resolve_ref_source", return_value=("/tmp/fake.git", "fake.git"))
+            )
+            stack.enter_context(
+                patch("bubble.cli.detect_and_build_image", return_value=(None, "img"))
+            )
+            stack.enter_context(patch("bubble.cli.generate_name", return_value="test-bubble"))
+            stack.enter_context(patch("bubble.cli.provision_container", _capture_provision))
+            CliRunner().invoke(main, ["open", *cli_args])
+        return captured.get("vibe_mounts")
+
+    def test_default_mounts_vibe_config(self, tmp_path, monkeypatch):
+        mounts = self._capture_vibe_mounts(tmp_path, monkeypatch, "kim-em/bubble")
+        targets = {m.target for m in (mounts or [])}
+        assert "/home/user/.vibe/config.toml" in targets
+
+    def test_no_vibe_credentials_suppresses_mount_under_auto(self, tmp_path, monkeypatch):
+        mounts = self._capture_vibe_mounts(
+            tmp_path, monkeypatch, "--no-vibe-credentials", "kim-em/bubble"
+        )
+        assert mounts == []
+
+    def test_provider_config_opt_out_wins_over_security_on(self, tmp_path, monkeypatch):
+        """`[vibe] credentials = false` suppresses the mount even with
+        security.vibe_credentials = on (the config opt-out wins, not just the flag)."""
+        mounts = self._capture_vibe_mounts(
+            tmp_path,
+            monkeypatch,
+            "kim-em/bubble",
+            config={
+                "security": {"vibe_credentials": "on"},
+                "vibe": {"credentials": False},
+            },
+        )
+        assert mounts == []
+
+
 class TestMountOverlaps:
     """Test path ancestry overlap detection."""
 

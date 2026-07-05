@@ -224,12 +224,20 @@ def get_github_level(config: dict) -> str:
 def should_include_credentials(requested: bool, config: dict, setting_name: str) -> bool:
     """Resolve whether credentials should be included.
 
-    Locked-off always wins.  Otherwise, include if the resolved requested
-    flag is True or the security setting enables them.
+    ``requested`` is the resolved per-launch preference (CLI flag > per-provider
+    config > default on), so it already carries the intended default. Precedence:
+
+    1. locked off (``security <x>-credentials = off``) always wins -> no credentials
+    2. otherwise honour ``requested`` verbatim
+
+    This makes an explicit opt-out win over an ``auto``/``on`` security setting:
+    ``--no-<x>-credentials`` (or ``[<provider>] credentials = false``) suppresses
+    the mount even though credentials are enabled by default. Only the hard
+    lockdown (``off``) can force credentials off against an explicit request.
     """
     if is_locked_off(config, setting_name):
         return False
-    return requested or is_enabled(config, setting_name)
+    return requested
 
 
 def has_auto_settings(config: dict) -> bool:

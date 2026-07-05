@@ -801,16 +801,20 @@ def test_should_include_credentials_requested_true():
     assert should_include_credentials(True, config, "claude_credentials") is True
 
 
-def test_should_include_credentials_requested_false_security_on():
-    """Security 'on' enables credentials even when the resolved flag is False."""
+def test_should_include_credentials_explicit_opt_out_wins_over_on():
+    """An explicit opt-out (requested=False) wins over security 'on'.
+
+    Only the hard lockdown ('off') can force credentials off against an
+    explicit request; 'on'/'auto' are the default, not a mandate.
+    """
     config = {"security": {"claude_credentials": "on"}}
-    assert should_include_credentials(False, config, "claude_credentials") is True
+    assert should_include_credentials(False, config, "claude_credentials") is False
 
 
-def test_should_include_credentials_requested_false_security_auto():
-    """Auto with auto_default=on behaves like 'on'."""
+def test_should_include_credentials_explicit_opt_out_wins_over_auto():
+    """An explicit opt-out (requested=False) wins over auto (default on)."""
     config = {}  # auto (default)
-    assert should_include_credentials(False, config, "claude_credentials") is True
+    assert should_include_credentials(False, config, "claude_credentials") is False
 
 
 def test_should_include_credentials_requested_true_security_auto():
@@ -818,14 +822,19 @@ def test_should_include_credentials_requested_true_security_auto():
     assert should_include_credentials(True, config, "claude_credentials") is True
 
 
+def test_should_include_credentials_default_on_when_unspecified():
+    """Resolution defaults requested=True, so credentials mount by default."""
+    assert should_include_credentials(True, {}, "claude_credentials") is True
+
+
 def test_should_include_credentials_vibe_locked_off_overrides_true():
     config = {"security": {"vibe_credentials": "off"}}
     assert should_include_credentials(True, config, "vibe_credentials") is False
 
 
-def test_should_include_credentials_vibe_auto_enables():
-    """Vibe credentials behave like Claude/Codex: auto (default) enables them."""
-    assert should_include_credentials(False, {}, "vibe_credentials") is True
+def test_should_include_credentials_vibe_explicit_opt_out_wins_over_auto():
+    """Vibe behaves like Claude/Codex: an explicit opt-out wins over auto."""
+    assert should_include_credentials(False, {}, "vibe_credentials") is False
 
 
 # --- shared_cache overlay tests ---
