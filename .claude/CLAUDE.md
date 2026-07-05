@@ -73,7 +73,7 @@ Images are defined in `builder.py`'s `IMAGES` dict with script and parent refere
 Tools are installed in container images via the `[tools]` config section. Each tool has a self-contained install script in `bubble/images/scripts/tools/` and is registered in the `TOOLS` dict in `tools.py` with its script filename, host detection command, required network domains, and a priority for install ordering. Tools include:
 
 - **Language tools** (priority 10): `elan` — auto-detected if elan is on the host
-- **Coding agents** (priority 50): `claude`, `codex`, `pi`, `vibe` — auto-detected via host commands. `vibe` is Mistral Vibe, the home of the Leanstral Lean 4 agent; unlike the npm-based agents it is Python and installed via `uv`.
+- **Coding agents** (priority 50): `claude`, `codex`, `pi`, `vibe` — auto-detected via host commands. `vibe` is Mistral Vibe, the home of the Leanstral Lean 4 agent; unlike the npm-based agents it is Python and installed via `uv`. Vibe keeps its whole configuration (Mistral auth plus the `/leanstall` agent setup) in a single `~/.vibe/config.toml`, which bubble mounts read-only into containers (`VIBE_CONFIG` in `config.py`, gated by the `vibe_credentials` security setting and the `--vibe-credentials` flag) so a host-side `/leanstall` carries in with no per-container setup.
 - **General tools** (priority 50): `gh` — auto-detected via host commands
 - **Editors** (priority 90): `vscode`, `emacs`, `neovim` — driven by the `editor` config key
 

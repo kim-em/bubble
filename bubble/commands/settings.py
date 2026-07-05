@@ -131,7 +131,7 @@ def register_settings_commands(main):
     @click.argument("setting", required=False, type=click.Choice(["on", "off"]))
     @click.option(
         "--provider",
-        type=click.Choice(["claude", "codex"]),
+        type=click.Choice(["claude", "codex", "vibe"]),
         default=None,
         help="Provider to configure (default: preferred provider from config)",
     )

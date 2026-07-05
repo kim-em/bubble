@@ -258,6 +258,25 @@ def test_filter_github_domains_no_github():
 # --- CLI tests ---
 
 
+def test_open_vibe_credentials_rejected_when_locked_off():
+    """`--vibe-credentials` is rejected with an explanatory error when the host
+    has `security.vibe-credentials=off` (must not silently mount them)."""
+    from unittest.mock import patch
+
+    from bubble.cli import main
+
+    runner = CliRunner()
+    with patch(
+        "bubble.cli.load_config",
+        return_value={"security": {"vibe_credentials": "off"}},
+    ):
+        result = runner.invoke(main, ["open", "--vibe-credentials", "kim-em/bubble"])
+    assert result.exit_code != 0
+    assert "rejected because security.vibe-credentials=off" in (
+        result.output + (result.stderr or "")
+    )
+
+
 def test_security_cli_shows_posture(tmp_data_dir):
     from bubble.cli import main
 
@@ -797,6 +816,16 @@ def test_should_include_credentials_requested_false_security_auto():
 def test_should_include_credentials_requested_true_security_auto():
     config = {}
     assert should_include_credentials(True, config, "claude_credentials") is True
+
+
+def test_should_include_credentials_vibe_locked_off_overrides_true():
+    config = {"security": {"vibe_credentials": "off"}}
+    assert should_include_credentials(True, config, "vibe_credentials") is False
+
+
+def test_should_include_credentials_vibe_auto_enables():
+    """Vibe credentials behave like Claude/Codex: auto (default) enables them."""
+    assert should_include_credentials(False, {}, "vibe_credentials") is True
 
 
 # --- shared_cache overlay tests ---

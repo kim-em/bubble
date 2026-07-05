@@ -20,6 +20,7 @@ from .config import (
     maybe_symlink_ai_projects,
     parse_mounts,
     repo_short_name,
+    vibe_config_mounts,
 )
 from .container_helpers import (
     detect_project_dir,
@@ -383,6 +384,7 @@ def _open_remote(
     ai_config=True,
     claude_credentials=None,
     codex_credentials=None,
+    vibe_credentials=None,
     claude_config=None,
     codex_config=None,
     new_branch=None,
@@ -408,6 +410,7 @@ def _open_remote(
             ai_config=ai_config,
             claude_credentials=claude_credentials,
             codex_credentials=codex_credentials,
+            vibe_credentials=vibe_credentials,
             claude_config=claude_config,
             codex_config=codex_config,
             new_branch=new_branch,
@@ -690,6 +693,11 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
     help="Mount ~/.codex credentials into container (default: from config or enabled)",
 )
 @click.option(
+    "--vibe-credentials/--no-vibe-credentials",
+    default=None,
+    help="Mount ~/.vibe/config.toml into container (default: from config or enabled)",
+)
+@click.option(
     "--claude-config/--no-claude-config",
     default=None,
     help=(
@@ -766,6 +774,7 @@ def open_cmd(
     ai_config,
     claude_credentials,
     codex_credentials,
+    vibe_credentials,
     claude_config,
     codex_config,
     github_security,
@@ -831,6 +840,7 @@ def open_cmd(
                 ai_config=ai_config,
                 claude_credentials=claude_credentials,
                 codex_credentials=codex_credentials,
+                vibe_credentials=vibe_credentials,
                 claude_config=claude_config,
                 codex_config=codex_config,
                 github_security=github_security,
@@ -890,6 +900,7 @@ def _open_single(
     ai_config,
     claude_credentials,
     codex_credentials,
+    vibe_credentials,
     claude_config,
     codex_config,
     github_security,
@@ -943,6 +954,15 @@ def _open_single(
         click.echo(
             "Error: --codex-credentials rejected because security.codex-credentials=off. "
             "Re-enable: bubble security set codex-credentials on",
+            err=True,
+        )
+        sys.exit(1)
+
+    # Enforce security: reject --vibe-credentials when locked off
+    if vibe_credentials and is_locked_off(config, "vibe_credentials"):
+        click.echo(
+            "Error: --vibe-credentials rejected because security.vibe-credentials=off. "
+            "Re-enable: bubble security set vibe-credentials on",
             err=True,
         )
         sys.exit(1)
@@ -1036,6 +1056,10 @@ def _open_single(
     if codex_credentials is None:
         codex_credentials = config.get("codex", {}).get("credentials", True)
 
+    # Resolve vibe_credentials: CLI flag > config > default (True)
+    if vibe_credentials is None:
+        vibe_credentials = config.get("vibe", {}).get("credentials", True)
+
     # Resolve claude_config / codex_config: CLI flag > config > default (True)
     if claude_config is None:
         claude_config = config.get("claude", {}).get("config", True)
@@ -1067,6 +1091,7 @@ def _open_single(
             ai_config=ai_config,
             claude_credentials=claude_credentials,
             codex_credentials=codex_credentials,
+            vibe_credentials=vibe_credentials,
             claude_config=claude_config,
             codex_config=codex_config,
             new_branch=new_branch,
@@ -1107,6 +1132,16 @@ def _open_single(
         )
         if cx_mounts:
             cx_mounts = [m for m in cx_mounts if not mount_overlaps(Path(m.target), user_targets)]
+
+    # Vibe config mount (~/.vibe/config.toml — also gated by --no-ai-config)
+    vb_mounts = []
+    if ai_config:
+        include_vibe_creds = should_include_credentials(
+            vibe_credentials, config, "vibe_credentials"
+        )
+        if include_vibe_creds:
+            vb_mounts = vibe_config_mounts(include_credentials=True)
+            vb_mounts = [m for m in vb_mounts if not mount_overlaps(Path(m.target), user_targets)]
 
     # Editor config mounts (emacs/neovim only — suppress if user mounts overlap)
     ec_mounts = editor_config_mounts(editor, config)
@@ -1257,6 +1292,7 @@ def _open_single(
             user_mounts=mount_specs,
             claude_mounts=cc_mounts,
             codex_mounts=cx_mounts,
+            vibe_mounts=vb_mounts,
             editor_mounts=ec_mounts,
             skip_auth_setup=skip_auth_setup,
         )
