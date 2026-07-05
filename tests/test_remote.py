@@ -285,6 +285,19 @@ class TestRemoteOpenFlagForwarding:
         assert "--codex-credentials" not in cmd_str
         assert "--no-codex-credentials" not in cmd_str
 
+    def test_vibe_credentials_forwarded(self):
+        cmd_str = self._run_remote_open(vibe_credentials=True)
+        assert "--vibe-credentials" in cmd_str
+
+    def test_no_vibe_credentials_forwarded(self):
+        cmd_str = self._run_remote_open(vibe_credentials=False)
+        assert "--no-vibe-credentials" in cmd_str
+
+    def test_vibe_credentials_none_not_forwarded(self):
+        cmd_str = self._run_remote_open(vibe_credentials=None)
+        assert "--vibe-credentials" not in cmd_str
+        assert "--no-vibe-credentials" not in cmd_str
+
     def test_claude_config_forwarded(self):
         cmd_str = self._run_remote_open(claude_config=True)
         assert "--claude-config" in cmd_str
