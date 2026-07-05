@@ -1155,7 +1155,7 @@ class TestCredentialOptOutEndToEnd:
     """`--no-<x>-credentials` suppresses the mount even under default (auto)
     security, exercised end-to-end through `bubble open`."""
 
-    def _capture_vibe_mounts(self, tmp_path, monkeypatch, *cli_args):
+    def _capture_vibe_mounts(self, tmp_path, monkeypatch, *cli_args, config=None):
         from contextlib import ExitStack
         from unittest.mock import patch
 
@@ -1176,8 +1176,8 @@ class TestCredentialOptOutEndToEnd:
             raise SystemExit(0)
 
         with ExitStack() as stack:
-            # Default (auto) security posture: nothing locked off.
-            stack.enter_context(patch("bubble.cli.load_config", return_value={}))
+            # Default posture is auto (nothing locked off) unless config overrides.
+            stack.enter_context(patch("bubble.cli.load_config", return_value=config or {}))
             stack.enter_context(
                 patch("bubble.cli.get_host_git_identity", return_value=("T", "t@t.com"))
             )
@@ -1213,6 +1213,20 @@ class TestCredentialOptOutEndToEnd:
     def test_no_vibe_credentials_suppresses_mount_under_auto(self, tmp_path, monkeypatch):
         mounts = self._capture_vibe_mounts(
             tmp_path, monkeypatch, "--no-vibe-credentials", "kim-em/bubble"
+        )
+        assert mounts == []
+
+    def test_provider_config_opt_out_wins_over_security_on(self, tmp_path, monkeypatch):
+        """`[vibe] credentials = false` suppresses the mount even with
+        security.vibe_credentials = on (the config opt-out wins, not just the flag)."""
+        mounts = self._capture_vibe_mounts(
+            tmp_path,
+            monkeypatch,
+            "kim-em/bubble",
+            config={
+                "security": {"vibe_credentials": "on"},
+                "vibe": {"credentials": False},
+            },
         )
         assert mounts == []
 

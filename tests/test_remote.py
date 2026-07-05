@@ -331,6 +331,54 @@ class TestRemoteOpenFlagForwarding:
         assert "--skip-auth-setup" in cmd_str
 
 
+class TestOpenSshResolvesConfigOptOut:
+    """`bubble open --ssh` resolves a local `[provider] credentials = false`
+    opt-out and forwards `--no-<x>-credentials` to the remote (must not leak
+    credentials by omitting the negative flag)."""
+
+    def _capture_remote_open_kwargs(self, config, *cli_args):
+        from contextlib import ExitStack
+
+        from click.testing import CliRunner
+
+        from bubble.cli import main
+
+        captured = {}
+
+        def _fake_open_remote(*args, **kw):
+            captured.update(kw)
+            raise SystemExit(0)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("bubble.cli.load_config", return_value=config))
+            stack.enter_context(
+                patch("bubble.cli.get_host_git_identity", return_value=("T", "t@t.com"))
+            )
+            stack.enter_context(patch("bubble.cli.print_warnings"))
+            stack.enter_context(patch("bubble.cli._open_remote", _fake_open_remote))
+            CliRunner().invoke(main, ["open", "--ssh", "buildhost", *cli_args])
+        return captured
+
+    def test_vibe_config_opt_out_forwards_false(self):
+        kw = self._capture_remote_open_kwargs(
+            {"vibe": {"credentials": False}},
+            "kim-em/bubble",
+        )
+        assert kw.get("vibe_credentials") is False
+
+    def test_default_forwards_true(self):
+        kw = self._capture_remote_open_kwargs({}, "kim-em/bubble")
+        assert kw.get("vibe_credentials") is True
+
+    def test_cli_flag_opt_out_forwards_false(self):
+        kw = self._capture_remote_open_kwargs(
+            {},
+            "--no-claude-credentials",
+            "kim-em/bubble",
+        )
+        assert kw.get("claude_credentials") is False
+
+
 class TestCreateBundle:
     def test_creates_tarball(self):
         bundle = _create_bundle()
