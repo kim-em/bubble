@@ -417,6 +417,7 @@ def remote_open(
     ai_config: bool = True,
     claude_credentials: bool | None = None,
     codex_credentials: bool | None = None,
+    vibe_credentials: bool | None = None,
     claude_config: bool | None = None,
     codex_config: bool | None = None,
     new_branch: str | None = None,
@@ -447,6 +448,10 @@ def remote_open(
         args.append("--codex-credentials")
     elif codex_credentials is False:
         args.append("--no-codex-credentials")
+    if vibe_credentials is True:
+        args.append("--vibe-credentials")
+    elif vibe_credentials is False:
+        args.append("--no-vibe-credentials")
     if claude_config is True:
         args.append("--claude-config")
     elif claude_config is False:

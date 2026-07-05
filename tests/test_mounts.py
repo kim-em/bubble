@@ -10,6 +10,7 @@ from bubble.config import (
     codex_config_mounts,
     editor_config_mounts,
     parse_mounts,
+    vibe_config_mounts,
 )
 
 
@@ -1034,6 +1035,120 @@ class TestCodexConfigProvisioning:
         disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
         codex_disk_calls = [c for c in disk_calls if "codex" in c[2]]
         assert len(codex_disk_calls) == 0
+
+
+class TestVibeConfigMounts:
+    """Test automatic ~/.vibe config mounting."""
+
+    def test_returns_config_toml(self, tmp_path, monkeypatch):
+        """config.toml (the single credential-bearing file) is mounted read-only."""
+        vibe_dir = tmp_path / ".vibe"
+        vibe_dir.mkdir()
+        (vibe_dir / "config.toml").write_text("[mistral]")
+
+        monkeypatch.setattr("bubble.config.VIBE_CONFIG.base_dir", vibe_dir)
+
+        mounts = vibe_config_mounts()
+
+        assert len(mounts) == 1
+        assert mounts[0].target == "/home/user/.vibe/config.toml"
+        assert mounts[0].readonly
+
+    def test_excluded_without_credentials(self, tmp_path, monkeypatch):
+        """config.toml is a credential item, so nothing mounts without credentials."""
+        vibe_dir = tmp_path / ".vibe"
+        vibe_dir.mkdir()
+        (vibe_dir / "config.toml").write_text("[mistral]")
+
+        monkeypatch.setattr("bubble.config.VIBE_CONFIG.base_dir", vibe_dir)
+
+        assert vibe_config_mounts(include_credentials=False) == []
+
+    def test_no_vibe_dir(self, tmp_path, monkeypatch):
+        """Returns empty when ~/.vibe doesn't exist."""
+        monkeypatch.setattr("bubble.config.VIBE_CONFIG.base_dir", tmp_path / "nonexistent")
+
+        assert vibe_config_mounts() == []
+
+    def test_rejects_symlink_escaping_vibe_dir(self, tmp_path, monkeypatch):
+        """Symlinks that escape ~/.vibe are rejected."""
+        vibe_dir = tmp_path / ".vibe"
+        vibe_dir.mkdir()
+        secret = tmp_path / "secret.toml"
+        secret.write_text("token = 'leak'")
+        (vibe_dir / "config.toml").symlink_to(secret)
+
+        monkeypatch.setattr("bubble.config.VIBE_CONFIG.base_dir", vibe_dir)
+
+        assert vibe_config_mounts() == []
+
+
+class TestVibeConfigProvisioning:
+    """Test that vibe config mounts are applied during container provisioning."""
+
+    def test_vibe_mounts_applied(self, mock_runtime, tmp_path, tmp_data_dir):
+        """Verify add_disk call with a vibe-config device name."""
+        from bubble.provisioning import provision_container as _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        vibe_mounts = [
+            MountSpec(
+                source="/home/testuser/.vibe/config.toml",
+                target="/home/user/.vibe/config.toml",
+                readonly=True,
+            ),
+        ]
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            vibe_mounts=vibe_mounts,
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        vibe_disk_calls = [c for c in disk_calls if "vibe-config" in c[2]]
+        assert vibe_disk_calls == [
+            (
+                "add_disk",
+                "test-container",
+                "vibe-config-0",
+                "/home/testuser/.vibe/config.toml",
+                "/home/user/.vibe/config.toml",
+                True,
+            ),
+        ]
+
+        exec_calls = [c for c in mock_runtime.calls if c[0] == "exec"]
+        mkdir_calls = [c for c in exec_calls if ".vibe" in " ".join(c[2])]
+        assert len(mkdir_calls) == 1
+        assert "mkdir -p /home/user/.vibe" in " ".join(mkdir_calls[0][2])
+        assert "chown user:user" in " ".join(mkdir_calls[0][2])
+
+    def test_no_vibe_mounts(self, mock_runtime, tmp_path, tmp_data_dir):
+        """No vibe mount calls when vibe_mounts is empty."""
+        from bubble.provisioning import provision_container as _provision_container
+
+        ref_path = tmp_path / "repo.git"
+        ref_path.mkdir()
+
+        _provision_container(
+            mock_runtime,
+            "test-container",
+            "base",
+            ref_path,
+            "repo.git",
+            {},
+            vibe_mounts=[],
+        )
+
+        disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+        assert [c for c in disk_calls if "vibe" in c[2]] == []
 
 
 class TestMountOverlaps:

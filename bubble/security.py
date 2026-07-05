@@ -127,6 +127,12 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         warning="credentials give containers access to OpenAI/Codex API auth",
         category="Authentication",
     ),
+    "vibe_credentials": SecuritySettingDef(
+        description="Mount ~/.vibe credentials into containers",
+        auto_default="on",
+        warning="credentials give containers access to Mistral/Vibe API auth",
+        category="Authentication",
+    ),
     "github": SecuritySettingDef(
         description="GitHub access level for containers",
         auto_default="on",  # not "off"; actual level resolved by get_github_level()

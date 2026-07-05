@@ -493,6 +493,26 @@ def codex_config_mounts(
     )
 
 
+VIBE_CONFIG_DIR = Path.home() / ".vibe"
+
+# Mistral Vibe (home of the Leanstral agent) stores its whole configuration —
+# including the Mistral API key and the `/leanstall` agent setup — in a single
+# ~/.vibe/config.toml. Unlike Claude/Codex there is no separate credential file,
+# so config.toml is treated as the credential item: mounting it read-only lets a
+# host-side `/leanstall` carry into the bubble with no in-container setup.
+VIBE_CONFIG = SafeConfigDir(
+    base_dir=VIBE_CONFIG_DIR,
+    container_dir="/home/user/.vibe",
+    config_items=[],
+    credential_items=["config.toml"],
+)
+
+
+def vibe_config_mounts(include_credentials: bool = True) -> list[MountSpec]:
+    """Return read-only mounts for Mistral Vibe config files that exist on the host."""
+    return VIBE_CONFIG.config_mounts(include_credentials=include_credentials)
+
+
 AI_PROJECTS_DIR = DATA_DIR / "ai-projects"
 
 

@@ -154,6 +154,7 @@ def provision_container(
     user_mounts=None,
     claude_mounts=None,
     codex_mounts=None,
+    vibe_mounts=None,
     editor_mounts=None,
     skip_auth_setup=False,
 ):
@@ -308,6 +309,23 @@ def provision_container(
             runtime.add_disk(
                 name,
                 f"codex-config-{i}",
+                m.source,
+                m.target,
+                readonly=m.readonly,
+            )
+
+    # Mount Vibe config (read-only ~/.vibe/config.toml — holds Mistral auth
+    # and the Leanstral agent setup). The rest of ~/.vibe stays container-local
+    # so vibe can write sessions/logs.
+    if vibe_mounts:
+        runtime.exec(
+            name,
+            ["bash", "-c", "mkdir -p /home/user/.vibe && chown user:user /home/user/.vibe"],
+        )
+        for i, m in enumerate(vibe_mounts):
+            runtime.add_disk(
+                name,
+                f"vibe-config-{i}",
                 m.source,
                 m.target,
                 readonly=m.readonly,
