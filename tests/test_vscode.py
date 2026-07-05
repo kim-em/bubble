@@ -5,7 +5,75 @@ import subprocess
 import pytest
 
 from bubble.remote import RemoteHost
-from bubble.vscode import _BUBBLE_NAME_RE, add_ssh_config, open_vscode, remove_ssh_config
+from bubble.vscode import (
+    _BUBBLE_NAME_RE,
+    add_ssh_config,
+    open_vscode,
+    remote_vscode_client_detected,
+    remove_ssh_config,
+)
+
+
+class TestRemoteVscodeClientDetection:
+    """Detect running inside a VSCode Remote-SSH session (client is elsewhere)."""
+
+    def test_ipc_and_ssh_present(self):
+        env = {
+            "VSCODE_IPC_HOOK_CLI": "/tmp/vscode-ipc.sock",
+            "SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22",
+        }
+        assert remote_vscode_client_detected(env) is True
+
+    def test_local_vscode_terminal_not_flagged(self):
+        # VSCode app terminal on this machine: IPC set, but no SSH session.
+        env = {"VSCODE_IPC_HOOK_CLI": "/tmp/vscode-ipc.sock"}
+        assert remote_vscode_client_detected(env) is False
+
+    def test_plain_ssh_not_flagged(self):
+        # Plain SSH shell with no VSCode: nothing to forward to.
+        env = {"SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22"}
+        assert remote_vscode_client_detected(env) is False
+
+    def test_empty_env(self):
+        assert remote_vscode_client_detected({}) is False
+
+    def test_override_env_var(self):
+        env = {
+            "VSCODE_IPC_HOOK_CLI": "/tmp/vscode-ipc.sock",
+            "SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22",
+            "BUBBLE_ALLOW_REMOTE_VSCODE": "1",
+        }
+        assert remote_vscode_client_detected(env) is False
+
+
+class TestWarnIfRemoteVscodeClient:
+    """The launch-site guard: block vscode, pass other editors through."""
+
+    @pytest.fixture(autouse=True)
+    def _nested_session(self, monkeypatch):
+        monkeypatch.setenv("VSCODE_IPC_HOOK_CLI", "/tmp/vscode-ipc.sock")
+        monkeypatch.setenv("SSH_CONNECTION", "1.2.3.4 5 6.7.8.9 22")
+        monkeypatch.delenv("BUBBLE_ALLOW_REMOTE_VSCODE", raising=False)
+
+    def test_blocks_vscode(self, capsys):
+        from bubble.vscode import warn_if_remote_vscode_client
+
+        assert warn_if_remote_vscode_client("vscode", "owner/repo") is True
+        err = capsys.readouterr().err
+        assert "--ssh" in err
+        assert "owner/repo" in err
+
+    @pytest.mark.parametrize("editor", ["shell", "emacs", "neovim"])
+    def test_allows_non_vscode(self, editor):
+        from bubble.vscode import warn_if_remote_vscode_client
+
+        assert warn_if_remote_vscode_client(editor, "owner/repo") is False
+
+    def test_allows_vscode_when_not_nested(self, monkeypatch):
+        from bubble.vscode import warn_if_remote_vscode_client
+
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        assert warn_if_remote_vscode_client("vscode", "owner/repo") is False
 
 
 class TestBubbleNameValidation:

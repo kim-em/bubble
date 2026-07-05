@@ -8,7 +8,7 @@ import click
 from .container_helpers import setup_git_config, setup_ssh
 from .lifecycle import register_bubble
 from .security import is_enabled
-from .vscode import open_editor
+from .vscode import open_editor, warn_if_remote_vscode_client
 
 
 def finalize_bubble(
@@ -131,6 +131,8 @@ def finalize_bubble(
     detail(f"Pop:  bubble pop {name}")
 
     if not no_interactive:
+        if warn_if_remote_vscode_client(editor, t.original):
+            return
         echo_editor_opening(editor)
         exit_code = open_editor(
             editor, name, project_dir, workspace_file=workspace_file, command=command

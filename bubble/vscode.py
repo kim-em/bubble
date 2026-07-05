@@ -20,6 +20,65 @@ SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"
 _SSH_CONFIG_LOCK_FILE = DATA_DIR / "ssh-config.lock"
 
 
+def remote_vscode_client_detected(env=None) -> bool:
+    """Detect that our `code` CLI would drive a VSCode running on another machine.
+
+    True when bubble is invoked from the integrated terminal of a VSCode
+    Remote-SSH session: `VSCODE_IPC_HOOK_CLI` means the `code` CLI forwards to
+    whichever VSCode owns that IPC socket, and `SSH_CONNECTION` means that
+    VSCode's server was reached over SSH — so the actual VSCode window lives on
+    the *client* machine, not here. In that case `code --remote ssh-remote+...`
+    is handed to the client's VSCode, which has no SSH config, ProxyCommand, or
+    trusted key for a container created on *this* host, and fails with
+    "Could not resolve hostname".
+
+    Bypass with BUBBLE_ALLOW_REMOTE_VSCODE=1 for users who have wired up their
+    client side by hand.
+    """
+    env = os.environ if env is None else env
+    if env.get("BUBBLE_ALLOW_REMOTE_VSCODE"):
+        return False
+    return bool(env.get("VSCODE_IPC_HOOK_CLI") and env.get("SSH_CONNECTION"))
+
+
+def warn_if_remote_vscode_client(editor: str, target_hint: str) -> bool:
+    """Guard the local VSCode launch against the Remote-SSH-client scenario.
+
+    When bubble creates a container on this machine but is running inside a
+    VSCode Remote-SSH session, `code --remote` is handed to the VSCode on the
+    *client* machine, which can't resolve or reach the container (no SSH alias,
+    ProxyCommand, or trusted key for it) and fails with "Could not resolve
+    hostname". Rather than launch into that failure, print actionable guidance
+    and return True so the caller skips the launch (the container is left
+    running, reachable via `bubble --shell` or re-opened from the client with
+    `--ssh`). Returns False when the launch should proceed normally.
+    """
+    import socket
+
+    import click
+
+    if editor != "vscode" or not remote_vscode_client_detected():
+        return False
+    hostname = socket.gethostname()
+    click.echo(
+        "Note: bubble is running inside a VSCode Remote-SSH session, so the"
+        f" container created here on '{hostname}' can't be opened in your"
+        " (client-side) VSCode window — `code --remote` would fail with 'Could"
+        " not resolve hostname'. The container is ready; it was just not"
+        " launched in VSCode.\n\n"
+        "To open it in VSCode, run bubble from your local machine and target"
+        " this host:\n"
+        f"    bubble --ssh {hostname} {target_hint}\n"
+        f'(or set [remote] default_host = "{hostname}" in ~/.bubble/config.toml there).\n\n'
+        "Or work in this terminal with a non-VSCode editor:\n"
+        f"    bubble --shell {target_hint}      # or --emacs / --neovim\n\n"
+        "Set BUBBLE_ALLOW_REMOTE_VSCODE=1 to override if you've wired up the"
+        " client side yourself.",
+        err=True,
+    )
+    return True
+
+
 @contextlib.contextmanager
 def _ssh_config_lock():
     """Serialize all SSH-config writes (add/remove + Include directive)."""

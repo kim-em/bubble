@@ -63,6 +63,7 @@ from .target import Target, TargetParseError, parse_target
 from .vscode import (
     add_ssh_config,
     open_editor,
+    warn_if_remote_vscode_client,
 )
 
 # ---------------------------------------------------------------------------
@@ -504,7 +505,7 @@ def _open_remote(
             _ephemeral_pop_and_exit(name, exit_code)
 
 
-def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=False):
+def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=False, target_hint=""):
     """Re-attach to an existing container."""
     # ``ensure_running`` re-applies the network allowlist on stop/start
     # transitions; see issue #285.
@@ -555,6 +556,8 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
         except RuntimeError:
             pass  # Can't check status, skip pull
 
+    if warn_if_remote_vscode_client(editor, target_hint):
+        return
     echo_editor_opening(editor)
     exit_code = open_editor(editor, name, project_dir, command=command)
     if ephemeral and command:
@@ -1101,7 +1104,15 @@ def _open_single(
             machine_readable_output("reattached", existing, project_dir=project_dir)
             return
         notices.finish()
-        _reattach(runtime, existing, editor, no_interactive, command=command, ephemeral=ephemeral)
+        _reattach(
+            runtime,
+            existing,
+            editor,
+            no_interactive,
+            command=command,
+            ephemeral=ephemeral,
+            target_hint=target,
+        )
         return
 
     # Parse and register target
@@ -1149,7 +1160,15 @@ def _open_single(
             )
             return
         notices.finish()
-        _reattach(runtime, existing, editor, no_interactive, command=command, ephemeral=ephemeral)
+        _reattach(
+            runtime,
+            existing,
+            editor,
+            no_interactive,
+            command=command,
+            ephemeral=ephemeral,
+            target_hint=target,
+        )
         return
 
     # Resolve git source, detect language, and build image
