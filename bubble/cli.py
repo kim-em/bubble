@@ -63,6 +63,7 @@ from .target import Target, TargetParseError, parse_target
 from .vscode import (
     add_ssh_config,
     open_editor,
+    remote_vscode_client_detected,
     warn_if_remote_vscode_client,
 )
 
@@ -495,6 +496,30 @@ def _open_remote(
     detail(f"SSH: ssh bubble-{name}")
 
     if not no_interactive:
+        # If we're orchestrating a remote bubble from inside a VSCode Remote-SSH
+        # session, the local `code` would forward to a further-up client that
+        # has no route to this bubble — the same "Could not resolve hostname"
+        # failure. The bubble is ready; guide the user to re-run from their true
+        # local machine rather than launch into the failure.
+        if editor == "vscode" and remote_vscode_client_detected():
+            q_host = shlex.quote(remote_host.ssh_destination)
+            q_target = shlex.quote(target) if target else "<target>"
+            click.echo(
+                "Note: bubble is running inside a VSCode Remote-SSH session, so"
+                f" this remote bubble on {remote_host.ssh_destination} can't be"
+                " opened in your (client-side) VSCode window — `code --remote`"
+                " would fail with 'Could not resolve hostname'. The bubble is"
+                " ready; it was just not launched in VSCode.\n\n"
+                "Run the same command from your local machine (the one your"
+                " VSCode runs on):\n"
+                f"    bubble --ssh {q_host} {q_target}\n\n"
+                "Or connect from this terminal with a non-VSCode editor:\n"
+                f"    bubble --shell --ssh {q_host} {q_target}\n\n"
+                "Set BUBBLE_ALLOW_REMOTE_VSCODE=1 to override if you've wired up"
+                " the client side yourself.",
+                err=True,
+            )
+            return
         echo_editor_opening(editor)
         exit_code = open_editor(
             editor, name, project_dir, workspace_file=workspace_file, command=command

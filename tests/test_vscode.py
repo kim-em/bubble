@@ -37,13 +37,24 @@ class TestRemoteVscodeClientDetection:
     def test_empty_env(self):
         assert remote_vscode_client_detected({}) is False
 
-    def test_override_env_var(self):
+    @pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "on", " on "])
+    def test_override_truthy_values_bypass(self, val):
         env = {
             "VSCODE_IPC_HOOK_CLI": "/tmp/vscode-ipc.sock",
             "SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22",
-            "BUBBLE_ALLOW_REMOTE_VSCODE": "1",
+            "BUBBLE_ALLOW_REMOTE_VSCODE": val,
         }
         assert remote_vscode_client_detected(env) is False
+
+    @pytest.mark.parametrize("val", ["0", "false", "no", "off", ""])
+    def test_override_falsey_values_do_not_bypass(self, val):
+        # "0"/"false"/etc. must NOT disable the guard (surprising otherwise).
+        env = {
+            "VSCODE_IPC_HOOK_CLI": "/tmp/vscode-ipc.sock",
+            "SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22",
+            "BUBBLE_ALLOW_REMOTE_VSCODE": val,
+        }
+        assert remote_vscode_client_detected(env) is True
 
 
 class TestWarnIfRemoteVscodeClient:

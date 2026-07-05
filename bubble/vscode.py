@@ -36,7 +36,7 @@ def remote_vscode_client_detected(env=None) -> bool:
     client side by hand.
     """
     env = os.environ if env is None else env
-    if env.get("BUBBLE_ALLOW_REMOTE_VSCODE"):
+    if env.get("BUBBLE_ALLOW_REMOTE_VSCODE", "").strip().lower() in {"1", "true", "yes", "on"}:
         return False
     return bool(env.get("VSCODE_IPC_HOOK_CLI") and env.get("SSH_CONNECTION"))
 
@@ -59,19 +59,25 @@ def warn_if_remote_vscode_client(editor: str, target_hint: str) -> bool:
 
     if editor != "vscode" or not remote_vscode_client_detected():
         return False
+    # gethostname() is a best-effort hint: the client connected via some SSH
+    # alias/FQDN we can't recover here, so present the detected name as a
+    # placeholder the user replaces with whatever they SSH in with.
     hostname = socket.gethostname()
+    q_host = shlex.quote(hostname)
+    q_target = shlex.quote(target_hint) if target_hint else "<target>"
     click.echo(
         "Note: bubble is running inside a VSCode Remote-SSH session, so the"
         f" container created here on '{hostname}' can't be opened in your"
         " (client-side) VSCode window — `code --remote` would fail with 'Could"
         " not resolve hostname'. The container is ready; it was just not"
         " launched in VSCode.\n\n"
-        "To open it in VSCode, run bubble from your local machine and target"
-        " this host:\n"
-        f"    bubble --ssh {hostname} {target_hint}\n"
-        f'(or set [remote] default_host = "{hostname}" in ~/.bubble/config.toml there).\n\n'
+        "To open it in VSCode, run bubble from your local machine, targeting"
+        " this host with whatever SSH alias/hostname you connect to it with"
+        f" (detected here as {q_host}):\n"
+        f"    bubble --ssh {q_host} {q_target}\n"
+        f"(or set [remote] default_host = {q_host} in ~/.bubble/config.toml there).\n\n"
         "Or work in this terminal with a non-VSCode editor:\n"
-        f"    bubble --shell {target_hint}      # or --emacs / --neovim\n\n"
+        f"    bubble --shell {q_target}      # or --emacs / --neovim\n\n"
         "Set BUBBLE_ALLOW_REMOTE_VSCODE=1 to override if you've wired up the"
         " client side yourself.",
         err=True,
