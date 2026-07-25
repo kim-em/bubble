@@ -533,6 +533,23 @@ def _open_remote(
             _ephemeral_pop_and_exit(name, exit_code)
 
 
+def _check_reattach_options(*, allow_domains=(), mount_specs=(), allow_push=()):
+    """Reject launch-only security options that cannot be retrofitted onto an existing bubble."""
+    flags = []
+    if allow_domains:
+        flags.append("--allow-domain")
+    if mount_specs:
+        flags.append("--mount")
+    if allow_push:
+        flags.append("--allow-push")
+    if flags:
+        joined = ", ".join(flags)
+        raise click.ClickException(
+            f"{joined} cannot be applied while reattaching to an existing bubble; "
+            "pop the existing bubble first, then re-run the command"
+        )
+
+
 def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=False, target_hint=""):
     """Re-attach to an existing container."""
     # ``ensure_running`` re-applies the network allowlist on stop/start
@@ -629,6 +646,14 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
     "--machine-readable", is_flag=True, hidden=True, help="Output JSON (for remote orchestration)"
 )
 @click.option("--network/--no-network", default=True, help="Apply network allowlist")
+@click.option(
+    "--allow-domain",
+    "allow_domains",
+    type=str,
+    multiple=True,
+    metavar="DOMAIN",
+    help="Add a domain to this bubble's network allowlist (repeatable, local only)",
+)
 @click.option("--name", "custom_name", type=str, help="Custom container name")
 @click.option(
     "--command",
@@ -761,6 +786,7 @@ def open_cmd(
     no_interactive,
     machine_readable,
     network,
+    allow_domains,
     custom_name,
     command,
     ephemeral,
@@ -827,6 +853,7 @@ def open_cmd(
                 no_interactive=no_interactive,
                 machine_readable=machine_readable,
                 network=network,
+                allow_domains=allow_domains,
                 custom_name=custom_name,
                 command=command,
                 ephemeral=ephemeral,
@@ -887,6 +914,7 @@ def _open_single(
     no_interactive,
     machine_readable,
     network,
+    allow_domains,
     custom_name,
     command,
     ephemeral,
@@ -1067,6 +1095,12 @@ def _open_single(
         codex_config = config.get("codex", {}).get("config", True)
 
     if remote_host:
+        if allow_domains:
+            click.echo(
+                "Error: --allow-domain is not supported with remote/cloud bubbles",
+                err=True,
+            )
+            sys.exit(1)
         if mount_specs:
             click.echo(
                 "Error: --mount is not supported with remote/cloud bubbles (host paths are local)",
@@ -1159,6 +1193,11 @@ def _open_single(
     # Check if target matches an existing container
     existing = find_existing_container(runtime, target)
     if existing:
+        _check_reattach_options(
+            allow_domains=allow_domains,
+            mount_specs=mount_specs,
+            allow_push=allow_push,
+        )
         if machine_readable:
             project_dir = detect_project_dir(runtime, existing)
             machine_readable_output("reattached", existing, project_dir=project_dir)
@@ -1213,6 +1252,11 @@ def _open_single(
         ref=t.ref,
     )
     if existing:
+        _check_reattach_options(
+            allow_domains=allow_domains,
+            mount_specs=mount_specs,
+            allow_push=allow_push,
+        )
         if machine_readable:
             project_dir = detect_project_dir(runtime, existing)
             machine_readable_output(
@@ -1278,6 +1322,8 @@ def _open_single(
     pr_meta = None
     if t.kind == "pr" and not skip_auth_setup:
         pr_meta = fetch_pr_metadata(t)
+    hook_domains = list(hook.network_domains()) if hook else []
+    extra_domains = list(dict.fromkeys([*hook_domains, *allow_domains]))
     try:
         provision_container(
             runtime,
@@ -1295,6 +1341,7 @@ def _open_single(
             vibe_mounts=vb_mounts,
             editor_mounts=ec_mounts,
             skip_auth_setup=skip_auth_setup,
+            extra_domains=extra_domains,
         )
 
         # Set up GitHub auth BEFORE clone — network allowlisting strips
@@ -1358,7 +1405,6 @@ def _open_single(
         if skip_auth_setup and network:
             from .container_helpers import apply_network
 
-            extra_domains = hook.network_domains() if hook else None
             apply_network(runtime, name, config, extra_domains, keep_github_domains=False)
 
         # Resolve AI prompt: stdin flag > env var > auto-generate for issues/PRs
@@ -1411,6 +1457,7 @@ def _open_single(
             command=command,
             ai_prompt=ai_prompt,
             ephemeral=ephemeral,
+            extra_domains=extra_domains,
         )
     except Exception:
         # Clean up partially-provisioned container on failure

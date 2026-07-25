@@ -2159,3 +2159,30 @@ class TestSharedCacheOverlay:
 
         # Must not raise and must not touch anything outside the base.
         remove_cache_copies("../escape")
+
+
+def test_provision_uses_explicit_network_domains(mock_runtime, tmp_data_dir, monkeypatch):
+    """CLI-added domains reach the initial, pre-clone network allowlist unchanged."""
+    import bubble.container_helpers as helpers
+    from bubble.provisioning import provision_container
+
+    seen = {}
+
+    def capture(runtime, name, config, extra_domains, keep_github_domains=False):
+        seen["domains"] = extra_domains
+
+    monkeypatch.setattr(helpers, "apply_network", capture)
+    ref_path = tmp_data_dir / "repo.git"
+    ref_path.mkdir()
+    provision_container(
+        mock_runtime,
+        "test-container",
+        "base",
+        ref_path,
+        "repo.git",
+        {},
+        network=True,
+        extra_domains=["hook.example", "cache.example"],
+    )
+
+    assert seen["domains"] == ["hook.example", "cache.example"]

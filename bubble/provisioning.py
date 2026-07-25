@@ -157,6 +157,7 @@ def provision_container(
     vibe_mounts=None,
     editor_mounts=None,
     skip_auth_setup=False,
+    extra_domains=None,
 ):
     """Launch container, wait for readiness, apply network allowlist, mount git repos."""
     from .output import detail
@@ -178,7 +179,8 @@ def provision_container(
     if network:
         from .container_helpers import apply_network
 
-        extra_domains = hook.network_domains() if hook else None
+        if extra_domains is None:
+            extra_domains = list(hook.network_domains()) if hook else None
         apply_network(runtime, name, config, extra_domains, keep_github_domains=skip_auth_setup)
 
     mount_source = str(ref_path)

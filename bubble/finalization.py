@@ -29,6 +29,7 @@ def finalize_bubble(
     command=None,
     ai_prompt="",
     ephemeral=False,
+    extra_domains=None,
 ):
     """Post-clone setup: hooks, SSH, registration, and attach.
 
@@ -91,7 +92,8 @@ def finalize_bubble(
     except Exception:
         pass
 
-    extra_domains = list(hook.network_domains()) if hook else []
+    if extra_domains is None:
+        extra_domains = list(hook.network_domains()) if hook else []
     register_bubble(
         name,
         t.org_repo,

@@ -1,5 +1,7 @@
 """Tests for the configurable security posture system."""
 
+import click
+import pytest
 from click.testing import CliRunner
 
 from bubble.security import (
@@ -256,6 +258,30 @@ def test_filter_github_domains_no_github():
 
 
 # --- CLI tests ---
+
+
+def test_open_help_advertises_repeatable_allow_domain():
+    from bubble.cli import main
+
+    result = CliRunner().invoke(main, ["open", "--help"])
+    assert result.exit_code == 0
+    assert "--allow-domain DOMAIN" in result.output
+    assert "repeatable" in result.output
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "flag"),
+    [
+        ({"allow_domains": ("cache.example",)}, "--allow-domain"),
+        ({"mount_specs": (object(),)}, "--mount"),
+        ({"allow_push": ("owner/fork",)}, "--allow-push"),
+    ],
+)
+def test_launch_only_options_are_rejected_on_reattach(kwargs, flag):
+    from bubble.cli import _check_reattach_options
+
+    with pytest.raises(click.ClickException, match=flag):
+        _check_reattach_options(**kwargs)
 
 
 def test_open_vibe_credentials_rejected_when_locked_off():
