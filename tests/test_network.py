@@ -40,17 +40,15 @@ class TestBuildAllowlistScript:
         script = _build_allowlist_script(["github.com"])
         assert "getent ahostsv4 github.com" in script
 
-    def test_uses_cidr_blocks_not_individual_ips(self):
-        """CDN domains rotate IPs; /24 CIDR blocks handle this."""
+    def test_exact_domains_use_resolved_ips_on_https_only(self):
         script = _build_allowlist_script(["github.com"])
-        assert ".0/24" in script
-        # Should not have bare "$ip" rules (old individual-IP approach)
-        assert "-d $ip " not in script
+        assert ".0/24" not in script
+        assert "-d $ip -p tcp --dport 443 -j ACCEPT" in script
 
-    def test_wildcard_uses_cidr_blocks(self):
+    def test_wildcard_uses_cidr_blocks_on_https_only(self):
         script = _build_allowlist_script(["*.example.com"])
         assert ".0/24" in script
-        assert "-d $cidr " in script
+        assert "-d $cidr -p tcp --dport 443 -j ACCEPT" in script
 
     def test_wildcard_resolves_base_domain(self):
         script = _build_allowlist_script(["*.example.com"])

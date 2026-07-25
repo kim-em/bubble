@@ -152,6 +152,14 @@ class TestLeanHook:
         hook = LeanHook()
         assert "releases.lean-lang.org" in hook.network_domains()
 
+    def test_cache_mounts_include_mathlib_and_lake(self):
+        hook = LeanHook()
+        hook._needs_cache = True
+        assert hook.shared_mounts() == [
+            ("mathlib-cache", "/shared/mathlib-cache", "MATHLIB_CACHE_DIR"),
+            ("lake-cache", "/shared/lake-cache", "LAKE_CACHE_DIR"),
+        ]
+
 
 class TestLean4Detection:
     def test_lean4_repo_detected(self, lean4_repo):

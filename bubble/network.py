@@ -122,10 +122,9 @@ def _build_allowlist_script(
             "  iptables -A OUTPUT -d $UPSTREAM -p tcp --dport 53 -j ACCEPT",
             "done",
             "",
-            "# Resolve and allow each domain (IPv4 only)",
-            "# Use /24 CIDR blocks instead of individual IPs because CDN domains",
-            "# (e.g. *.githubusercontent.com) rotate IPs within their allocation.",
-            "# A point-in-time resolution may miss IPs returned later.",
+            "# Resolve and allow each domain over HTTPS (IPv4 only). Exact domains",
+            "# get only their resolved /32 addresses; wildcard CDN domains retain /24",
+            "# ranges for address rotation, but still only on TCP port 443.",
         ]
     )
 
@@ -148,18 +147,16 @@ def _build_allowlist_script(
                 " | awk -F. '{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}'"
                 " | sort -u); do"
             )
-            lines.append("    iptables -A OUTPUT -d $cidr -j ACCEPT")
+            lines.append("    iptables -A OUTPUT -d $cidr -p tcp --dport 443 -j ACCEPT")
             lines.append("  done")
             lines.append("fi")
         else:
             resolve_domain = domain
             lines.append(
-                f"for cidr in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
-                f"| awk '{{print $1}}' | sort -u"
-                f" | awk -F. '{{printf \"%s.%s.%s.0/24\\n\", $1, $2, $3}}'"
-                f" | sort -u); do"
+                f"for ip in $(getent ahostsv4 {resolve_domain} 2>/dev/null "
+                f"| awk '{{print $1}}' | sort -u); do"
             )
-            lines.append("  iptables -A OUTPUT -d $cidr -j ACCEPT")
+            lines.append("  iptables -A OUTPUT -d $ip -p tcp --dport 443 -j ACCEPT")
             lines.append("done")
 
     lines.extend(

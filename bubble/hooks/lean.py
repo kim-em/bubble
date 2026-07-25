@@ -313,7 +313,10 @@ class LeanHook(Hook):
 
     def shared_mounts(self) -> list[tuple[str, str, str]]:
         if self._needs_cache:
-            return [("mathlib-cache", "/shared/mathlib-cache", "MATHLIB_CACHE_DIR")]
+            return [
+                ("mathlib-cache", "/shared/mathlib-cache", "MATHLIB_CACHE_DIR"),
+                ("lake-cache", "/shared/lake-cache", "LAKE_CACHE_DIR"),
+            ]
         return []
 
     def git_dependencies(self) -> list[GitDependency]:
