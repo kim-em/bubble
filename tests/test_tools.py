@@ -503,6 +503,7 @@ def test_build_base_preserves_derived_variants(mock_runtime, monkeypatch, tmp_da
     delete_calls = [c for c in mock_runtime.calls if c[0] == "image_delete"]
     assert delete_calls == []
 
+
 def test_build_base_preserves_dynamic_toolchain_variants(mock_runtime, monkeypatch, tmp_data_dir):
     """Existing toolchain variants remain available after another base build."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
