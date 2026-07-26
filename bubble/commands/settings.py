@@ -434,12 +434,22 @@ def register_settings_commands(main):
     def gh_proxy_start():
         """Install and start the auth proxy daemon."""
         from ..automation import install_auth_proxy_daemon
+        from ..github_token import _wait_for_auth_proxy_endpoint
 
-        result = install_auth_proxy_daemon()
-        if result:
-            click.echo(f"Auth proxy daemon installed: {result}")
-        else:
-            click.echo("Failed to install auth proxy daemon (unsupported platform?).", err=True)
+        try:
+            result = install_auth_proxy_daemon()
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if not result:
+            raise click.ClickException(
+                "failed to install auth proxy daemon (unsupported platform?)"
+            )
+        if _wait_for_auth_proxy_endpoint() is None:
+            raise click.ClickException(
+                "auth proxy did not publish a reachable endpoint; see ~/.bubble/auth-proxy.log "
+                "and /tmp/bubble-auth-proxy.log"
+            )
+        click.echo(f"Auth proxy daemon installed: {result}")
 
     @gh_proxy_group.command("stop")
     def gh_proxy_stop():

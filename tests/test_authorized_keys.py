@@ -12,6 +12,7 @@ def fake_home(tmp_path, monkeypatch):
     ssh_dir = tmp_path / ".ssh"
     ssh_dir.mkdir()
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("bubble.config.host_home", lambda: tmp_path)
     # Also clear the env var so tests don't pick up a real one
     monkeypatch.delenv("BUBBLE_AUTHORIZED_KEYS", raising=False)
     return tmp_path

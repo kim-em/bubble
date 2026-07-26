@@ -10,8 +10,14 @@ import os
 import platform
 import plistlib
 import subprocess
+import sys
 import textwrap
+import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable
+
+from .config import HOST_DATA_DIR
 
 LAUNCHD_LABELS = {
     "git-update": "com.bubble.git-update",
@@ -59,9 +65,12 @@ def is_automation_installed() -> dict[str, bool]:
 
 
 def _bubble_path() -> str:
-    """Find the bubble executable path."""
+    """Find the Bubble executable, preferring the CLI currently being run."""
     import shutil as _shutil
 
+    invoked = Path(sys.argv[0])
+    if invoked.name == "bubble" and invoked.exists():
+        return str(invoked.resolve())
     path = _shutil.which("bubble")
     return path if path else "bubble"
 
@@ -125,14 +134,14 @@ _AUTH_PROXY_JOB = {
 }
 
 
-def _write_launchd_plist(label: str, job: dict) -> str:
+def _write_launchd_plist(label: str, job: dict, *, host_global: bool = False) -> str:
     """Generate and install a launchd plist. Returns the installed path."""
-    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    home = HOST_DATA_DIR.parent if host_global else Path.home()
+    launch_agents = home / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True, exist_ok=True)
     dst = launch_agents / f"{label}.plist"
-
-    if dst.exists():
-        subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
+    domain = f"gui/{os.getuid()}"
+    service = f"{domain}/{label}"
 
     bubble = _bubble_path()
     plist = {
@@ -145,20 +154,43 @@ def _write_launchd_plist(label: str, job: dict) -> str:
     }
     plist.update(job["extra"])
 
-    with open(dst, "wb") as f:
+    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
+    with open(tmp, "wb") as f:
         plistlib.dump(plist, f)
+    os.replace(tmp, dst)
 
-    subprocess.run(["launchctl", "load", str(dst)], capture_output=True)
+    # Address the registered service by label, not by its old plist path. This
+    # also removes jobs installed while HOME pointed at an isolated directory.
+    subprocess.run(["launchctl", "bootout", service], capture_output=True)
+
+    # launchd can briefly return EIO immediately after a successful bootout;
+    # retrying bootstrap lets its service registry settle without an unbounded
+    # `bootout --wait` (which launchctl itself warns may block indefinitely).
+    for attempt in range(5):
+        result = subprocess.run(
+            ["launchctl", "bootstrap", domain, str(dst)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            break
+        if attempt < 4:
+            time.sleep(0.2)
+    else:
+        detail = (result.stderr or result.stdout or "unknown launchctl error").strip()
+        raise RuntimeError(f"could not bootstrap {label}: {detail}")
     return str(dst)
 
 
-def _remove_launchd_job(label: str) -> str | None:
+def _remove_launchd_job(label: str, *, host_global: bool = False) -> str | None:
     """Remove a single launchd job. Returns description or None."""
-    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    home = HOST_DATA_DIR.parent if host_global else Path.home()
+    launch_agents = home / "Library" / "LaunchAgents"
     dst = launch_agents / f"{label}.plist"
 
     if dst.exists():
-        subprocess.run(["launchctl", "unload", str(dst)], capture_output=True)
+        domain = f"gui/{os.getuid()}"
+        subprocess.run(["launchctl", "bootout", f"{domain}/{label}"], capture_output=True)
         dst.unlink()
         return f"launchd: {label}"
 
@@ -196,6 +228,19 @@ def _check_launchd() -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 
 SYSTEMD_DIR = Path.home() / ".config" / "systemd" / "user"
+HOST_SYSTEMD_DIR = HOST_DATA_DIR.parent / ".config" / "systemd" / "user"
+
+
+def _systemctl_checked(args: list[str]) -> None:
+    """Run a user systemd operation and surface failures to the caller."""
+    result = subprocess.run(
+        ["systemctl", "--user", *args],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "unknown systemctl error").strip()
+        raise RuntimeError(f"systemctl --user {' '.join(args)} failed: {detail}")
 
 
 def _install_systemd() -> list[str]:
@@ -367,11 +412,9 @@ def _install_relay_systemd() -> str:
     """)
     )
 
-    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    subprocess.run(
-        ["systemctl", "--user", "enable", "--now", "bubble-relay.service"],
-        capture_output=True,
-    )
+    _systemctl_checked(["daemon-reload"])
+    _systemctl_checked(["enable", "bubble-relay.service"])
+    _systemctl_checked(["restart", "bubble-relay.service"])
 
     return "systemd: bubble-relay.service"
 
@@ -396,14 +439,31 @@ def _remove_relay_systemd() -> str:
 # ---------------------------------------------------------------------------
 
 
-def install_auth_proxy_daemon() -> str:
+@contextmanager
+def _auth_proxy_install_lock():
+    """Serialize changes to the one auth-proxy service owned by this OS user."""
+    import fcntl
+
+    HOST_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(HOST_DATA_DIR / "auth-proxy.install.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def install_auth_proxy_daemon(*, skip_if: Callable[[], bool] | None = None) -> str:
     """Install and start the auth proxy daemon. Returns description of what was installed."""
-    system = platform.system()
-    if system == "Darwin":
-        return _install_auth_proxy_launchd()
-    elif system == "Linux":
-        return _install_auth_proxy_systemd()
-    return ""
+    with _auth_proxy_install_lock():
+        if skip_if is not None and skip_if():
+            return "already running"
+        system = platform.system()
+        if system == "Darwin":
+            return _install_auth_proxy_launchd()
+        elif system == "Linux":
+            return _install_auth_proxy_systemd()
+        return ""
 
 
 def remove_auth_proxy_daemon() -> str:
@@ -420,27 +480,27 @@ def is_auth_proxy_installed() -> bool:
     """Check if the auth proxy daemon is installed."""
     system = platform.system()
     if system == "Darwin":
-        launch_agents = Path.home() / "Library" / "LaunchAgents"
+        launch_agents = HOST_DATA_DIR.parent / "Library" / "LaunchAgents"
         return (launch_agents / f"{AUTH_PROXY_LABEL}.plist").exists()
     elif system == "Linux":
-        return (SYSTEMD_DIR / "bubble-auth-proxy.service").exists()
+        return (HOST_SYSTEMD_DIR / "bubble-auth-proxy.service").exists()
     return False
 
 
 def _install_auth_proxy_launchd() -> str:
-    _write_launchd_plist(AUTH_PROXY_LABEL, _AUTH_PROXY_JOB)
+    _write_launchd_plist(AUTH_PROXY_LABEL, _AUTH_PROXY_JOB, host_global=True)
     return f"launchd: {AUTH_PROXY_LABEL}"
 
 
 def _remove_auth_proxy_launchd() -> str:
-    return _remove_launchd_job(AUTH_PROXY_LABEL) or ""
+    return _remove_launchd_job(AUTH_PROXY_LABEL, host_global=True) or ""
 
 
 def _install_auth_proxy_systemd() -> str:
-    SYSTEMD_DIR.mkdir(parents=True, exist_ok=True)
+    HOST_SYSTEMD_DIR.mkdir(parents=True, exist_ok=True)
     bubble = _bubble_path()
 
-    service = SYSTEMD_DIR / "bubble-auth-proxy.service"
+    service = HOST_SYSTEMD_DIR / "bubble-auth-proxy.service"
     service.write_text(
         textwrap.dedent(f"""\
         [Unit]
@@ -458,17 +518,15 @@ def _install_auth_proxy_systemd() -> str:
     """)
     )
 
-    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    subprocess.run(
-        ["systemctl", "--user", "enable", "--now", "bubble-auth-proxy.service"],
-        capture_output=True,
-    )
+    _systemctl_checked(["daemon-reload"])
+    _systemctl_checked(["enable", "bubble-auth-proxy.service"])
+    _systemctl_checked(["restart", "bubble-auth-proxy.service"])
 
     return "systemd: bubble-auth-proxy.service"
 
 
 def _remove_auth_proxy_systemd() -> str:
-    service = SYSTEMD_DIR / "bubble-auth-proxy.service"
+    service = HOST_SYSTEMD_DIR / "bubble-auth-proxy.service"
 
     if service.exists():
         subprocess.run(

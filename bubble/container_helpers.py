@@ -59,7 +59,9 @@ def collect_authorized_keys(config: dict | None = None) -> list[str]:
                 keys.append(content)
         return keys
 
-    ssh_dir = Path.home() / ".ssh"
+    from .config import host_home
+
+    ssh_dir = host_home() / ".ssh"
     ed25519 = ssh_dir / "id_ed25519.pub"
     if ed25519.exists():
         content = ed25519.read_text().strip()

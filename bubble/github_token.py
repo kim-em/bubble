@@ -221,7 +221,9 @@ def _ensure_auth_proxy_running() -> int | None:
     from .automation import install_auth_proxy_daemon, is_auth_proxy_installed
 
     if not is_auth_proxy_installed():
-        install_auth_proxy_daemon()
+        install_auth_proxy_daemon(
+            skip_if=lambda: _wait_for_auth_proxy_endpoint(attempts=1, delay=0) is not None
+        )
 
     # Give daemon a moment to start and write port file
     import time
@@ -246,25 +248,42 @@ def _ensure_auth_proxy_endpoint() -> dict | None:
 
     or ``None`` if the daemon isn't actually listening (no endpoint file,
     or a stale endpoint file left behind by a crashed daemon). The
-    endpoint is health-checked with a TCP connect before being trusted —
+    endpoint is health-checked against its daemon pid before being trusted —
     a stale file must not cause us to configure containers against a dead
     listener. On ``None`` local auth setup fails closed (there is no
     proxy-device fallback).
     """
-    from .auth_proxy import AUTH_PROXY_ENDPOINT_FILE
     from .automation import install_auth_proxy_daemon, is_auth_proxy_installed
 
     if not is_auth_proxy_installed():
-        install_auth_proxy_daemon()
+        install_auth_proxy_daemon(
+            skip_if=lambda: _wait_for_auth_proxy_endpoint(attempts=1, delay=0) is not None
+        )
 
+    endpoint = _wait_for_auth_proxy_endpoint()
+    if endpoint:
+        return endpoint
+
+    # The service definition can predate the current endpoint protocol, or a
+    # crashed launchd/systemd job can leave a stale endpoint behind. Reinstall
+    # once through the current CLI so the host-global service is refreshed.
+    install_auth_proxy_daemon(
+        skip_if=lambda: _wait_for_auth_proxy_endpoint(attempts=1, delay=0) is not None
+    )
+    return _wait_for_auth_proxy_endpoint()
+
+
+def _wait_for_auth_proxy_endpoint(attempts: int = 20, delay: float = 0.5) -> dict | None:
+    """Wait for the daemon to publish a reachable endpoint after service start."""
     import time
 
-    for _ in range(10):
+    from .auth_proxy import AUTH_PROXY_ENDPOINT_FILE
+
+    for _ in range(attempts):
         endpoint = _read_endpoint_file(AUTH_PROXY_ENDPOINT_FILE)
         if endpoint and _endpoint_alive(endpoint):
             return endpoint
-        time.sleep(0.5)
-
+        time.sleep(delay)
     return None
 
 
@@ -278,18 +297,38 @@ def _read_endpoint_file(path) -> dict | None:
 
 
 def _endpoint_alive(endpoint: dict) -> bool:
-    """TCP-connect to the endpoint to confirm a live daemon is listening.
+    """Confirm that the daemon which published the endpoint is still alive.
 
     Guards against a stale ``auth-proxy.endpoint`` file from a daemon
     that crashed/was killed: without this we'd configure containers to
-    talk to a dead listener and report success.
+    talk to a dead listener and report success. New daemons publish their
+    pid; fall back to the legacy TCP probe for older endpoint files.
     """
+    import os as _os
+
+    tcp = endpoint.get("tcp")
+    if not isinstance(tcp, dict):
+        return False
+    host, port = tcp.get("host"), tcp.get("port")
+    if (
+        not isinstance(host, str)
+        or not host
+        or not isinstance(port, int)
+        or isinstance(port, bool)
+        or not 1 <= port <= 65535
+    ):
+        return False
+
+    pid = endpoint.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+        try:
+            _os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
     import socket as _socket
 
-    tcp = endpoint.get("tcp") or {}
-    host, port = tcp.get("host"), tcp.get("port")
-    if not host or not isinstance(port, int):
-        return False
     try:
         with _socket.create_connection((host, port), timeout=2):
             return True

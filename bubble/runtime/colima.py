@@ -188,7 +188,7 @@ def _ensure_incus_remote():
     sock = COLIMA_PROFILE_DIR / "incus.sock"
     if not sock.exists():
         return
-    expected_addr = f"unix://{sock}"
+    expected_addr = f"unix://{sock.resolve()}"
 
     result = subprocess.run(
         ["incus", "remote", "list", "--format=json"],
@@ -216,7 +216,13 @@ def _ensure_incus_remote():
         scalar_addr = entry.get("Addr")
         if scalar_addr:
             existing_addrs = [*existing_addrs, scalar_addr]
-        if expected_addr not in existing_addrs:
+        normalized_addrs = []
+        for addr in existing_addrs:
+            if isinstance(addr, str) and addr.startswith("unix://"):
+                normalized_addrs.append(f"unix://{Path(addr.removeprefix('unix://')).resolve()}")
+            else:
+                normalized_addrs.append(addr)
+        if expected_addr not in normalized_addrs:
             print(
                 f"Refusing to overwrite incus remote '{BUBBLE_INCUS_REMOTE}': "
                 f"its address is {existing_addrs!r}, expected {expected_addr!r}. "
