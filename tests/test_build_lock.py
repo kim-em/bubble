@@ -14,6 +14,12 @@ from bubble.images.builder import (
 )
 
 
+@pytest.fixture(autouse=True)
+def logical_aliases(monkeypatch):
+    """Keep the legacy locking tests focused on dependency serialization."""
+    monkeypatch.setattr("bubble.images.builder.desired_image_alias", lambda _runtime, name: name)
+
+
 def test_build_lock_prevents_concurrent_builds(mock_runtime, monkeypatch, tmp_data_dir):
     """A concurrent build_image call for the same image should skip if the first completes."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
@@ -156,18 +162,13 @@ def test_build_lean_toolchain_lock(mock_runtime, monkeypatch, tmp_data_dir):
     assert len(launch_calls) == 0
 
 
-def test_toolchain_build_rebuilds_missing_lean_base_under_base_lock(
+def test_toolchain_build_rebuilds_missing_immutable_lean_parent(
     mock_runtime, monkeypatch, tmp_data_dir
 ):
-    """Regression for issue #314.
+    """A missing immutable Lean parent is rebuilt before its toolchain child.
 
-    When a base rebuild has purged the ``lean`` image, building a toolchain
-    image must (a) rebuild ``lean`` first, and (b) hold the ``base`` build lock
-    across the whole base->toolchain dependency so a concurrent base rebuild
-    can't delete ``lean`` between the rebuild and the launch-from-lean. We
-    assert the ``base`` lock is still held immediately after the ``lean``
-    rebuild — in the old code the lean rebuild ran outside the lock, leaving
-    ``base`` unlocked and lettable a concurrent rebuild purge ``lean``.
+    Build-keyed parents are never purged by another variant, so the old broad
+    base lock is intentionally no longer held while constructing the parent.
     """
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
@@ -213,7 +214,7 @@ def test_toolchain_build_rebuilds_missing_lean_base_under_base_lock(
 
     assert mock_runtime.image_exists("lean")  # lean rebuilt first
     assert mock_runtime.image_exists("lean-v4.16.0")  # toolchain built from it
-    assert observed.get("base_locked_after_lean_rebuild") is True
+    assert observed.get("base_locked_after_lean_rebuild") is False
 
 
 def test_toolchain_build_builds_missing_base_and_lean_without_deadlock(

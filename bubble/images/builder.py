@@ -10,26 +10,21 @@ import subprocess
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-from ..config import DATA_DIR, load_config
+from ..config import DATA_DIR, HOST_DATA_DIR, load_config
 from ..lean import LEAN_VERSION_RE
 from ..runtime.base import ContainerRuntime
 from ..tools import resolve_tools, tool_script, tools_hash
 
 PROGRESS_PREFIX = "BUBBLE_PROGRESS: "
 
-VSCODE_COMMIT_FILE = DATA_DIR / "vscode-commit"
-TOOLS_HASH_FILE = DATA_DIR / "tools-hash"
 CUSTOMIZE_SCRIPT = DATA_DIR / "customize.sh"
-CUSTOMIZE_HASH_FILE = DATA_DIR / "customize-hash"
 
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
 
-BUILD_LOCK_DIR = Path("/tmp/bubble-build-locks")
+BUILD_LOCK_DIR = HOST_DATA_DIR / "locks" / "images"
+IMAGE_BUILD_SCHEMA = "1"
+BASE_PARENT_REVISION = "ubuntu-24.04-2026-07"
 
 
 @contextmanager
@@ -263,6 +258,8 @@ def is_builder_container(name: str) -> bool:
     """
     if not name.endswith("-builder"):
         return False
+    if re.fullmatch(r"bubble-[a-z0-9-]+-[0-9a-f]{16}-builder", name):
+        return True
     prefix = name[: -len("-builder")]
     # Known static image builders (e.g. "base-builder", "lean-builder")
     if prefix in IMAGES:
@@ -306,82 +303,6 @@ def _ancestor_chain(image_name: str) -> list[str]:
     return ancestors
 
 
-def _collect_derived_images(base_name: str) -> list[str]:
-    """Collect all images in IMAGES that transitively derive from base_name."""
-    result = []
-    direct = [name for name, spec in IMAGES.items() if spec["parent"] == base_name]
-    for name in direct:
-        result.append(name)
-        result.extend(_collect_derived_images(name))
-    return result
-
-
-def _is_toolchain_alias(alias: str, purged_names: set[str]) -> bool:
-    """Check if an alias is a dynamic toolchain image derived from a purged lean image.
-
-    Toolchain aliases follow the pattern: <base>-v<digits>... where <base> is
-    a purged lean-family image. We require a digit after 'v' to avoid false
-    matches on unrelated images.
-    """
-    for name in purged_names:
-        if name == "lean":
-            prefix = "lean-v"
-        elif name.startswith("lean-"):
-            prefix = f"{name}-v"
-        else:
-            continue
-        if alias.startswith(prefix) and len(alias) > len(prefix) and alias[len(prefix)].isdigit():
-            return True
-    return False
-
-
-def _collect_dynamic_toolchain_aliases(
-    runtime: ContainerRuntime, purged_names: set[str]
-) -> list[str]:
-    """Find dynamic toolchain image aliases that derive from purged lean images.
-
-    Dynamic toolchain images (e.g. lean-v4.16.0, lean-emacs-v4.16.0) are not
-    in IMAGES and must be discovered by scanning existing image aliases.
-    """
-    # Only look for toolchain images if a lean-family image is being purged
-    if not any(n == "lean" or n.startswith("lean-") for n in purged_names):
-        return []
-
-    aliases = []
-    try:
-        for img in runtime.list_images():
-            for alias_entry in img.get("aliases", []):
-                alias = alias_entry["name"]
-                if _is_toolchain_alias(alias, purged_names):
-                    aliases.append(alias)
-    except Exception:
-        pass
-    return aliases
-
-
-def _purge_derived_images(runtime: ContainerRuntime, base_name: str):
-    """Delete images that derive from base_name so they rebuild from the fresh base.
-
-    When the base image is rebuilt (e.g. with new tools), derived images like
-    lean are stale snapshots. Deleting them forces a rebuild on next use.
-
-    Walks the full dependency tree (not just direct children) and also purges
-    dynamic toolchain images (lean-v4.x.y, etc.).
-    """
-    static_derived = _collect_derived_images(base_name)
-
-    # Also find dynamic toolchain images that derive from purged lean images
-    dynamic_aliases = _collect_dynamic_toolchain_aliases(runtime, set(static_derived))
-
-    for name in static_derived + dynamic_aliases:
-        if runtime.image_exists(name):
-            try:
-                runtime.image_delete(name)
-                print(f"  Deleted derived image '{name}' (will rebuild on next use).")
-            except Exception:
-                pass  # Best-effort; may fail if in use
-
-
 def _install_tools_if_base(
     runtime: ContainerRuntime, build_name: str, image_name: str
 ) -> list[str] | None:
@@ -417,6 +338,71 @@ def customize_hash() -> str | None:
     return hashlib.sha256(CUSTOMIZE_SCRIPT.read_bytes()).hexdigest()[:16]
 
 
+def _hash_parts(*parts: str) -> str:
+    digest = hashlib.sha256()
+    for part in parts:
+        encoded = part.encode()
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()[:16]
+
+
+def image_build_key(runtime: ContainerRuntime, image_name: str) -> str:
+    """Return the deterministic build key for a logical Bubble image."""
+    if image_name.startswith("lean-v"):
+        version = image_name.removeprefix("lean-")
+        if not LEAN_VERSION_RE.fullmatch(version):
+            raise ValueError(f"Invalid Lean toolchain version: {version!r}")
+        parent_alias = desired_image_alias(runtime, "lean")
+        return _hash_parts(
+            IMAGE_BUILD_SCHEMA,
+            image_name,
+            parent_alias,
+            (SCRIPTS_DIR / "lean-toolchain.sh").read_text(),
+            customize_hash() or "",
+        )
+
+    if image_name not in IMAGES:
+        available = ", ".join(IMAGES)
+        raise ValueError(f"Unknown image: {image_name}. Available: {available}")
+    spec = IMAGES[image_name]
+    parent = spec["parent"]
+    parent_identity = desired_image_alias(runtime, parent) if parent in IMAGES else parent
+    extra = ""
+    if image_name == "base":
+        parent_identity += f":{BASE_PARENT_REVISION}"
+        config = load_config()
+        enabled = resolve_tools(config)
+        extra = tools_hash(enabled)
+        if "vscode" in enabled:
+            extra += ":" + (get_vscode_commit() or "unavailable")
+    return _hash_parts(
+        IMAGE_BUILD_SCHEMA,
+        image_name,
+        parent_identity,
+        (SCRIPTS_DIR / spec["script"]).read_text(),
+        customize_hash() or "",
+        extra,
+    )
+
+
+def desired_image_alias(runtime: ContainerRuntime, image_name: str) -> str:
+    """Map a logical image name to its host-global build-keyed alias."""
+    key = image_build_key(runtime, image_name)
+    safe = image_name.replace(".", "-")
+    return f"bubble-{safe}-{key}"
+
+
+def _image_properties(logical_name: str, build_key: str, parent: str) -> dict[str, str]:
+    return {
+        "user.bubble.managed": "true",
+        "user.bubble.logical_name": logical_name,
+        "user.bubble.build_key": build_key,
+        "user.bubble.build_schema": IMAGE_BUILD_SCHEMA,
+        "user.bubble.parent": parent,
+    }
+
+
 def _run_customize_script(runtime: ContainerRuntime, build_name: str):
     """Run the user customization script (~/.bubble/customize.sh) if it exists.
 
@@ -435,7 +421,6 @@ def build_image(
     image_name: str,
     *,
     force: bool = False,
-    still_needed: "Callable[[], bool] | None" = None,
     quiet: bool = False,
 ):
     """Build any known image by name. Builds parent images recursively if needed.
@@ -443,10 +428,6 @@ def build_image(
     With ``force=True``, deletes the existing image first so it gets rebuilt
     from scratch. Used by rebuild paths that detect configuration drift
     (tools hash, VS Code commit, customize script).
-
-    ``still_needed`` is an optional callback re-checked after acquiring the
-    build lock.  If it returns False, the rebuild is skipped — a concurrent
-    process already rebuilt and updated the drift markers.
 
     ``quiet`` suppresses the initial "Building X image..." announcement.
     Use when the caller already printed its own progress message.
@@ -456,41 +437,37 @@ def build_image(
         raise ValueError(f"Unknown image: {image_name}. Available: {available}")
 
     spec = IMAGES[image_name]
-    parent = spec["parent"]
+    logical_parent = spec["parent"]
 
     # Ensure parent image exists (recursive for our own images)
-    if parent in IMAGES and not runtime.image_exists(parent):
-        build_image(runtime, parent)
+    if logical_parent in IMAGES:
+        parent = desired_image_alias(runtime, logical_parent)
+        if not runtime.image_exists(parent):
+            build_image(runtime, logical_parent)
+    else:
+        parent = logical_parent
 
-    # Acquire shared locks on ALL ancestors (root-first to avoid deadlock)
-    # to prevent any ancestor from being rebuilt while we build from it.
-    # This fixes the race where a concurrent ancestor rebuild could either:
-    #   (a) produce a derived image built from a stale ancestor, or
-    #   (b) purge the derived image we just published.
-    # Multiple derived builds can proceed concurrently (shared locks coexist),
-    # but an ancestor rebuild (exclusive lock) waits for them all to finish.
-    #
-    # Then acquire an exclusive lock on this image to prevent concurrent
-    # builds of the same image.
+    alias = desired_image_alias(runtime, image_name)
+    build_key = alias.rsplit("-", 1)[-1]
+
+    # Immutable parents do not need shared ancestor locks.  The physical
+    # alias lock is enough to collapse identical builds while allowing
+    # different configurations to build in parallel.
     with ExitStack() as stack:
         for ancestor in _ancestor_chain(image_name):
-            stack.enter_context(_build_lock(ancestor, shared=True))
-        stack.enter_context(_build_lock(image_name))
-
-        if force and runtime.image_exists(image_name):
-            # Re-check drift after acquiring the lock — a concurrent process
-            # may have already rebuilt and updated the marker files.
-            if still_needed is not None and not still_needed():
-                print(f"{image_name} image already rebuilt by concurrent process.")
-                return
+            stack.enter_context(
+                _build_lock(runtime.qualify(desired_image_alias(runtime, ancestor)), shared=True)
+            )
+        stack.enter_context(_build_lock(runtime.qualify(alias)))
+        if force and runtime.image_exists(alias):
             print(f"Deleting existing {image_name} image for rebuild...")
-            runtime.image_delete(image_name)
+            runtime.image_delete(alias)
 
-        if runtime.image_exists(image_name):
+        if runtime.image_exists(alias):
             print(f"{image_name} image already built (by concurrent process).")
-            return
+            return alias
 
-        build_name = f"{image_name}-builder"
+        build_name = f"{alias.replace('.', '-')}-builder"
         if not quiet:
             print(f"Building {image_name} image...")
 
@@ -512,43 +489,26 @@ def build_image(
             runtime.exec_streaming(build_name, ["bash", "-c", script], on_line=_on_progress)
 
             # Install configured tools (only on base image — derived images inherit them)
-            enabled_tools = _install_tools_if_base(runtime, build_name, image_name)
+            _install_tools_if_base(runtime, build_name, image_name)
 
             # Run user customization script as the final build step
             _run_customize_script(runtime, build_name)
 
             # Publish as image
             runtime.stop(build_name)
-            runtime.publish(build_name, image_name)
+            runtime.publish(
+                build_name,
+                alias,
+                properties=_image_properties(image_name, build_key, parent),
+            )
         finally:
             try:
                 runtime.delete(build_name, force=True)
             except Exception:
                 pass
 
-        # Record the VS Code commit hash baked into the image (when vscode is a tool)
-        if enabled_tools and "vscode" in enabled_tools:
-            vc = get_vscode_commit()
-            if vc:
-                VSCODE_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-                VSCODE_COMMIT_FILE.write_text(vc + "\n")
-
-        # Record the tools hash baked into the image and purge stale derived images
-        if enabled_tools is not None:
-            TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-            TOOLS_HASH_FILE.write_text(tools_hash(enabled_tools) + "\n")
-            _purge_derived_images(runtime, image_name)
-
-        # Record the customize script hash (only on base — derived images inherit it)
-        if image_name == "base":
-            c_hash = customize_hash()
-            if c_hash:
-                CUSTOMIZE_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-                CUSTOMIZE_HASH_FILE.write_text(c_hash + "\n")
-            else:
-                CUSTOMIZE_HASH_FILE.unlink(missing_ok=True)
-
         print(f"{image_name} image built successfully.")
+        return alias
 
 
 def build_lean_toolchain_image(
@@ -566,67 +526,42 @@ def build_lean_toolchain_image(
     if not LEAN_VERSION_RE.fullmatch(version):
         raise ValueError(f"Invalid Lean toolchain version: {version!r}")
 
-    # If the requested base lean image is unknown and absent, fall back to the
-    # plain `lean` image (which we know how to rebuild from scratch).
-    if base_lean_image not in IMAGES and not runtime.image_exists(base_lean_image):
+    if base_lean_image in IMAGES:
+        parent = desired_image_alias(runtime, base_lean_image)
+        if not runtime.image_exists(parent):
+            parent = build_image(runtime, base_lean_image, quiet=True)
+    elif runtime.image_exists(base_lean_image):
+        parent = base_lean_image
+    else:
         base_lean_image = "lean"
+        parent = desired_image_alias(runtime, base_lean_image)
+        if not runtime.image_exists(parent):
+            parent = build_image(runtime, base_lean_image, quiet=True)
 
-    alias = f"lean-{version}"
-    # Incus container names only allow alphanumeric + hyphens
-    safe_alias = alias.replace(".", "-")
-    build_name = f"{safe_alias}-builder"
+    logical_name = f"lean-{version}"
+    alias = desired_image_alias(runtime, logical_name)
+    build_key = alias.rsplit("-", 1)[-1]
+    build_name = f"{alias}-builder"
 
-    # Acquire shared locks on the base lean image AND all its ancestors
-    # (root-first to avoid deadlock), preventing any ancestor rebuild
-    # from racing with this toolchain build.
     with ExitStack() as stack:
         if base_lean_image in IMAGES:
-            ancestors = _ancestor_chain(base_lean_image)
-            # Build any missing managed ancestors (e.g. "base") *before* taking
-            # their shared locks. build_image() acquires its own exclusive lock
-            # per image, so building an ancestor while we already hold its shared
-            # lock would self-deadlock (flock conflicts across fds, even within
-            # one process). After this, the shared-lock acquisitions below wait
-            # out any in-flight rebuild, leaving every ancestor present.
-            for ancestor in ancestors:
-                if not runtime.image_exists(ancestor):
-                    build_image(runtime, ancestor, quiet=True)
-            # Hold shared locks on the ancestors (root-first to avoid deadlock)
-            # for the rest of the build.
-            for ancestor in ancestors:
-                stack.enter_context(_build_lock(ancestor, shared=True))
-
-        # Ensure the base lean image itself exists, now that its ancestors are
-        # present and locked. Building it here, *while holding the ancestor
-        # locks*, closes the race in issue #314: a concurrent base rebuild purges
-        # `lean` right after rebuilding `base`, so if we built `lean` unlocked
-        # and then launched from it, the rebuild could delete `lean` in between
-        # and the launch would fail with `Image "lean" not found`. The ancestor
-        # locks block that rebuild until this toolchain build completes. The
-        # ancestors already exist, so build_image() won't recurse into them and
-        # only needs an exclusive lock on `base_lean_image` (which we don't yet
-        # hold) — no self-deadlock.
-        if base_lean_image in IMAGES and not runtime.image_exists(base_lean_image):
-            build_image(runtime, base_lean_image, quiet=True)
-
-        # Then the base lean image itself
-        stack.enter_context(_build_lock(base_lean_image, shared=True))
-        stack.enter_context(_build_lock(safe_alias))
-
+            for ancestor in [*_ancestor_chain(base_lean_image), base_lean_image]:
+                stack.enter_context(
+                    _build_lock(
+                        runtime.qualify(desired_image_alias(runtime, ancestor)), shared=True
+                    )
+                )
+        stack.enter_context(_build_lock(runtime.qualify(alias)))
         if force and runtime.image_exists(alias):
-            print(f"Deleting existing {alias} image for rebuild...")
+            print(f"Deleting existing {logical_name} image for rebuild...")
             runtime.image_delete(alias)
-
         if runtime.image_exists(alias):
-            print(f"{alias} image already built (by concurrent process).")
-            return
+            print(f"{logical_name} image already built (by concurrent process).")
+            return alias
 
-        print(f"Building {alias} image...")
-
-        # Clean up any leftover builder from a previous failed attempt
+        print(f"Building {logical_name} image...")
         _cleanup_builder(runtime, build_name)
-
-        runtime.launch(build_name, base_lean_image)
+        runtime.launch(build_name, parent)
         try:
             wait_for_container(runtime, build_name)
 
@@ -643,13 +578,16 @@ def build_lean_toolchain_image(
             _run_customize_script(runtime, build_name)
 
             runtime.stop(build_name)
-            if runtime.image_exists(alias):
-                runtime.image_delete(alias)
-            runtime.publish(build_name, alias)
+            runtime.publish(
+                build_name,
+                alias,
+                properties=_image_properties(logical_name, build_key, parent),
+            )
         finally:
             try:
                 runtime.delete(build_name, force=True)
             except Exception:
                 pass
 
-    print(f"{alias} image built successfully.")
+    print(f"{logical_name} image built successfully.")
+    return alias

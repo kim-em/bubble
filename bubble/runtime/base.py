@@ -90,7 +90,7 @@ class ContainerRuntime(ABC):
         """Mount a host path into the container."""
 
     @abstractmethod
-    def publish(self, name: str, alias: str):
+    def publish(self, name: str, alias: str, *, properties: dict[str, str] | None = None):
         """Publish a container as a reusable image."""
 
     @abstractmethod

@@ -191,6 +191,7 @@ class IncusRuntime(ContainerRuntime):
             name=c["name"],
             state=state_map.get(c["status"], c["status"].lower()),
             ipv4=ipv4,
+            image=(c.get("config") or {}).get("volatile.base_image"),
             disk_usage=disk_usage,
             created_at=_parse_ts("created_at"),
             last_used_at=_parse_ts("last_used_at"),
@@ -322,7 +323,7 @@ class IncusRuntime(ContainerRuntime):
             props["readonly"] = "true"
         self.add_device(name, device_name, "disk", **props)
 
-    def publish(self, name: str, alias: str):
+    def publish(self, name: str, alias: str, *, properties: dict[str, str] | None = None):
         # Stop first if running
         try:
             info = self._get_info(name)
@@ -345,6 +346,9 @@ class IncusRuntime(ContainerRuntime):
             args.append(self._q(""))  # e.g. "bubble-colima:" — target remote
         args += ["--alias", alias]
         self._run(args)
+        if properties:
+            assignments = [f"{key}={value}" for key, value in properties.items()]
+            self._run(["image", "set-property", self._q(alias), *assignments])
 
     def image_exists(self, alias: str) -> bool:
         try:

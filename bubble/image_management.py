@@ -6,9 +6,8 @@ import sys
 
 import click
 
-from .config import load_config
 from .hooks import select_hook
-from .images.builder import VSCODE_COMMIT_FILE, get_vscode_commit, is_build_locked
+from .images.builder import desired_image_alias, is_build_locked
 from .output import detail, step
 from .runtime.base import ContainerRuntime
 
@@ -36,98 +35,15 @@ def _spawn_background_bubble(args: list[str], log_path: str):
 
 
 def maybe_rebuild_base_image():
-    """If VS Code has updated since the base image was built, rebuild in background.
-
-    Only triggers when vscode is an enabled tool — otherwise there's nothing
-    to rebuild even if the host has `code` installed.
-    """
-    from .config import load_config
-    from .tools import resolve_tools
-
-    config = load_config()
-    if "vscode" not in resolve_tools(config):
-        return
-    commit = get_vscode_commit()
-    if not commit:
-        return
-    if VSCODE_COMMIT_FILE.exists() and VSCODE_COMMIT_FILE.read_text().strip() == commit:
-        return
-    if is_build_locked("base"):
-        return
-    _spawn_background_bubble(
-        ["images", "build", "base", "--force"],
-        "/tmp/bubble-vscode-rebuild.log",
-    )
+    """Compatibility no-op; build-key selection happens after target detection."""
 
 
 def maybe_rebuild_tools(runtime: ContainerRuntime, notices=None):
-    """If the resolved tool set has changed since base was built, rebuild base now.
-
-    Rebuilds synchronously so that the container launched afterwards uses a
-    fresh image with the correct tools baked in. The rebuild also purges
-    derived images (lean, etc.) so they get rebuilt on next use.
-    """
-    from .images.builder import TOOLS_HASH_FILE, build_image
-    from .tools import resolve_tools, tools_hash
-
-    config = load_config()
-    enabled = resolve_tools(config)
-    current_hash = tools_hash(enabled)
-
-    if TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash:
-        return
-
-    def _tools_still_stale():
-        return not (
-            TOOLS_HASH_FILE.exists() and TOOLS_HASH_FILE.read_text().strip() == current_hash
-        )
-
-    if notices:
-        notices.begin()
-    step("Base image configuration changed, rebuilding base image...")
-    build_image(runtime, "base", force=True, still_needed=_tools_still_stale, quiet=True)
+    """Compatibility no-op; the selected image is ensured by detection."""
 
 
 def maybe_rebuild_customize(notices=None):
-    """If the user customization script has changed, trigger a background rebuild of all images.
-
-    Compares the current hash of ~/.bubble/customize.sh against the stored
-    hash from the last build. If different (or script was added/removed),
-    triggers a background base image rebuild. Derived images are purged
-    during the rebuild so they pick up the changes on next use.
-    """
-    from .images.builder import CUSTOMIZE_HASH_FILE, customize_hash
-
-    current = customize_hash()
-
-    if CUSTOMIZE_HASH_FILE.exists():
-        stored = CUSTOMIZE_HASH_FILE.read_text().strip()
-    else:
-        stored = None
-
-    # No script and no previous hash — nothing to do
-    if current is None and stored is None:
-        return
-    # Hash matches — nothing to do
-    if current == stored:
-        return
-
-    if is_build_locked("base"):
-        return
-
-    if notices:
-        notices.begin()
-    if current is None:
-        step("Customization script removed, rebuilding base image in background...")
-    elif stored is None:
-        step("Customization script detected, rebuilding base image in background...")
-    else:
-        step("Customization script changed, rebuilding base image in background...")
-
-    _spawn_background_bubble(
-        ["images", "build", "base", "--force"],
-        "/tmp/bubble-customize-rebuild.log",
-    )
+    """Compatibility no-op; customization contents are part of the build key."""
 
 
 def detect_and_build_image(runtime, ref_path, t, restricted_network: bool = True):
@@ -155,8 +71,10 @@ def detect_and_build_image(runtime, ref_path, t, restricted_network: bool = True
         image_name = "base"
 
     pending_toolchain_build = None
-    is_toolchain_image = image_name.startswith("lean-v")
-    if not runtime.image_exists(image_name):
+    logical_image_name = image_name
+    is_toolchain_image = logical_image_name.startswith("lean-v")
+    physical_image_name = desired_image_alias(runtime, logical_image_name)
+    if not runtime.image_exists(physical_image_name):
         if is_toolchain_image:
             version = image_name[len("lean-") :]
             if restricted_network:
@@ -170,7 +88,9 @@ def detect_and_build_image(runtime, ref_path, t, restricted_network: bool = True
                 from .images.builder import build_lean_toolchain_image
 
                 try:
-                    build_lean_toolchain_image(runtime, version)
+                    built_alias = build_lean_toolchain_image(runtime, version)
+                    if isinstance(built_alias, str):
+                        physical_image_name = built_alias
                     detail(f"{image_name} image ready.")
                 except Exception as e:
                     # Fail fast: falling back to the plain `lean` image here
@@ -193,30 +113,30 @@ def detect_and_build_image(runtime, ref_path, t, restricted_network: bool = True
                     f" (building {image_name} in background for next time)"
                 )
                 pending_toolchain_build = version
-                image_name = "lean"
-        if not runtime.image_exists(image_name):
-            step(f"Building {image_name} image (one-time setup, may take a few minutes)...")
+                logical_image_name = "lean"
+                physical_image_name = desired_image_alias(runtime, logical_image_name)
+        if not is_toolchain_image and not runtime.image_exists(physical_image_name):
+            step(f"Building {logical_image_name} image (one-time setup, may take a few minutes)...")
             from .images.builder import build_image
 
-            build_image(runtime, image_name, quiet=True)
-            detail(f"{image_name} image ready.")
+            physical_image_name = build_image(runtime, logical_image_name, quiet=True)
+            detail(f"{logical_image_name} image ready.")
     elif is_toolchain_image:
         version = image_name[len("lean-") :]
         detail(f"Using cached toolchain image ({version})")
 
     if pending_toolchain_build:
-        _background_build_lean_toolchain(pending_toolchain_build)
+        _background_build_lean_toolchain(runtime, pending_toolchain_build)
 
-    return hook, image_name
+    return hook, physical_image_name
 
 
-def _background_build_lean_toolchain(version: str):
+def _background_build_lean_toolchain(runtime: ContainerRuntime, version: str):
     """Fire off a background build of a toolchain-specific Lean image."""
     image_alias = f"lean-{version}"
-    # Incus container names only allow alphanumeric + hyphens
-    safe_alias = image_alias.replace(".", "-")
+    physical_alias = desired_image_alias(runtime, image_alias)
     # Skip if a build is already in progress (avoid spawning redundant processes)
-    if is_build_locked(safe_alias):
+    if is_build_locked(runtime.qualify(physical_alias)):
         return
     detail(f"Building {image_alias} image in background for next time...")
     _spawn_background_bubble(

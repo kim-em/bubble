@@ -128,7 +128,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble pause <name>` | Freeze a bubble |
 | `bubble pop <name>` | Pop a bubble (delete permanently) |
 | `bubble cleanup` | Pop all clean bubbles (no unsaved work) |
-| `bubble images list\|build\|delete` | Manage base images |
+| `bubble images list\|build\|delete\|prune` | Manage base images |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
 | `bubble automation install\|remove\|status` | Manage periodic jobs |
@@ -157,7 +157,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 ## Images
 
-Images are built automatically on first use. Any enabled [tools](#tools) are installed in the `base` image and inherited by all derived images.
+Images are built automatically on first use. Any enabled [tools](#tools) are installed in the `base` image and inherited by all derived images. Physical Incus aliases are keyed by the complete trusted build recipe (parent, scripts, tools, customization, editor commit, and toolchain), so isolated `BUBBLE_HOME` stores reuse an identical host image without allowing one configuration to replace another's image.
 
 | Image | Contents |
 |-------|----------|
@@ -167,6 +167,8 @@ Images are built automatically on first use. Any enabled [tools](#tools) are ins
 | `lean-v4.X.Y` | lean + specific toolchain pre-installed (built lazily on demand) |
 
 `base`, `lean`, and `python` are static images you can rebuild with `bubble images build <name>`. Versioned `lean-v4.X.Y` images are built automatically in the background when a project uses a stable/RC toolchain not yet cached — the current bubble proceeds immediately with elan downloading the toolchain on demand, and the next bubble for that version starts instantly.
+
+Recipe changes select a new image variant rather than deleting existing derived images. Legacy mutable aliases are left untouched during migration. `bubble images list` shows Bubble's logical and physical names; `bubble images prune --older-than 30` previews removable old variants, and `--execute` performs the deletion while retaining current, newest, and in-use variants.
 
 When VS Code is the configured editor and elan is installed, the base image also includes pre-baked VS Code Lean 4 extensions and an auto-cache extension. For mathlib or mathlib-dependent projects, a VS Code terminal automatically runs `lake exe cache get` when the workspace opens.
 
@@ -178,6 +180,8 @@ Set `BUBBLE_HOME` to override the data directory (default: `~/.bubble`):
 ```bash
 export BUBBLE_HOME=/data/bubble
 ```
+
+This isolates configuration and per-bubble state. Incus images, host daemons, and their coordination locks remain host-global and are safely shared by build identity.
 
 ```toml
 [runtime]
