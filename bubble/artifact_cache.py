@@ -353,7 +353,7 @@ def _upstream_client():
                     http2=True,
                     follow_redirects=False,
                     trust_env=False,
-                    headers={"User-Agent": "bubble"},
+                    headers={"User-Agent": "bubble", "Accept-Encoding": "identity"},
                     limits=httpx.Limits(
                         max_connections=64,
                         max_keepalive_connections=64,
@@ -811,8 +811,8 @@ def ensure_daemon_endpoint() -> dict | None:
     if not installed:
         install_artifact_cache_daemon(skip_if=lambda: endpoint_compatible(read_live_endpoint()))
     endpoint = wait_for_endpoint(
-        attempts=20 if not installed else 1,
-        delay=0.5 if not installed else 0,
+        attempts=20 if not installed else 3,
+        delay=0.5 if not installed else 0.25,
         compatible=True,
     )
     if endpoint is not None:

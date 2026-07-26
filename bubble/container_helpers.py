@@ -144,9 +144,15 @@ def reapply_network_after_restart(runtime: ContainerRuntime, name: str):
 
     config = load_config()
     apply_network(runtime, name, config, extra_domains=list(extra_domains))
-    from .artifact_cache import container_has_cache_token, refresh_container_cache
+    from .artifact_cache import container_cache_capability, refresh_container_cache
 
-    if container_has_cache_token(name) and not refresh_container_cache(runtime, name):
+    cache_capability = container_cache_capability(name)
+    if cache_capability is not None and not refresh_container_cache(runtime, name):
+        lake_services = cache_capability[1].get("lake_service_names") or []
+        if lake_services:
+            raise RuntimeError(
+                "could not refresh this bubble's requested Lake cache service endpoint"
+            )
         detail(
             "Warning: could not refresh this bubble's artifact-cache endpoint; "
             "direct public cache access remains available."

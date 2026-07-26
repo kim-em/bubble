@@ -216,3 +216,22 @@ class TestEnsureRunningReapplies:
 
         assert runtime.start_calls == ["fail-bubble"]
         assert runtime.stop_calls == ["fail-bubble"], "container must be stopped on replay failure"
+
+    def test_lake_cache_refresh_failure_stops_container(self, tmp_data_dir, monkeypatch):
+        from bubble.artifact_cache import generate_cache_token
+
+        register_bubble("cached", "org/repo", network_enabled=True, extra_domains=[])
+        generate_cache_token(
+            "cached",
+            {"lake-0-artifacts": ["https://cache.example/artifacts"]},
+            lake_service_names=("project-cache",),
+        )
+        runtime = _RecordingRuntime("cached", state="stopped")
+        monkeypatch.setattr("bubble.config.load_config", lambda: {})
+        monkeypatch.setattr("bubble.artifact_cache.refresh_container_cache", lambda *_args: False)
+
+        with pytest.raises(RuntimeError, match="requested Lake cache service"):
+            ensure_running(runtime, "cached")
+
+        assert runtime.start_calls == ["cached"]
+        assert runtime.stop_calls == ["cached"]

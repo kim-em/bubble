@@ -565,6 +565,16 @@ def _check_reattach_options(
         )
 
 
+def _require_explicit_lake_cache(cache_ok, lake_cache_services) -> None:
+    """Do not turn a requested Lake service into a silent cold build."""
+    if not cache_ok and lake_cache_services:
+        raise click.ClickException(
+            "requested Lake cache service setup failed; check that [artifact_cache] enabled "
+            "is not false, run 'bubble cache start' for diagnostics, or remove "
+            "--lake-cache-service"
+        )
+
+
 def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=False, target_hint=""):
     """Re-attach to an existing container."""
     # ``ensure_running`` re-applies the network allowlist on stop/start
@@ -1231,16 +1241,17 @@ def _open_single(
 
     # Local flow
     runtime = get_runtime(config)
+    reattach_options = {
+        "allow_domains": allow_domains,
+        "mount_specs": mount_specs,
+        "allow_push": allow_push,
+        "lake_cache_services": validated_lake_services,
+    }
 
     # Check if target matches an existing container
     existing = find_existing_container(runtime, target)
     if existing:
-        _check_reattach_options(
-            allow_domains=allow_domains,
-            mount_specs=mount_specs,
-            allow_push=allow_push,
-            lake_cache_services=validated_lake_services,
-        )
+        _check_reattach_options(**reattach_options)
         if machine_readable:
             project_dir = detect_project_dir(runtime, existing)
             machine_readable_output(
@@ -1300,11 +1311,7 @@ def _open_single(
         ref=t.ref,
     )
     if existing:
-        _check_reattach_options(
-            allow_domains=allow_domains,
-            mount_specs=mount_specs,
-            allow_push=allow_push,
-        )
+        _check_reattach_options(**reattach_options)
         if machine_readable:
             project_dir = detect_project_dir(runtime, existing)
             machine_readable_output(
@@ -1405,6 +1412,7 @@ def _open_single(
                 mathlib=needs_mathlib_cache,
                 lake_services=validated_lake_services,
             )
+            _require_explicit_lake_cache(cache_ok, validated_lake_services)
             if not cache_ok:
                 from .output import detail
 
