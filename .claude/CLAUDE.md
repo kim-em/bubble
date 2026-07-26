@@ -64,7 +64,7 @@ The `hooks/` package provides a pluggable system for language-specific behavior.
 `ContainerRuntime` (base.py) is an abstract interface. `IncusRuntime` is the only implementation today. Docker/Podman support is a stretch goal — the abstraction exists to make that possible without refactoring.
 
 ### Git Object Sharing
-The core performance optimization. Host maintains bare mirror repos (`git clone --bare`). Containers clone with `git clone --reference /shared/git/repo.git url` — git alternates share immutable objects. Each container has fully independent refs/branches/working tree. `update_all_repos()` discovers repos from the `~/.bubble/git/*.git` directory listing.
+The core performance optimization. Host maintains bare mirror repos (`git clone --bare`) under `~/.bubble/git/github.com/<owner>/<repo>.git`. Containers clone with owner-qualified read-only references under `/shared/git/<owner>/<repo>.git`, so git alternates share immutable objects without short-name collisions. Each container has fully independent refs/branches/working tree. `update_all_repos()` discovers repositories from the nested host-global store.
 
 ### Image Registry
 Images are defined in `builder.py`'s `IMAGES` dict with script and parent references. Building is recursive — if a parent image is missing, it's built first. There are only two static images: `base` (from Ubuntu 24.04) and `lean` (from base, fallback elan install). Editors and language tools are installed as pluggable tools on the base image, eliminating editor-specific image variants.

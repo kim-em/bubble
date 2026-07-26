@@ -50,7 +50,10 @@ HOST_DATA_DIR = host_home() / ".bubble"
 # wrote and write tokens the daemon never reads. See issue #304.
 AUTH_PROXY_DIR = HOST_DATA_DIR
 REGISTRY_FILE = DATA_DIR / "registry.json"
-GIT_DIR = DATA_DIR / "git"
+# Trusted mirrors are host-global. A private BUBBLE_HOME still isolates
+# configuration and mutable bubble state, but should not force another clone.
+GIT_DIR = HOST_DATA_DIR / "git" / "github.com"
+LEGACY_GIT_DIR = DATA_DIR / "git"
 REPOS_FILE = DATA_DIR / "repos.json"
 CLOUD_STATE_FILE = DATA_DIR / "cloud.json"
 CLOUD_KEY_FILE = DATA_DIR / "cloud_key"
@@ -110,8 +113,7 @@ DEFAULT_CONFIG = {
 
 def ensure_dirs():
     """Create data directories if they don't exist."""
-    for d in [DATA_DIR, GIT_DIR]:
-        d.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def is_first_run() -> bool:

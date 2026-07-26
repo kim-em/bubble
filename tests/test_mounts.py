@@ -1876,6 +1876,27 @@ class TestEditorConfigProvisioning:
         assert "/home/user/.emacs.d/eln-cache" in all_cmds
 
 
+def test_dependency_mirrors_use_owner_qualified_container_paths(mock_runtime, tmp_data_dir):
+    from bubble.provisioning import provision_container
+
+    ref_path = tmp_data_dir / "repo.git"
+    ref_path.mkdir()
+    dep_path = tmp_data_dir / "shared.git"
+    dep_path.mkdir()
+    provision_container(
+        mock_runtime,
+        "test-container",
+        "base",
+        ref_path,
+        "repo.git",
+        {},
+        dep_mounts={"other/shared": dep_path},
+    )
+
+    disk_calls = [c for c in mock_runtime.calls if c[0] == "add_disk"]
+    assert any(call[4] == "/shared/git/other/shared.git" for call in disk_calls)
+
+
 class TestSharedCacheOverlay:
     """Test shared cache overlay provisioning."""
 

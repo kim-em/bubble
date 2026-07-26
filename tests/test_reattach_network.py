@@ -110,7 +110,9 @@ class TestRecoverExtraDomains:
     def test_prefers_commit_over_branch(self, tmp_data_dir, monkeypatch):
         # Verify that recovery passes ``commit`` (not ``branch``) as the ref so
         # branch tip drift in the bare mirror doesn't widen the allowlist.
-        bare_repo = tmp_data_dir / "git" / "repo.git"
+        from bubble.git_store import bare_repo_path
+
+        bare_repo = bare_repo_path("owner/repo")
         bare_repo.mkdir(parents=True)
 
         seen_refs = []

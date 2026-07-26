@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from ..git_store import parse_github_url
+from ..git_store import canonical_repo, parse_github_url
 from ..lean import LEAN_VERSION_RE
 from ..runtime.base import ContainerRuntime
 from . import GitDependency, Hook
@@ -394,10 +394,10 @@ class LeanHook(Hook):
 
         populated = 0
         for dep in self._git_deps:
-            repo_name = dep.org_repo.split("/")[-1]
+            org_repo = canonical_repo(dep.org_repo)
             # All values are validated (_SAFE_NAME_RE, hex SHA, parse_github_url)
             # but quote everything for defense in depth
-            q_bare = shlex.quote(f"/shared/git/{repo_name}.git")
+            q_bare = shlex.quote(f"/shared/git/{org_repo}.git")
             q_url = shlex.quote(dep.url)
             q_rev = shlex.quote(dep.rev)
             q_pkg = shlex.quote(f"{project_dir}/.lake/packages/{dep.name}")

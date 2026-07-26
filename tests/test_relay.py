@@ -232,8 +232,8 @@ class TestValidateRelayTarget:
         import bubble.relay
 
         # Create fake bare repo directory
-        git_dir = relay_env / "git"
-        git_dir.mkdir()
+        git_dir = relay_env / "git" / "github.com" / "leanprover"
+        git_dir.mkdir(parents=True)
         (git_dir / "lean4.git").mkdir()
 
         # Also need a repos.json for the registry
@@ -246,8 +246,8 @@ class TestValidateRelayTarget:
     def test_valid_pr_target(self, relay_env):
         import bubble.relay
 
-        git_dir = relay_env / "git"
-        git_dir.mkdir()
+        git_dir = relay_env / "git" / "github.com" / "leanprover"
+        git_dir.mkdir(parents=True)
         (git_dir / "lean4.git").mkdir()
         repos_file = relay_env / "repos.json"
         repos_file.write_text("{}")

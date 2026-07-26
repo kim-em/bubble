@@ -100,33 +100,33 @@ stripped before parsing. Trailing slashes are stripped.
 
 ### 1.3 Git store (bare repo management)
 
-**Location:** `~/.bubble/git/`
+**Location:** `~/.bubble/git/github.com/<owner>/`
 
 On first use of a repository, create a bare mirror:
 
 ```
-git clone --bare https://github.com/owner/repo.git ~/.bubble/git/repo.git
+git clone --bare https://github.com/owner/repo.git ~/.bubble/git/github.com/owner/repo.git
 ```
 
 Then configure fetch refs:
 
 ```
-git -C ~/.bubble/git/repo.git config remote.origin.fetch '+refs/heads/*:refs/heads/*'
-git -C ~/.bubble/git/repo.git config --add remote.origin.fetch '+refs/tags/*:refs/tags/*'
-git -C ~/.bubble/git/repo.git config --add remote.origin.fetch '+refs/pull/*/head:refs/pull/*/head'
+git -C ~/.bubble/git/github.com/owner/repo.git config remote.origin.fetch '+refs/heads/*:refs/heads/*'
+git -C ~/.bubble/git/github.com/owner/repo.git config --add remote.origin.fetch '+refs/tags/*:refs/tags/*'
+git -C ~/.bubble/git/github.com/owner/repo.git config --add remote.origin.fetch '+refs/pull/*/head:refs/pull/*/head'
 ```
 
-The bare repo path is derived from the repo name only (not the owner):
-`~/.bubble/git/<repo>.git`.
+The bare repo path is derived from the normalized full repository identity:
+`~/.bubble/git/github.com/<owner>/<repo>.git`.
 
 **PR ref fetching:** When the target is a PR, fetch the specific ref:
 
 ```
-git -C ~/.bubble/git/repo.git fetch origin refs/pull/123/head:refs/pull/123/head
+git -C ~/.bubble/git/github.com/owner/repo.git fetch origin refs/pull/123/head:refs/pull/123/head
 ```
 
 **Concurrency:** Bare repo operations (init, fetch) MUST use per-repo file
-locking (`~/.bubble/git/<repo>.git.lock`) to prevent concurrent git operations
+locking (`~/.bubble/locks/git/<repository-hash>.lock`) to prevent concurrent git operations
 from corrupting the repo.
 
 **Idempotency:** `init_bare_repo` is idempotent — if the bare repo exists,
@@ -1212,8 +1212,8 @@ container lifecycle, but a complete implementation should include them:
 | Path | Contents |
 |------|----------|
 | `~/.bubble/config.toml` | User settings |
-| `~/.bubble/git/` | Bare repo mirrors |
-| `~/.bubble/git/<repo>.git.lock` | Per-repo file locks |
+| `~/.bubble/git/github.com/<owner>/<repo>.git` | Host-global bare repo mirrors |
+| `~/.bubble/locks/git/<repository-hash>.lock` | Per-repo file locks |
 | `~/.bubble/repos.json` | Learned repo short name mappings |
 | `~/.bubble/registry.json` | Bubble state tracking |
 | `~/.bubble/relay.sock` | Relay daemon Unix socket (Linux) |
