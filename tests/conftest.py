@@ -165,6 +165,24 @@ def tmp_data_dir(tmp_path, monkeypatch):
     except ImportError:
         pass
 
+    # Patch host-global artifact cache paths.
+    import bubble.artifact_cache as artifact_cache_mod
+
+    artifact_dir = data_dir / "artifact-cache"
+    monkeypatch.setattr(artifact_cache_mod, "HOST_DATA_DIR", data_dir)
+    monkeypatch.setattr(artifact_cache_mod, "ARTIFACT_CACHE_DIR", artifact_dir)
+    monkeypatch.setattr(artifact_cache_mod, "ARTIFACT_CACHE_OBJECTS", artifact_dir / "objects")
+    monkeypatch.setattr(
+        artifact_cache_mod, "ARTIFACT_CACHE_TOKENS", data_dir / "artifact-cache-tokens.json"
+    )
+    monkeypatch.setattr(
+        artifact_cache_mod, "ARTIFACT_CACHE_ENDPOINT_FILE", data_dir / "artifact-cache.endpoint"
+    )
+    monkeypatch.setattr(artifact_cache_mod, "ARTIFACT_CACHE_LOG", data_dir / "artifact-cache.log")
+    monkeypatch.setattr(
+        artifact_cache_mod, "ARTIFACT_CACHE_LOCK", data_dir / "locks" / "artifact-cache.lock"
+    )
+
     # Patch auth_proxy module
     try:
         import bubble.auth_proxy as auth_proxy_mod

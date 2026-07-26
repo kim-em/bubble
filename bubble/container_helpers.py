@@ -144,6 +144,13 @@ def reapply_network_after_restart(runtime: ContainerRuntime, name: str):
 
     config = load_config()
     apply_network(runtime, name, config, extra_domains=list(extra_domains))
+    from .artifact_cache import container_has_cache_token, refresh_container_cache
+
+    if container_has_cache_token(name) and not refresh_container_cache(runtime, name):
+        detail(
+            "Warning: could not refresh this bubble's artifact-cache endpoint; "
+            "direct public cache access remains available."
+        )
 
 
 def recover_extra_domains(info: dict) -> list[str] | None:
@@ -290,11 +297,15 @@ def apply_network(
     # using the legacy proxy-device flow don't need this (the proxy
     # device delivers traffic on the container's own loopback).
     auth_endpoint = _resolve_auth_proxy_endpoint_for_allowlist(gh_level)
-    if domains or auth_endpoint:
+    proxy_endpoints = [auth_endpoint] if auth_endpoint else []
+    artifact_endpoint = _resolve_artifact_cache_endpoint_for_allowlist(name)
+    if artifact_endpoint and artifact_endpoint not in proxy_endpoints:
+        proxy_endpoints.append(artifact_endpoint)
+    if domains or proxy_endpoints:
         try:
             from .network import apply_allowlist
 
-            apply_allowlist(runtime, name, domains, auth_proxy_endpoint=auth_endpoint)
+            apply_allowlist(runtime, name, domains, proxy_endpoints=proxy_endpoints)
             detail("Network allowlist applied.")
         except (RuntimeError, OSError, ValueError) as e:
             raise click.ClickException(f"Failed to apply network allowlist: {e}")
@@ -330,6 +341,24 @@ def _resolve_auth_proxy_endpoint_for_allowlist(gh_level: str) -> tuple[str, int]
     # Don't punch a hole for loopback — that's the legacy bind fallback
     # and the proxy device handles delivery internally.
     if host == "127.0.0.1":
+        return None
+    return (host, port)
+
+
+def _resolve_artifact_cache_endpoint_for_allowlist(name: str) -> tuple[str, int] | None:
+    """Return the artifact-cache bridge endpoint for a previously granted bubble."""
+    from .artifact_cache import container_has_cache_token, read_live_endpoint
+
+    if not container_has_cache_token(name):
+        return None
+    endpoint = read_live_endpoint()
+    tcp = endpoint.get("tcp") if endpoint else None
+    if not isinstance(tcp, dict):
+        return None
+    host, port = tcp.get("host"), tcp.get("port")
+    if not isinstance(host, str) or host.startswith("127."):
+        return None
+    if not isinstance(port, int) or isinstance(port, bool):
         return None
     return (host, port)
 

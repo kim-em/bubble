@@ -544,7 +544,9 @@ def _open_remote(
             _ephemeral_pop_and_exit(name, exit_code)
 
 
-def _check_reattach_options(*, allow_domains=(), mount_specs=(), allow_push=()):
+def _check_reattach_options(
+    *, allow_domains=(), mount_specs=(), allow_push=(), lake_cache_services=()
+):
     """Reject launch-only security options that cannot be retrofitted onto an existing bubble."""
     flags = []
     if allow_domains:
@@ -553,6 +555,8 @@ def _check_reattach_options(*, allow_domains=(), mount_specs=(), allow_push=()):
         flags.append("--mount")
     if allow_push:
         flags.append("--allow-push")
+    if lake_cache_services:
+        flags.append("--lake-cache-service")
     if flags:
         joined = ", ".join(flags)
         raise click.ClickException(
@@ -664,6 +668,17 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
     multiple=True,
     metavar="DOMAIN",
     help="Add a domain to this bubble's network allowlist (repeatable, local only)",
+)
+@click.option(
+    "--lake-cache-service",
+    "lake_cache_services",
+    type=(str, str, str),
+    multiple=True,
+    metavar="NAME ARTIFACT_URL REVISION_URL",
+    help=(
+        "Expose a named anonymous Lake download service through Bubble's host-global "
+        "GET-only cache (repeatable, local only)."
+    ),
 )
 @click.option("--name", "custom_name", type=str, help="Custom container name")
 @click.option(
@@ -798,6 +813,7 @@ def open_cmd(
     machine_readable,
     network,
     allow_domains,
+    lake_cache_services,
     custom_name,
     command,
     ephemeral,
@@ -865,6 +881,7 @@ def open_cmd(
                 machine_readable=machine_readable,
                 network=network,
                 allow_domains=allow_domains,
+                lake_cache_services=lake_cache_services,
                 custom_name=custom_name,
                 command=command,
                 ephemeral=ephemeral,
@@ -926,6 +943,7 @@ def _open_single(
     machine_readable,
     network,
     allow_domains,
+    lake_cache_services,
     custom_name,
     command,
     ephemeral,
@@ -952,6 +970,18 @@ def _open_single(
         target = "./" + target
 
     config = load_config()
+
+    from .artifact_cache import validate_lake_service
+
+    try:
+        validated_lake_services = tuple(
+            validate_lake_service(*spec) for spec in lake_cache_services
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    service_names = [service.name for service in validated_lake_services]
+    if len(set(service_names)) != len(service_names):
+        raise click.ClickException("--lake-cache-service names must be unique")
 
     # --github-security: per-launch override of security.github. Lockdown
     # still wins. Apply by mutating a config copy so all downstream
@@ -1106,6 +1136,12 @@ def _open_single(
         codex_config = config.get("codex", {}).get("config", True)
 
     if remote_host:
+        if validated_lake_services:
+            click.echo(
+                "Error: --lake-cache-service is not supported with remote/cloud bubbles",
+                err=True,
+            )
+            sys.exit(1)
         if allow_domains:
             click.echo(
                 "Error: --allow-domain is not supported with remote/cloud bubbles",
@@ -1203,6 +1239,7 @@ def _open_single(
             allow_domains=allow_domains,
             mount_specs=mount_specs,
             allow_push=allow_push,
+            lake_cache_services=validated_lake_services,
         )
         if machine_readable:
             project_dir = detect_project_dir(runtime, existing)
@@ -1358,6 +1395,24 @@ def _open_single(
             extra_domains=extra_domains,
         )
 
+        needs_mathlib_cache = bool(hook and hook.uses_mathlib_cache())
+        if needs_mathlib_cache or validated_lake_services:
+            from .artifact_cache import setup_container_cache
+
+            cache_ok = setup_container_cache(
+                runtime,
+                name,
+                mathlib=needs_mathlib_cache,
+                lake_services=validated_lake_services,
+            )
+            if not cache_ok:
+                from .output import detail
+
+                detail(
+                    "Warning: host artifact cache setup failed; continuing with direct "
+                    "public cache downloads. Run 'bubble cache start' for diagnostics."
+                )
+
         # Set up GitHub auth BEFORE clone — network allowlisting strips
         # github.com from allowed domains when using the auth proxy, so
         # git must be configured to route through the proxy first.
@@ -1488,6 +1543,9 @@ def _open_single(
         from .provisioning import remove_cache_copies
 
         remove_cache_copies(name)
+        from .artifact_cache import remove_cache_tokens
+
+        remove_cache_tokens(name)
         raise
 
 
@@ -1495,6 +1553,7 @@ def _open_single(
 # Register commands from submodules
 # ---------------------------------------------------------------------------
 
+from .commands.cache_cmd import register_cache_commands  # noqa: E402
 from .commands.cloud_cmd import register_cloud_commands  # noqa: E402
 from .commands.completion import register_completion_command  # noqa: E402
 from .commands.doctor import register_doctor_command  # noqa: E402
@@ -1516,6 +1575,7 @@ register_infrastructure_commands(main)
 register_relay_commands(main)
 register_remote_commands(main)
 register_cloud_commands(main)
+register_cache_commands(main)
 register_security_commands(main)
 register_settings_commands(main)
 register_doctor_command(main)

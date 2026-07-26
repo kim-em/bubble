@@ -58,7 +58,7 @@ The primary command is `bubble <target>`. A custom `BubbleGroup(click.Group)` ro
 Short names are resolved via `RepoRegistry`, which learns mappings automatically on first use. Local paths use the local `.git` as the `--reference` source for fast cloning, and support unpushed branches by fetching refs from the mounted local repo.
 
 ### Language Hooks
-The `hooks/` package provides a pluggable system for language-specific behavior. Each `Hook` subclass implements `detect()` (check bare repo for language markers), `image_name()`, `post_clone()`, `network_domains()`, and `shared_mounts()`. Hook detection runs against the host bare repo via `git show <ref>:<file>` — no container needed. The `shared_mounts()` method returns `(host_dir_name, container_path, env_var)` tuples for writable mounts shared across containers (e.g., Lean's mathlib cache at `~/.bubble/mathlib-cache/`).
+The `hooks/` package provides a pluggable system for language-specific behavior. Each `Hook` subclass implements `detect()` (check bare repo for language markers), `image_name()`, `post_clone()`, `network_domains()`, and `shared_mounts()`. Hook detection runs against the host bare repo via `git show <ref>:<file>` — no container needed. The `shared_mounts()` method returns `(host_dir_name, container_path, env_var)` tuples for local working caches; `uses_mathlib_cache()` separately opts a hook into the host-global GET-only upstream cache.
 
 ### Runtime Abstraction
 `ContainerRuntime` (base.py) is an abstract interface. `IncusRuntime` is the only implementation today. Docker/Podman support is a stretch goal — the abstraction exists to make that possible without refactoring.
@@ -204,6 +204,10 @@ Always use `uv run pytest` to run tests (not bare `pytest` or `python3 -m pytest
 - `~/.bubble/auth-tokens.json` — auth proxy token→{container, owner, repo} mapping (mode 0600)
 - `~/.bubble/auth-proxy.port` — auth proxy daemon TCP port
 - `~/.bubble/auth-proxy.log` — auth proxy request log
+- `~/.bubble/artifact-cache/` — host-global, LRU-bounded public artifact responses
+- `~/.bubble/artifact-cache-tokens.json` — per-container immutable upstream route grants
+- `~/.bubble/artifact-cache.endpoint` — bridge listener metadata for the cache daemon
+- `~/.bubble/artifact-cache.log` — artifact-cache request log
 - `~/.bubble/tunnels/` — SSH tunnel PID files (keyed by remote host spec)
 - `~/.bubble/cloud.json` — Hetzner Cloud server state (ID, IP, SSH key ID)
 - `~/.bubble/cloud_key` — SSH private key for cloud server (ed25519, mode 0600)

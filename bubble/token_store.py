@@ -104,6 +104,18 @@ class TokenStore:
             self._maybe_reload()
             return self._tokens.get(token)
 
+    def values(self) -> list[Any]:
+        """Return a snapshot of all stored values."""
+        with self._thread_lock:
+            self._maybe_reload()
+            return list(self._tokens.values())
+
+    def items(self) -> list[tuple[str, Any]]:
+        """Return a snapshot of all token/value pairs."""
+        with self._thread_lock:
+            self._maybe_reload()
+            return list(self._tokens.items())
+
     def _maybe_reload(self):
         """Reload from disk if the file has been modified."""
         try:
@@ -182,6 +194,7 @@ def setup_file_logging(target_logger: logging.Logger, log_path: Path):
     """Configure timestamped file-based request logging."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(str(log_path))
+    os.chmod(log_path, 0o600)
     handler.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
     target_logger.addHandler(handler)
     target_logger.setLevel(logging.INFO)

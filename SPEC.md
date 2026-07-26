@@ -49,6 +49,7 @@ equivalent to `bubble open <url>`.
 | `--no-interactive` | flag | | Create but don't attach |
 | `--machine-readable` | flag (hidden) | | Output JSON for orchestration |
 | `--network/--no-network` | flag | `--network` | Apply network allowlist |
+| `--lake-cache-service NAME ARTIFACT_URL REVISION_URL` | triple (repeatable) | | Add an anonymous Lake download service through the host-global cache (local only) |
 | `--name` | string | | Custom container name |
 | `--command` | string | | Run command via SSH (implies shell) |
 | `--path` | flag | | Force interpretation as local path |
@@ -364,6 +365,27 @@ of the versioned image for next time.
 > If you suspect the cache has already been compromised, delete
 > `~/.bubble/mathlib-cache/`.
 
+**Host-global upstream cache:** Bubble MUST route Mathlib's anonymous downloads
+through a host-global HTTP cache, independent of `BUBBLE_HOME`. The container
+receives a per-container unguessable capability URL in
+`MATHLIB_CACHE_GET_URL`; it never receives an upstream URL. The route tries the
+current `mathlib4-master` Azure container and then the legacy `mathlib4`
+container on a 404. The daemon accepts `GET` and `HEAD` only, follows no
+redirects, caches only successful responses atomically, preserves response
+content types, bounds storage with LRU eviction (50 GiB by default), and
+revokes the capability when the bubble is popped. Every supported cache path
+is revision- or content-addressed and treated as immutable. Set
+`[artifact_cache] enabled = false` to skip proxy setup and use direct public
+downloads instead.
+
+`--lake-cache-service NAME ARTIFACT_URL REVISION_URL` adds a named anonymous
+Lake S3-style download service. Bubble validates both upstreams as plain HTTPS
+base URLs, grants separate artifact and revision routes, writes a Lake system
+configuration at Lake's default `~/.lake/config.toml` path inside the container,
+and sets `LAKE_ARTIFACT_CACHE=true` and `LAKE_RESTORE_ARTIFACTS=true`. Multiple services
+are allowed; the first is the generated default. The flag is creation-only and
+local-only. It does not grant PUT/POST access or configure an upload key.
+
 **Post-clone behavior:**
 - Pre-populate Lake dependencies from `lake-manifest.json` (see 2.4)
 - Write auto-build command to `~/.bubble-fetch-cache` marker file
@@ -372,8 +394,13 @@ of the versioned image for next time.
 - For other Lean projects: `cd <dir> && lake build`
 
 **Network domains:** `releases.lean-lang.org`, `reservoir.lean-lang.org`,
-`reservoir.lean-cache.cloud`, `mathlib4.lean-cache.cloud`,
-`lakecache.blob.core.windows.net`
+`reservoir.lean-cache.cloud`, `mathlib4.lean-cache.cloud`, and
+`lakecache.blob.core.windows.net`. The public cache hosts remain a direct
+fallback if the optional host daemon cannot start during bubble creation;
+successful proxy setup directs normal Mathlib traffic through the host-global
+cache. The supervised daemon restarts automatically after crashes. Explicitly
+running `bubble cache stop` warns that cache downloads in existing bubbles will
+fail until `bubble cache start` is run.
 
 ### 2.3 Python hook
 
@@ -1232,6 +1259,10 @@ container lifecycle, but a complete implementation should include them:
 | `~/.bubble/auth-tokens.json` | Auth proxy tokens (mode 0600) |
 | `~/.bubble/auth-proxy.port` | Auth proxy TCP port |
 | `~/.bubble/auth-proxy.log` | Auth proxy request log |
+| `~/.bubble/artifact-cache/` | Host-global GET-only upstream response cache |
+| `~/.bubble/artifact-cache-tokens.json` | Per-container cache route capabilities (mode 0600) |
+| `~/.bubble/artifact-cache.endpoint` | Artifact-cache daemon bridge endpoint |
+| `~/.bubble/artifact-cache.log` | Artifact-cache request log |
 | `~/.bubble/tunnels/` | SSH tunnel PID files |
 | `~/.bubble/mathlib-cache/` | Shared mathlib cache |
 | `~/.bubble/vscode-commit` | VS Code commit hash in current base image |
