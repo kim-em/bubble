@@ -45,9 +45,11 @@ def test_tools_and_vscode_commit_change_alias(mock_runtime, monkeypatch, tmp_dat
     from bubble.config import load_config, save_config
 
     monkeypatch.setattr(builder, "get_vscode_commit", lambda: "a" * 40)
+    config = load_config()
+    config["tools"]["codex"] = "yes"
+    save_config(config)
     before = builder.desired_image_alias(mock_runtime, "base")
 
-    config = load_config()
     config["tools"]["codex"] = "no"
     save_config(config)
     tools_changed = builder.desired_image_alias(mock_runtime, "base")
