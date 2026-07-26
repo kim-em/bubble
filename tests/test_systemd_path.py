@@ -121,8 +121,9 @@ def test_systemd_restarts_active_auth_proxy(tmp_path, monkeypatch):
     monkeypatch.setattr(
         automation.subprocess,
         "run",
-        lambda argv, **_kwargs: calls.append(argv)
-        or SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda argv, **_kwargs: (
+            calls.append(argv) or SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
 
     _install_auth_proxy_systemd()

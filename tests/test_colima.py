@@ -199,13 +199,9 @@ class TestEnsureIncusRemote:
             isolated_home / ".colima" / "bubble-colima",
         )
         remotes = {
-            colima_mod.BUBBLE_INCUS_REMOTE: {
-                "Addrs": [f"unix://{real_profile / 'incus.sock'}"]
-            }
+            colima_mod.BUBBLE_INCUS_REMOTE: {"Addrs": [f"unix://{real_profile / 'incus.sock'}"]}
         }
-        fake = _FakeRun(
-            {("incus", "remote", "list"): _completed(stdout=json.dumps(remotes))}
-        )
+        fake = _FakeRun({("incus", "remote", "list"): _completed(stdout=json.dumps(remotes))})
         monkeypatch.setattr(colima_mod.subprocess, "run", fake)
 
         colima_mod._ensure_incus_remote()
