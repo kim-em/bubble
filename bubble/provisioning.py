@@ -191,15 +191,16 @@ def provision_container(
 
     # Mount dependency bare repos for Lake pre-population via alternates
     if dep_mounts:
-        for repo_name, dep_path in dep_mounts.items():
+        for org_repo, dep_path in dep_mounts.items():
             if str(dep_path) == mount_source:
                 continue  # Don't double-mount the main repo
-            device_name = f"dep-{repo_name}".replace(".", "-").replace("_", "-")[:63]
+            owner, repo_name = org_repo.split("/", 1)
+            device_name = f"dep-{owner}-{repo_name}".replace(".", "-").replace("_", "-")[:63]
             runtime.add_disk(
                 name,
                 device_name,
                 str(dep_path),
-                f"/shared/git/{repo_name}.git",
+                f"/shared/git/{owner}/{repo_name}.git",
                 readonly=True,
             )
 

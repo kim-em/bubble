@@ -39,6 +39,7 @@ def _init_origin(path, toolchain):
 
 
 def _mirror_from(origin, mirror):
+    mirror.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "clone", "--bare", "-q", str(origin), str(mirror)],
         check=True,

@@ -111,8 +111,9 @@ def tmp_data_dir(tmp_path, monkeypatch):
 
     data_dir = tmp_path / "bubble"
     data_dir.mkdir()
-    git_dir = data_dir / "git"
-    git_dir.mkdir()
+    git_dir = data_dir / "git" / "github.com"
+    git_dir.mkdir(parents=True)
+    legacy_git_dir = data_dir / "legacy-git"
     registry_file = data_dir / "registry.json"
     config_file = data_dir / "config.toml"
     repos_file = data_dir / "repos.json"
@@ -126,6 +127,7 @@ def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_FILE", config_file)
     monkeypatch.setattr(config, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(config, "GIT_DIR", git_dir)
+    monkeypatch.setattr(config, "LEGACY_GIT_DIR", legacy_git_dir)
     monkeypatch.setattr(config, "REPOS_FILE", repos_file)
     monkeypatch.setattr(config, "CLOUD_STATE_FILE", cloud_state_file)
     monkeypatch.setattr(config, "CLOUD_KEY_FILE", cloud_key_file)
@@ -137,6 +139,9 @@ def tmp_data_dir(tmp_path, monkeypatch):
     # Also patch modules that do `from .config import X` (separate bindings)
     monkeypatch.setattr(lifecycle, "REGISTRY_FILE", registry_file)
     monkeypatch.setattr(git_store, "GIT_DIR", git_dir)
+    monkeypatch.setattr(git_store, "LEGACY_GIT_DIR", legacy_git_dir)
+    monkeypatch.setattr(git_store, "GIT_LOCK_DIR", data_dir / "locks" / "git")
+    monkeypatch.setattr(git_store, "HOST_DATA_DIR", data_dir)
 
     # Patch modules that import DATA_DIR from config
     import bubble.provisioning as provisioning
@@ -210,6 +215,14 @@ def relay_env(tmp_path, monkeypatch):
     importlib.reload(bubble.config)
     importlib.reload(bubble.git_store)
     importlib.reload(bubble.relay)
+    git_dir = tmp_path / "git" / "github.com"
+    monkeypatch.setattr(bubble.config, "HOST_DATA_DIR", tmp_path)
+    monkeypatch.setattr(bubble.config, "GIT_DIR", git_dir)
+    monkeypatch.setattr(bubble.config, "LEGACY_GIT_DIR", tmp_path / "legacy-git")
+    monkeypatch.setattr(bubble.git_store, "GIT_DIR", git_dir)
+    monkeypatch.setattr(bubble.git_store, "LEGACY_GIT_DIR", tmp_path / "legacy-git")
+    monkeypatch.setattr(bubble.git_store, "GIT_LOCK_DIR", tmp_path / "locks" / "git")
+    monkeypatch.setattr(bubble.git_store, "HOST_DATA_DIR", tmp_path)
     return tmp_path
 
 

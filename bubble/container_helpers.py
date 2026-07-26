@@ -157,12 +157,14 @@ def recover_extra_domains(info: dict) -> list[str] | None:
     org_repo = info.get("org_repo")
     if not org_repo:
         return None
-    repo_short = org_repo.split("/")[-1] if "/" in org_repo else org_repo
-    from .config import DATA_DIR
+    from .git_store import find_existing_mirror
     from .hooks import select_hook
 
-    bare_repo = DATA_DIR / "git" / f"{repo_short}.git"
-    if not bare_repo.exists():
+    try:
+        bare_repo = find_existing_mirror(org_repo)
+    except ValueError:
+        return None
+    if bare_repo is None:
         return None
     ref = info.get("commit") or info.get("branch") or "HEAD"
     try:

@@ -150,7 +150,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 - **No outbound SSH**: Containers cannot SSH out (VSCode uses `incus exec` ProxyCommand)
 - **SSH key-only auth**: Password authentication is disabled. By default only `~/.ssh/id_ed25519.pub` is injected as `authorized_keys` (with `id_rsa.pub`/`id_ecdsa.pub` as fallbacks if no ed25519 key exists). Override with `[ssh] authorized_keys = "~/.ssh/yubikey.pub"` (or a list) in `~/.bubble/config.toml`, or with the `BUBBLE_AUTHORIZED_KEYS` env var (colon-separated paths).
 - **Shell injection hardening**: All user-supplied values are quoted with `shlex.quote()`
-- **Per-repo git mount**: Each container only sees its own bare repo, not the entire git store
+- **Per-repo git mount**: Trusted mirrors are shared host-wide under `~/.bubble/git/github.com/<owner>/<repo>.git`, but each container only sees its own bare repo, not the entire git store
 - **Bubble-in-bubble relay**: Containers can open new bubbles on the host, but only for repos already cloned in `~/.bubble/git/`. Disable with `bubble security set relay off`
 - **GitHub auth proxy**: Host token never enters containers. Git and REST API are repo-scoped. **GraphQL queries are read-only but account-wide** — can read any data the host token can access. API access can be set to `off`, `on` (read-only, the default), or `read-write` (enables mutations) via `bubble security set github-api`
 - **Shared Lean caches**: Mathlib's `lake exe cache` cache at `~/.bubble/mathlib-cache/` and Lake's built-in artifact cache at `~/.bubble/lake-cache/` are shared across Lean containers. Modes: `on` (default) = read-write (a compromised container could poison cached artifacts), `off` = read-only (prevents poisoning), `overlay` = per-container writable views with isolated writes (overlayfs on Linux; clonefile-seeded writable copies on macOS/Colima, where overlayfs can't run over virtiofs). These caches are *not* shared with cache commands run outside a bubble. Configure with `bubble security set shared-cache`. If you suspect poisoning, delete the corresponding cache directory.
@@ -181,7 +181,7 @@ Set `BUBBLE_HOME` to override the data directory (default: `~/.bubble`):
 export BUBBLE_HOME=/data/bubble
 ```
 
-This isolates configuration and per-bubble state. Incus images, host daemons, and their coordination locks remain host-global and are safely shared by build identity.
+This isolates configuration and per-bubble state. Incus images, trusted Git mirrors, host daemons, and their coordination locks remain host-global and are safely shared by build or repository identity.
 
 ```toml
 [runtime]

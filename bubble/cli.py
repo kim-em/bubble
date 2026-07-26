@@ -35,9 +35,9 @@ from .finalization import (
     machine_readable_output,
 )
 from .git_store import (
-    bare_repo_path,
     ensure_rev_available,
     fetch_ref,
+    find_existing_mirror,
     init_bare_repo,
     refresh_mirror_ref,
 )
@@ -239,8 +239,8 @@ def _resolve_ref_source(t, no_clone: bool) -> tuple[Path, str]:
         mount_name = f"{repo_short_name(t.org_repo)}.git"
     else:
         if no_clone:
-            bare_path = bare_repo_path(t.org_repo)
-            if not bare_path.exists():
+            bare_path = find_existing_mirror(t.org_repo)
+            if bare_path is None:
                 click.echo(
                     f"Repo '{t.org_repo}' has not been cloned yet. "
                     f"Run without --no-clone to fetch it automatically.",
@@ -1315,8 +1315,7 @@ def _open_single(
                                 f"Warning: rev {dep.rev[:12]} not found for {dep.name}, skipping"
                             )
                         continue
-                    repo_name = dep.org_repo.split("/")[-1]
-                    dep_mounts[repo_name] = dep_path
+                    dep_mounts[dep.org_repo.lower()] = dep_path
                 except Exception as e:
                     if not machine_readable:
                         detail(f"Warning: could not prepare {dep.name}: {e}")

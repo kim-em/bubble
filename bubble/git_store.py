@@ -1,22 +1,42 @@
 """Shared git bare repo management."""
 
 import fcntl
+import hashlib
+import os
+import re
 import subprocess
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .config import GIT_DIR
+from .config import GIT_DIR, HOST_DATA_DIR, LEGACY_GIT_DIR
+
+GIT_LOCK_DIR = HOST_DATA_DIR / "locks" / "git"
+_COMPONENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def canonical_repo(org_repo: str) -> str:
+    """Validate and normalize an owner/repository identifier."""
+    parts = org_repo.split("/")
+    if len(parts) != 2 or any(
+        not part or part in (".", "..") or not _COMPONENT_RE.fullmatch(part) for part in parts
+    ):
+        raise ValueError(f"Invalid GitHub repository: {org_repo!r}")
+    repo = parts[1].removesuffix(".git")
+    if not repo or repo in (".", "..") or not _COMPONENT_RE.fullmatch(repo):
+        raise ValueError(f"Invalid GitHub repository: {org_repo!r}")
+    return f"{parts[0].lower()}/{repo.lower()}"
 
 
 def bare_repo_path(org_repo: str) -> Path:
-    """Get the path for a bare repo mirror. e.g. 'leanprover/lean4' → GIT_DIR/lean4.git"""
-    repo_name = org_repo.split("/")[-1]
-    return GIT_DIR / f"{repo_name}.git"
+    """Return the nested host-global path for a GitHub bare mirror."""
+    owner, repo = canonical_repo(org_repo).split("/", 1)
+    return GIT_DIR / owner / f"{repo}.git"
 
 
 def github_url(org_repo: str) -> str:
-    return f"https://github.com/{org_repo}.git"
+    return f"https://github.com/{canonical_repo(org_repo)}.git"
 
 
 def parse_github_url(url: str) -> str | None:
@@ -33,17 +53,21 @@ def parse_github_url(url: str) -> str | None:
     if path.endswith(".git"):
         path = path[:-4]
     parts = path.split("/")
-    if len(parts) >= 2:
-        return f"{parts[0]}/{parts[1]}"
+    if len(parts) == 2:
+        try:
+            return canonical_repo(f"{parts[0]}/{parts[1]}")
+        except ValueError:
+            return None
     return None
 
 
 @contextmanager
 def _repo_lock(org_repo: str):
     """Acquire an exclusive file lock for a bare repo to prevent concurrent git operations."""
-    GIT_DIR.mkdir(parents=True, exist_ok=True)
-    repo_name = org_repo.split("/")[-1]
-    lock_path = GIT_DIR / f"{repo_name}.git.lock"
+    canonical = canonical_repo(org_repo)
+    GIT_LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    lock_name = hashlib.sha256(canonical.encode()).hexdigest()[:24]
+    lock_path = GIT_LOCK_DIR / f"{lock_name}.lock"
     fd = lock_path.open("w")
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -51,6 +75,95 @@ def _repo_lock(org_repo: str):
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         fd.close()
+
+
+def _origin_repo(path: Path) -> str | None:
+    if not (path / "HEAD").is_file():
+        return None
+    result = subprocess.run(
+        ["git", "--git-dir", str(path), "config", "--get", "remote.origin.url"],
+        capture_output=True,
+        text=True,
+    )
+    return parse_github_url(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def _legacy_candidates(org_repo: str):
+    repo_name = canonical_repo(org_repo).split("/", 1)[1]
+    seen = set()
+    for parent in (LEGACY_GIT_DIR, HOST_DATA_DIR / "git"):
+        if not parent.is_dir():
+            continue
+        for candidate in parent.iterdir():
+            if candidate in seen or candidate.is_symlink() or not candidate.is_dir():
+                continue
+            seen.add(candidate)
+            if candidate.name.lower() == f"{repo_name}.git":
+                yield candidate
+
+
+def find_existing_mirror(org_repo: str) -> Path | None:
+    """Return a nested mirror, or an origin-verified legacy mirror."""
+    destination = bare_repo_path(org_repo)
+    if destination.is_dir():
+        return destination
+    canonical = canonical_repo(org_repo)
+    for candidate in _legacy_candidates(org_repo):
+        if _origin_repo(candidate) == canonical:
+            return candidate
+    return None
+
+
+def _migrate_legacy_mirror(org_repo: str, destination: Path) -> bool:
+    """Atomically adopt an unambiguous legacy flat mirror."""
+    for candidate in _legacy_candidates(org_repo):
+        if _origin_repo(candidate) != canonical_repo(org_repo):
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(candidate, destination)
+        except OSError:
+            # A custom BUBBLE_HOME can live on another filesystem. Keep its
+            # mirror intact and let the caller atomically clone a fresh copy.
+            continue
+        _configure_mirror(destination)
+        try:
+            candidate.symlink_to(destination, target_is_directory=True)
+        except OSError:
+            pass
+        return True
+    return False
+
+
+def _configure_mirror(path: Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(path), "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/tags/*:refs/tags/*",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/pull/*/head:refs/pull/*/head",
+        ],
+        check=True,
+    )
 
 
 def ensure_rev_available(org_repo: str, rev: str) -> bool:
@@ -110,42 +223,17 @@ def init_bare_repo(org_repo: str) -> Path:
         if path.exists():
             return path
 
+        if _migrate_legacy_mirror(org_repo, path):
+            return path
+
         url = github_url(org_repo)
         print(f"Cloning bare mirror of {org_repo}...")
-        subprocess.run(
-            ["git", "clone", "--bare", url, str(path)],
-            check=True,
-        )
-        # Configure to fetch all refs (including PRs and tags)
-        subprocess.run(
-            ["git", "-C", str(path), "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(path),
-                "config",
-                "--add",
-                "remote.origin.fetch",
-                "+refs/tags/*:refs/tags/*",
-            ],
-            check=True,
-        )
-        # Also fetch PR refs so we can checkout PRs
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(path),
-                "config",
-                "--add",
-                "remote.origin.fetch",
-                "+refs/pull/*/head:refs/pull/*/head",
-            ],
-            check=True,
-        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".bubble-clone-", dir=path.parent) as temp_dir:
+            temporary = Path(temp_dir) / path.name
+            subprocess.run(["git", "clone", "--bare", url, str(temporary)], check=True)
+            _configure_mirror(temporary)
+            os.replace(temporary, path)
     return path
 
 
@@ -230,24 +318,43 @@ def refresh_mirror_ref(org_repo: str, kind: str, ref: str) -> None:
 
 def update_all_repos():
     """Update all bare repos found in the git store directory."""
+    # Opportunistically finish the flat-layout migration even for repositories
+    # not opened interactively after an upgrade.
+    legacy_repos = []
+    for parent in (LEGACY_GIT_DIR, HOST_DATA_DIR / "git"):
+        if not parent.is_dir():
+            continue
+        for candidate in parent.iterdir():
+            org_repo = _origin_repo(candidate) if candidate.is_dir() else None
+            if org_repo:
+                legacy_repos.append(org_repo)
+    for org_repo in sorted(set(legacy_repos)):
+        destination = bare_repo_path(org_repo)
+        if destination.exists():
+            continue
+        with _repo_lock(org_repo):
+            if not destination.exists():
+                _migrate_legacy_mirror(org_repo, destination)
+
     if not GIT_DIR.exists():
         return
 
-    for repo_dir in sorted(GIT_DIR.iterdir()):
-        if repo_dir.is_dir() and repo_dir.name.endswith(".git"):
-            # Derive org_repo name for locking (just need the repo part)
-            repo_name = repo_dir.name[:-4]  # strip .git
-            try:
-                with _repo_lock(f"_/{repo_name}"):
-                    print(f"Updating {repo_dir.name}...")
-                    subprocess.run(
-                        ["git", "-C", str(repo_dir), "fetch", "--all", "--prune"],
-                        check=True,
-                    )
-            except subprocess.CalledProcessError as e:
-                print(f"Warning: failed to update {repo_dir.name}: {e}")
+    for repo_dir in sorted(GIT_DIR.glob("*/*.git")):
+        org_repo = _origin_repo(repo_dir)
+        if not org_repo:
+            print(f"Warning: skipping mirror with invalid origin: {repo_dir}")
+            continue
+        try:
+            with _repo_lock(org_repo):
+                print(f"Updating {org_repo}...")
+                subprocess.run(
+                    ["git", "-C", str(repo_dir), "fetch", "--all", "--prune"],
+                    check=True,
+                )
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: failed to update {org_repo}: {e}")
 
 
 def repo_is_known(org_repo: str) -> bool:
     """Check if a bare repo exists in the git store."""
-    return bare_repo_path(org_repo).exists()
+    return find_existing_mirror(org_repo) is not None
