@@ -63,6 +63,7 @@ def test_legacy_mirror_migrates_when_origin_matches(tmp_data_dir):
         ],
         check=True,
     )
+    git_store._configure_mirror(legacy)
 
     destination = git_store.init_bare_repo("owner/demo")
 
@@ -110,6 +111,177 @@ def test_migration_finds_mixed_case_legacy_name(tmp_data_dir):
         check=True,
     )
     assert git_store.init_bare_repo("owner/demo") == bare_repo_path("owner/demo")
+    assert legacy.is_symlink()
+
+
+def test_configure_mirror_replaces_existing_fetch_refspecs(tmp_path):
+    mirror = tmp_path / "demo.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(mirror)], check=True)
+    for refspec in ("first", "second"):
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(mirror),
+                "config",
+                "--add",
+                "remote.origin.fetch",
+                refspec,
+            ],
+            check=True,
+        )
+
+    git_store._configure_mirror(mirror)
+
+    result = subprocess.run(
+        ["git", "-C", str(mirror), "config", "--get-all", "remote.origin.fetch"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.splitlines() == [
+        "+refs/heads/*:refs/heads/*",
+        "+refs/tags/*:refs/tags/*",
+        "+refs/pull/*/head:refs/pull/*/head",
+    ]
+
+
+def test_migration_restores_config_when_configuration_fails(tmp_data_dir, monkeypatch, capsys):
+    legacy = git_store.LEGACY_GIT_DIR / "Demo.git"
+    legacy.parent.mkdir(parents=True)
+    subprocess.run(["git", "init", "--bare", "-q", str(legacy)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(legacy),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/owner/demo.git",
+        ],
+        check=True,
+    )
+    git_store._configure_mirror(legacy)
+    original_config = (legacy / "config").read_bytes()
+    destination = bare_repo_path("owner/demo")
+
+    def partially_configure(path):
+        subprocess.run(
+            ["git", "-C", str(path), "config", "--replace-all", "remote.origin.fetch", "partial"],
+            check=True,
+        )
+        raise subprocess.CalledProcessError(1, "git")
+
+    monkeypatch.setattr(
+        git_store,
+        "_configure_mirror",
+        partially_configure,
+    )
+
+    assert git_store._migrate_legacy_mirror("owner/demo", destination)
+
+    assert legacy.is_symlink()
+    assert destination.is_dir()
+    assert (destination / "config").read_bytes() == original_config
+    assert "existing configuration" in capsys.readouterr().out
+
+
+def test_migration_rolls_back_on_keyboard_interrupt(tmp_data_dir, monkeypatch):
+    legacy = git_store.LEGACY_GIT_DIR / "demo.git"
+    legacy.parent.mkdir(parents=True)
+    subprocess.run(["git", "init", "--bare", "-q", str(legacy)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(legacy),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/owner/demo.git",
+        ],
+        check=True,
+    )
+    original_config = (legacy / "config").read_bytes()
+    destination = bare_repo_path("owner/demo")
+
+    def interrupt_configuration(path):
+        subprocess.run(
+            ["git", "-C", str(path), "config", "--replace-all", "remote.origin.fetch", "partial"],
+            check=True,
+        )
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(git_store, "_configure_mirror", interrupt_configuration)
+
+    with pytest.raises(KeyboardInterrupt):
+        git_store._migrate_legacy_mirror("owner/demo", destination)
+
+    assert legacy.is_dir()
+    assert not destination.exists()
+    assert (legacy / "config").read_bytes() == original_config
+
+
+def test_update_all_repos_isolates_migration_failure(tmp_data_dir, monkeypatch, capsys):
+    for name in ("bad", "good"):
+        legacy = git_store.LEGACY_GIT_DIR / f"{name}.git"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "--bare", "-q", str(legacy)], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(legacy),
+                "remote",
+                "add",
+                "origin",
+                f"https://github.com/owner/{name}.git",
+            ],
+            check=True,
+        )
+    migrate = git_store._migrate_legacy_mirror
+
+    def migrate_with_failure(org_repo, destination):
+        if org_repo == "owner/bad":
+            raise OSError("broken migration")
+        return migrate(org_repo, destination)
+
+    monkeypatch.setattr(
+        git_store,
+        "_migrate_legacy_mirror",
+        migrate_with_failure,
+    )
+
+    git_store.update_all_repos()
+
+    assert "failed to migrate Git mirror for owner/bad" in capsys.readouterr().out
+    assert (git_store.LEGACY_GIT_DIR / "bad.git").is_dir()
+    assert (git_store.LEGACY_GIT_DIR / "good.git").is_symlink()
+    assert bare_repo_path("owner/good").is_dir()
+
+
+def test_migration_from_default_flat_layout(tmp_data_dir, monkeypatch):
+    monkeypatch.setattr(git_store, "LEGACY_GIT_DIR", git_store.GIT_DIR.parent)
+    legacy = git_store.GIT_DIR.parent / "Demo.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(legacy)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(legacy),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/owner/demo.git",
+        ],
+        check=True,
+    )
+
+    destination = git_store.init_bare_repo("owner/demo")
+
+    assert destination == bare_repo_path("owner/demo")
+    assert destination.is_dir()
     assert legacy.is_symlink()
 
 

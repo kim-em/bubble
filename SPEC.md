@@ -111,13 +111,18 @@ git clone --bare https://github.com/owner/repo.git ~/.bubble/git/github.com/owne
 Then configure fetch refs:
 
 ```
-git -C ~/.bubble/git/github.com/owner/repo.git config remote.origin.fetch '+refs/heads/*:refs/heads/*'
+git -C ~/.bubble/git/github.com/owner/repo.git config --replace-all remote.origin.fetch '+refs/heads/*:refs/heads/*'
 git -C ~/.bubble/git/github.com/owner/repo.git config --add remote.origin.fetch '+refs/tags/*:refs/tags/*'
 git -C ~/.bubble/git/github.com/owner/repo.git config --add remote.origin.fetch '+refs/pull/*/head:refs/pull/*/head'
 ```
 
 The bare repo path is derived from the normalized full repository identity:
 `~/.bubble/git/github.com/<owner>/<repo>.git`.
+
+Older flat mirrors at `~/.bubble/git/<repo>.git` are adopted only when their
+origin matches the requested owner and repository. Migration is atomic, leaves
+a compatibility symlink at the flat path, and preserves the previous Git config
+if updating its fetch rules fails.
 
 **PR ref fetching:** When the target is a PR, fetch the specific ref:
 
@@ -600,10 +605,10 @@ Writes MUST be atomic (write to temp file, rename).
 
 ### 4.4 `bubble git update`
 
-Update all bare repos in `~/.bubble/git/`:
+Update all nested bare repos in `~/.bubble/git/github.com/`:
 
 ```
-git -C ~/.bubble/git/<repo>.git fetch --all --prune
+git -C ~/.bubble/git/github.com/<owner>/<repo>.git fetch --all --prune
 ```
 
 For each `*.git` directory found. Uses per-repo file locking.

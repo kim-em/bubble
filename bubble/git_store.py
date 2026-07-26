@@ -119,6 +119,12 @@ def _migrate_legacy_mirror(org_repo: str, destination: Path) -> bool:
     for candidate in _legacy_candidates(org_repo):
         if _origin_repo(candidate) != canonical_repo(org_repo):
             continue
+        config_path = candidate / "config"
+        try:
+            original_config = config_path.read_bytes()
+            original_config_mode = config_path.stat().st_mode
+        except OSError:
+            continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.replace(candidate, destination)
@@ -126,7 +132,24 @@ def _migrate_legacy_mirror(org_repo: str, destination: Path) -> bool:
             # A custom BUBBLE_HOME can live on another filesystem. Keep its
             # mirror intact and let the caller atomically clone a fresh copy.
             continue
-        _configure_mirror(destination)
+        try:
+            _configure_mirror(destination)
+        except BaseException as error:
+            try:
+                _restore_mirror_config(destination, original_config, original_config_mode)
+            except OSError as restore_error:
+                try:
+                    os.replace(destination, candidate)
+                except OSError:
+                    print(f"Warning: failed to roll back Git mirror migration for {org_repo}")
+                raise error from restore_error
+            if not isinstance(error, Exception):
+                os.replace(destination, candidate)
+                raise
+            print(
+                f"Warning: could not update fetch rules for {org_repo}; "
+                "using the legacy mirror's existing configuration"
+            )
         try:
             candidate.symlink_to(destination, target_is_directory=True)
         except OSError:
@@ -135,9 +158,32 @@ def _migrate_legacy_mirror(org_repo: str, destination: Path) -> bool:
     return False
 
 
+def _restore_mirror_config(path: Path, contents: bytes, mode: int) -> None:
+    """Atomically restore a mirror config after a partial `git config` failure."""
+    fd, temporary_name = tempfile.mkstemp(prefix=".bubble-config-", dir=path)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, mode & 0o7777)
+        os.replace(temporary, path / "config")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _configure_mirror(path: Path) -> None:
     subprocess.run(
-        ["git", "-C", str(path), "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"],
+        [
+            "git",
+            "-C",
+            str(path),
+            "config",
+            "--replace-all",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/heads/*",
+        ],
         check=True,
     )
     subprocess.run(
@@ -332,9 +378,12 @@ def update_all_repos():
         destination = bare_repo_path(org_repo)
         if destination.exists():
             continue
-        with _repo_lock(org_repo):
-            if not destination.exists():
-                _migrate_legacy_mirror(org_repo, destination)
+        try:
+            with _repo_lock(org_repo):
+                if not destination.exists():
+                    _migrate_legacy_mirror(org_repo, destination)
+        except Exception as error:
+            print(f"Warning: failed to migrate Git mirror for {org_repo}: {error}")
 
     if not GIT_DIR.exists():
         return
