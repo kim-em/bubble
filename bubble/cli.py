@@ -487,7 +487,12 @@ def _open_remote(
 
     # Write local SSH config with chained ProxyCommand through the remote host
     host_key = is_enabled(config, "host_key_trust")
-    add_ssh_config(name, remote_host=remote_host, host_key_trust=host_key)
+    add_ssh_config(
+        name,
+        remote_host=remote_host,
+        host_key_trust=host_key,
+        container_target=result.get("container_target"),
+    )
 
     # Register in local lifecycle registry with remote_host info
     register_bubble(
@@ -1201,7 +1206,12 @@ def _open_single(
         )
         if machine_readable:
             project_dir = detect_project_dir(runtime, existing)
-            machine_readable_output("reattached", existing, project_dir=project_dir)
+            machine_readable_output(
+                "reattached",
+                existing,
+                project_dir=project_dir,
+                container_target=runtime.qualify(existing),
+            )
             return
         notices.finish()
         _reattach(
@@ -1261,7 +1271,11 @@ def _open_single(
         if machine_readable:
             project_dir = detect_project_dir(runtime, existing)
             machine_readable_output(
-                "reattached", existing, project_dir=project_dir, org_repo=t.org_repo
+                "reattached",
+                existing,
+                project_dir=project_dir,
+                org_repo=t.org_repo,
+                container_target=runtime.qualify(existing),
             )
             return
         notices.finish()
