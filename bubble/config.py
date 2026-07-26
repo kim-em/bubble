@@ -17,18 +17,38 @@ else:
 
 import tomli_w
 
+
+def host_home() -> Path:
+    """Return the login user's real home, unaffected by an overridden ``$HOME``.
+
+    Bubble supports private ``BUBBLE_HOME`` stores and callers such as TauCeti
+    additionally isolate ``HOME`` per worker. Host singletons such as the auth
+    proxy must still agree on one location for the OS user.
+    """
+    try:
+        import pwd
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError, OSError):
+        return Path.home()
+
+
 # Override with BUBBLE_HOME environment variable
 DATA_DIR = Path(os.environ.get("BUBBLE_HOME", Path.home() / ".bubble"))
 CONFIG_FILE = DATA_DIR / "config.toml"
 
+# State describing the host-global auth proxy must not follow an isolated HOME
+# or a per-worker BUBBLE_HOME.
+HOST_DATA_DIR = host_home() / ".bubble"
+
 # The auth-proxy daemon is a host singleton, installed via launchd/systemd
 # with no BUBBLE_HOME in its environment, so it always runs against the
-# default ~/.bubble and writes its endpoint/port/token/log files there.
+# login user's ~/.bubble and writes its endpoint/port/token/log files there.
 # Callers (e.g. `bubble open`) may run under a custom BUBBLE_HOME, but must
 # resolve those daemon files against the daemon's fixed location rather than
 # their own DATA_DIR — otherwise they look for an endpoint the daemon never
 # wrote and write tokens the daemon never reads. See issue #304.
-AUTH_PROXY_DIR = Path.home() / ".bubble"
+AUTH_PROXY_DIR = HOST_DATA_DIR
 REGISTRY_FILE = DATA_DIR / "registry.json"
 GIT_DIR = DATA_DIR / "git"
 REPOS_FILE = DATA_DIR / "repos.json"

@@ -29,6 +29,17 @@ from bubble.auth_proxy import (
 # ---------------------------------------------------------------------------
 
 
+def test_endpoint_advertises_fork_push_capability(auth_proxy_env):
+    import bubble.auth_proxy as auth_proxy
+
+    auth_proxy._write_endpoint_file("127.0.0.1", 7654)
+    payload = json.loads((auth_proxy_env / "auth-proxy.endpoint").read_text())
+    assert payload["bubble_version"] == auth_proxy.__version__
+    assert payload["capabilities"] == ["allow-push"]
+    assert payload["pid"] == __import__("os").getpid()
+    assert not list(auth_proxy_env.glob(".auth-proxy.endpoint.*.tmp"))
+
+
 class TestDaemonFileLocation:
     """The auth-proxy daemon is a host singleton pinned to ~/.bubble.
 
@@ -44,12 +55,14 @@ class TestDaemonFileLocation:
 
         import bubble.auth_proxy
         import bubble.config
+        import bubble.vscode
 
         fixed = Path.home() / ".bubble"
         try:
             monkeypatch.setenv("BUBBLE_HOME", str(tmp_path))
             importlib.reload(bubble.config)
             importlib.reload(bubble.auth_proxy)
+            importlib.reload(bubble.vscode)
 
             # DATA_DIR follows BUBBLE_HOME ...
             assert bubble.config.DATA_DIR == tmp_path
@@ -64,6 +77,40 @@ class TestDaemonFileLocation:
             monkeypatch.delenv("BUBBLE_HOME", raising=False)
             importlib.reload(bubble.config)
             importlib.reload(bubble.auth_proxy)
+            importlib.reload(bubble.vscode)
+
+    def test_host_singletons_ignore_isolated_home(self, tmp_path, monkeypatch):
+        import importlib
+        import types
+
+        pwd = pytest.importorskip("pwd")
+        import bubble.auth_proxy
+        import bubble.config
+        import bubble.vscode
+
+        login_home = tmp_path / "login"
+        isolated_home = tmp_path / "isolated"
+        with monkeypatch.context() as m:
+            m.setenv("HOME", str(isolated_home))
+            m.delenv("BUBBLE_HOME", raising=False)
+            m.setattr(pwd, "getpwuid", lambda _uid: types.SimpleNamespace(pw_dir=str(login_home)))
+            importlib.reload(bubble.config)
+            importlib.reload(bubble.auth_proxy)
+            importlib.reload(bubble.vscode)
+
+            assert bubble.config.DATA_DIR == isolated_home / ".bubble"
+            assert bubble.config.HOST_DATA_DIR == login_home / ".bubble"
+            assert bubble.config.AUTH_PROXY_DIR == login_home / ".bubble"
+            assert bubble.auth_proxy.AUTH_PROXY_ENDPOINT_FILE == (
+                login_home / ".bubble/auth-proxy.endpoint"
+            )
+            assert bubble.vscode.SSH_MAIN_CONFIG == login_home / ".ssh/config"
+            assert bubble.vscode.SSH_CONFIG_FILE == login_home / ".ssh/config.d/bubble"
+
+        # Restore import-time constants for the rest of the suite.
+        importlib.reload(bubble.config)
+        importlib.reload(bubble.auth_proxy)
+        importlib.reload(bubble.vscode)
 
 
 # ---------------------------------------------------------------------------

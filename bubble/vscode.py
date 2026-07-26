@@ -9,15 +9,15 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .config import DATA_DIR
+from .config import HOST_DATA_DIR
 
 # Valid bubble name pattern (alphanumeric + hyphens, starts with letter)
 _BUBBLE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
-SSH_CONFIG_DIR = Path.home() / ".ssh" / "config.d"
+SSH_CONFIG_DIR = HOST_DATA_DIR.parent / ".ssh" / "config.d"
 SSH_CONFIG_FILE = SSH_CONFIG_DIR / "bubble"
-SSH_MAIN_CONFIG = Path.home() / ".ssh" / "config"
-_SSH_CONFIG_LOCK_FILE = DATA_DIR / "ssh-config.lock"
+SSH_MAIN_CONFIG = HOST_DATA_DIR.parent / ".ssh" / "config"
+_SSH_CONFIG_LOCK_FILE = HOST_DATA_DIR / "ssh-config.lock"
 
 
 def remote_vscode_client_detected(env=None) -> bool:

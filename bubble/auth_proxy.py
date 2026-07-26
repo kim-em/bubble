@@ -78,6 +78,7 @@ from urllib.request import (
     build_opener,
 )
 
+from . import __version__
 from .config import AUTH_PROXY_DIR
 from .token_store import RateLimiter as _RateLimiter
 from .token_store import RateWindow, TokenStore, setup_file_logging
@@ -1603,9 +1604,16 @@ def _write_endpoint_file(tcp_host: str, tcp_port: int):
     payload = {
         "tcp": {"host": tcp_host, "port": tcp_port},
         "version": 3,
+        "bubble_version": __version__,
+        "capabilities": ["allow-push"],
+        "pid": os.getpid(),
     }
-    AUTH_PROXY_ENDPOINT_FILE.write_text(json.dumps(payload))
-    os.chmod(str(AUTH_PROXY_ENDPOINT_FILE), 0o600)
+    endpoint_tmp = AUTH_PROXY_ENDPOINT_FILE.with_name(
+        f".{AUTH_PROXY_ENDPOINT_FILE.name}.{os.getpid()}.tmp"
+    )
+    endpoint_tmp.write_text(json.dumps(payload))
+    os.chmod(str(endpoint_tmp), 0o600)
+    os.replace(endpoint_tmp, AUTH_PROXY_ENDPOINT_FILE)
     # Backwards-compat: keep auth-proxy.port readable as an int.
     AUTH_PROXY_PORT_FILE.write_text(str(tcp_port))
     os.chmod(str(AUTH_PROXY_PORT_FILE), 0o600)
@@ -1672,5 +1680,3 @@ def run_daemon(port: int = 0):
         logger.info("Auth proxy daemon stopped")
     finally:
         tcp_server.shutdown()
-        AUTH_PROXY_PORT_FILE.unlink(missing_ok=True)
-        AUTH_PROXY_ENDPOINT_FILE.unlink(missing_ok=True)

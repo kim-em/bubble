@@ -254,14 +254,50 @@ def test_endpoint_alive_health_check(monkeypatch):
     endpoint = {"tcp": {"host": "10.156.104.1", "port": 7654}, "version": 3}
     monkeypatch.setattr(gt, "_read_endpoint_file", lambda _p: endpoint)
     monkeypatch.setattr("bubble.automation.is_auth_proxy_installed", lambda: True)
+    installs = []
+    monkeypatch.setattr(
+        "bubble.automation.install_auth_proxy_daemon", lambda **_kwargs: installs.append(True)
+    )
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
 
-    # Dead listener => None (fail closed).
+    # Dead listener => refresh once, then None (fail closed).
     monkeypatch.setattr(gt, "_endpoint_alive", lambda _e: False)
     assert gt._ensure_auth_proxy_endpoint() is None
+    assert len(installs) == 1
 
-    # Live listener => returns the endpoint.
+    # Live listener => returns the endpoint without another refresh.
     monkeypatch.setattr(gt, "_endpoint_alive", lambda _e: True)
     assert gt._ensure_auth_proxy_endpoint() == endpoint
+    assert len(installs) == 1
+
+
+def test_endpoint_alive_uses_publishing_daemon_pid(monkeypatch):
+    import bubble.github_token as gt
+
+    checked = []
+    endpoint = {
+        "tcp": {"host": "10.156.104.1", "port": 7654},
+        "version": 3,
+        "pid": 4242,
+    }
+    monkeypatch.setattr("os.kill", lambda pid, sig: checked.append((pid, sig)))
+    monkeypatch.setattr(
+        "socket.create_connection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not TCP probe")),
+    )
+    assert gt._endpoint_alive(endpoint) is True
+    assert checked == [(4242, 0)]
+
+    monkeypatch.setattr("os.kill", lambda _pid, _sig: (_ for _ in ()).throw(ProcessLookupError()))
+    assert gt._endpoint_alive(endpoint) is False
+
+    for malformed in (
+        {"tcp": None, "pid": 4242},
+        {"tcp": {"host": "", "port": 7654}, "pid": 4242},
+        {"tcp": {"host": "127.0.0.1", "port": True}, "pid": 4242},
+        {"tcp": {"host": "127.0.0.1", "port": 0}, "pid": 4242},
+    ):
+        assert gt._endpoint_alive(malformed) is False
 
 
 def test_allow_bridge_egress_no_iptables_is_ok(mock_runtime):

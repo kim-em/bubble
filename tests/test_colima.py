@@ -183,6 +183,31 @@ class TestEnsureIncusRemote:
         assert ("incus", "remote", "add") not in cmds
         assert ("incus", "remote", "switch") not in cmds
 
+    def test_symlinked_home_socket_matches_canonical_remote(self, tmp_path, monkeypatch, capsys):
+        from bubble.runtime import colima as colima_mod
+
+        real_home = tmp_path / "real"
+        isolated_home = tmp_path / "isolated"
+        real_profile = real_home / ".colima" / "bubble-colima"
+        real_profile.mkdir(parents=True)
+        (real_profile / "incus.sock").write_text("")
+        isolated_home.mkdir()
+        (isolated_home / ".colima").symlink_to(real_home / ".colima")
+        monkeypatch.setattr(
+            colima_mod,
+            "COLIMA_PROFILE_DIR",
+            isolated_home / ".colima" / "bubble-colima",
+        )
+        remotes = {
+            colima_mod.BUBBLE_INCUS_REMOTE: {"Addrs": [f"unix://{real_profile / 'incus.sock'}"]}
+        }
+        fake = _FakeRun({("incus", "remote", "list"): _completed(stdout=json.dumps(remotes))})
+        monkeypatch.setattr(colima_mod.subprocess, "run", fake)
+
+        colima_mod._ensure_incus_remote()
+
+        assert "Refusing to overwrite" not in capsys.readouterr().err
+
 
 class TestIncusRuntimeQualify:
     def test_default_runtime_does_not_prefix(self):
