@@ -312,3 +312,44 @@ class TestOpenRemoteForwarding:
                 pass
 
         assert captured_kwargs.get("github_security") == "write-graphql"
+
+    def test_open_remote_forwards_runtime_qualified_container_target(self):
+        from bubble import cli as cli_mod
+
+        captured = {}
+
+        def _fake_remote_open(_host, _target, **_kwargs):
+            return {
+                "name": "x",
+                "project_dir": "/home/user",
+                "org_repo": "kim-em/bubble",
+                "container_target": "bubble-colima:x",
+            }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("bubble.remote.remote_open", _fake_remote_open))
+            stack.enter_context(patch("bubble.cli._resolve_ai_prompt_locally", return_value=""))
+            stack.enter_context(patch("bubble.cli.inject_local_ssh_keys"))
+            stack.enter_context(patch("bubble.cli.get_github_level", return_value="off"))
+            stack.enter_context(patch("bubble.cli.register_bubble"))
+            stack.enter_context(
+                patch(
+                    "bubble.cli.add_ssh_config",
+                    side_effect=lambda name, **kwargs: captured.update(name=name, **kwargs),
+                )
+            )
+
+            host = MagicMock()
+            host.ssh_destination = "user@example.com"
+            cli_mod._open_remote(
+                host,
+                "kim-em/bubble",
+                editor="shell",
+                no_interactive=True,
+                network=True,
+                custom_name=None,
+                config={"security": {"github": "off"}},
+            )
+
+        assert captured["name"] == "x"
+        assert captured["container_target"] == "bubble-colima:x"

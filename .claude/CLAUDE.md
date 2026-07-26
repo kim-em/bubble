@@ -86,7 +86,7 @@ The `lean` image provides elan as a fallback for users who don't have elan on th
 Incus requires Linux. On macOS, Colima runs a lightweight Linux VM with Apple's Virtualization.Framework (`--vm-type vz`). The `ensure_colima()` function starts it if needed.
 
 ### SSH via ProxyCommand
-Each container runs sshd. Rather than port forwarding (which doesn't work well through Colima on macOS), we use `ProxyCommand incus exec <name> -- su - user -c "nc localhost 22"`. SSH config entries are auto-generated in `~/.ssh/config.d/bubble`.
+Each container runs sshd. Rather than port forwarding (which doesn't work well through Colima on macOS), we use `ProxyCommand incus exec <runtime-target> -- su - user -c "nc localhost 22"`, where macOS uses the qualified `bubble-colima:<name>` target. SSH config entries are auto-generated in `~/.ssh/config.d/bubble`.
 
 ### Container Naming
 Names are `<repo>-<source>-<id>` (e.g., `mathlib4-pr-12345`). Numeric suffix for collisions. The `open` command checks for existing containers by generated name and registry lookup before creating new ones.

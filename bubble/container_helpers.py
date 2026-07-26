@@ -210,7 +210,15 @@ def setup_ssh(
         finally:
             Path(tmp_keys).unlink(missing_ok=True)
 
-    add_ssh_config(name, host_key_trust=host_key_trust)
+    # Incus resources live on a named, non-default remote on macOS. The SSH
+    # ProxyCommand must target the same qualified container as the runtime;
+    # otherwise the macOS client looks for a native local Incus server and
+    # fails only after the bubble has been fully created.
+    add_ssh_config(
+        name,
+        host_key_trust=host_key_trust,
+        container_target=runtime.qualify(name),
+    )
 
 
 def get_host_git_identity() -> tuple[str, str]:

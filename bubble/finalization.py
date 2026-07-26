@@ -117,6 +117,7 @@ def finalize_bubble(
             org_repo=t.org_repo,
             image=image_name,
             branch=checkout_branch or (t.ref if t.kind == "branch" else ""),
+            container_target=runtime.qualify(name),
         )
         return
 

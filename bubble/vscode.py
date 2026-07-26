@@ -13,6 +13,7 @@ from .config import HOST_DATA_DIR
 
 # Valid bubble name pattern (alphanumeric + hyphens, starts with letter)
 _BUBBLE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+_INCUS_REMOTE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 SSH_CONFIG_DIR = HOST_DATA_DIR.parent / ".ssh" / "config.d"
 SSH_CONFIG_FILE = SSH_CONFIG_DIR / "bubble"
@@ -120,7 +121,11 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 
 def add_ssh_config(
-    bubble_name: str, user: str = "user", remote_host=None, host_key_trust: bool = True
+    bubble_name: str,
+    user: str = "user",
+    remote_host=None,
+    host_key_trust: bool = True,
+    container_target: str | None = None,
 ):
     """Add an SSH config entry for a bubble.
 
@@ -133,11 +138,19 @@ def add_ssh_config(
         user: User inside the container.
         remote_host: Optional RemoteHost for chained ProxyCommand.
         host_key_trust: If True (default), disable StrictHostKeyChecking.
+        container_target: Runtime-qualified container reference. On macOS this is
+            ``bubble-colima:<name>`` because Bubble deliberately leaves the
+            user's default Incus remote unchanged.
     """
     if not _BUBBLE_NAME_RE.match(bubble_name):
         raise ValueError(f"Invalid bubble name for SSH config: {bubble_name!r}")
 
-    incus_cmd = f'incus exec {bubble_name} -- su - {user} -c "nc localhost 22"'
+    target = container_target or bubble_name
+    if target != bubble_name:
+        remote, separator, target_name = target.partition(":")
+        if not separator or target_name != bubble_name or not _INCUS_REMOTE_RE.fullmatch(remote):
+            raise ValueError(f"Invalid runtime-qualified container target: {target!r}")
+    incus_cmd = f'incus exec {shlex.quote(target)} -- su - {shlex.quote(user)} -c "nc localhost 22"'
 
     if remote_host is not None:
         ssh_parts = ["ssh"]
@@ -167,8 +180,24 @@ def add_ssh_config(
     with _ssh_config_lock():
         SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         existing = SSH_CONFIG_FILE.read_text() if SSH_CONFIG_FILE.exists() else ""
+        existing = _without_ssh_config_entry(existing, bubble_name)
         _atomic_write_text(SSH_CONFIG_FILE, existing + entry)
         _ensure_include_directive_locked()
+
+
+def _without_ssh_config_entry(content: str, bubble_name: str) -> str:
+    """Return SSH config content with every block for ``bubble_name`` removed."""
+    result = []
+    skip = False
+    for line in content.splitlines():
+        if line.strip() == f"Host bubble-{bubble_name}":
+            skip = True
+            continue
+        if skip and line.strip().startswith("Host "):
+            skip = False
+        if not skip:
+            result.append(line)
+    return "\n".join(result) + "\n" if result else ""
 
 
 def remove_ssh_config(bubble_name: str):
@@ -176,20 +205,7 @@ def remove_ssh_config(bubble_name: str):
     with _ssh_config_lock():
         if not SSH_CONFIG_FILE.exists():
             return
-
-        lines = SSH_CONFIG_FILE.read_text().splitlines()
-        result = []
-        skip = False
-        for line in lines:
-            if line.strip() == f"Host bubble-{bubble_name}":
-                skip = True
-                continue
-            if skip and line.strip().startswith("Host "):
-                skip = False
-            if not skip:
-                result.append(line)
-
-        new_content = "\n".join(result) + "\n" if result else ""
+        new_content = _without_ssh_config_entry(SSH_CONFIG_FILE.read_text(), bubble_name)
         _atomic_write_text(SSH_CONFIG_FILE, new_content)
 
 

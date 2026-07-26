@@ -234,14 +234,16 @@ if not already present.
 ```
 Host bubble-<name>
   User user
-  ProxyCommand incus exec <name> -- su - user -c "nc localhost 22"
+  ProxyCommand incus exec <runtime-target> -- su - user -c "nc localhost 22"
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
   LogLevel ERROR
 ```
 
 The ProxyCommand uses `incus exec` instead of port forwarding because port
-forwarding doesn't work reliably through Colima on macOS.
+forwarding doesn't work reliably through Colima on macOS. `<runtime-target>`
+is `<name>` for the default runtime and `bubble-colima:<name>` for Bubble's
+named, non-default Incus remote on macOS.
 
 ### 1.9 Editor launching
 
@@ -769,8 +771,10 @@ The remote must have Python >= 3.10.
 5. Set up GitHub auth tunnel (see Stage 10)
 6. Write local SSH config with chained ProxyCommand:
    ```
-   ProxyCommand ssh [options] user@host 'incus exec <name> -- su - user -c "nc localhost 22"'
+   ProxyCommand ssh [options] user@host 'incus exec <runtime-target> -- su - user -c "nc localhost 22"'
    ```
+   The remote reports `<runtime-target>` in the optional `container_target`
+   field of its machine-readable result; older remotes fall back to `<name>`.
 7. Register locally with `remote_host` field
 8. Open editor locally (connects through the chained proxy)
 

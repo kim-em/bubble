@@ -128,9 +128,80 @@ class TestAddSshConfig:
         assert "ProxyCommand incus exec test-bubble" in content
         assert "nc localhost 22" in content
 
+    def test_writes_runtime_qualified_proxy_target(self, tmp_ssh_dir):
+        ssh_file = tmp_ssh_dir / "bubble"
+        add_ssh_config(
+            "test-bubble",
+            container_target="bubble-colima:test-bubble",
+        )
+        content = ssh_file.read_text()
+        assert "Host bubble-test-bubble" in content
+        assert "ProxyCommand incus exec bubble-colima:test-bubble" in content
+
     def test_rejects_invalid_name(self, tmp_ssh_dir):
         with pytest.raises(ValueError, match="Invalid bubble name"):
             add_ssh_config("evil; rm -rf /")
+
+    def test_setup_ssh_writes_runtime_qualified_target(self, tmp_ssh_dir, monkeypatch):
+        from bubble import container_helpers
+
+        class FakeRuntime:
+            def exec(self, _name, _argv):
+                return ""
+
+            def qualify(self, name):
+                return f"bubble-colima:{name}"
+
+        monkeypatch.setattr(container_helpers, "collect_authorized_keys", lambda _config: [])
+
+        container_helpers.setup_ssh(FakeRuntime(), "test-bubble")
+
+        content = (tmp_ssh_dir / "bubble").read_text()
+        assert "Host bubble-test-bubble" in content
+        assert "ProxyCommand incus exec bubble-colima:test-bubble" in content
+
+    def test_setup_ssh_preserves_identity_target(self, tmp_ssh_dir, monkeypatch):
+        from bubble import container_helpers
+
+        class FakeRuntime:
+            def exec(self, _name, _argv):
+                return ""
+
+            def qualify(self, name):
+                return name
+
+        monkeypatch.setattr(container_helpers, "collect_authorized_keys", lambda _config: [])
+
+        container_helpers.setup_ssh(FakeRuntime(), "test-bubble")
+
+        content = (tmp_ssh_dir / "bubble").read_text()
+        assert "ProxyCommand incus exec test-bubble" in content
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "other-container",
+            "bubble-colima:other-container",
+            "bad remote:test-bubble",
+            "bubble-colima:test-bubble\nHost injected",
+        ],
+    )
+    def test_rejects_invalid_runtime_qualified_target(self, tmp_ssh_dir, target):
+        with pytest.raises(ValueError, match="Invalid runtime-qualified container target"):
+            add_ssh_config("test-bubble", container_target=target)
+
+    def test_readding_name_replaces_stale_target(self, tmp_ssh_dir):
+        ssh_file = tmp_ssh_dir / "bubble"
+        add_ssh_config("test-bubble")
+        add_ssh_config(
+            "test-bubble",
+            container_target="bubble-colima:test-bubble",
+        )
+
+        content = ssh_file.read_text()
+        assert content.count("Host bubble-test-bubble") == 1
+        assert "ProxyCommand incus exec test-bubble" not in content
+        assert "ProxyCommand incus exec bubble-colima:test-bubble" in content
 
 
 class TestRemoveSshConfig:
@@ -234,6 +305,17 @@ class TestAtomicSshConfig:
 
 
 class TestRemoteProxyCommand:
+    def test_chained_proxy_uses_runtime_qualified_target(self, tmp_ssh_dir):
+        ssh_file = tmp_ssh_dir / "bubble"
+        host = RemoteHost(hostname="build-server", user="kim")
+        add_ssh_config(
+            "test-remote",
+            remote_host=host,
+            container_target="bubble-colima:test-remote",
+        )
+        content = ssh_file.read_text()
+        assert "'incus exec bubble-colima:test-remote" in content
+
     def test_chained_proxy_with_default_port(self, tmp_ssh_dir):
         ssh_file = tmp_ssh_dir / "bubble"
         host = RemoteHost(hostname="build-server", user="kim")
