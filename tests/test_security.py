@@ -275,6 +275,7 @@ def test_open_help_advertises_repeatable_allow_domain():
         ({"allow_domains": ("cache.example",)}, "--allow-domain"),
         ({"mount_specs": (object(),)}, "--mount"),
         ({"allow_push": ("owner/fork",)}, "--allow-push"),
+        ({"lake_cache_services": (object(),)}, "--lake-cache-service"),
     ],
 )
 def test_launch_only_options_are_rejected_on_reattach(kwargs, flag):

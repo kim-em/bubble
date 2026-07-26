@@ -9,10 +9,11 @@ import urllib.error
 import urllib.request
 
 import pytest
+from click import ClickException
 from click.testing import CliRunner
 
 from bubble import artifact_cache
-from bubble.cli import main
+from bubble.cli import _require_explicit_lake_cache, main
 
 
 class FakeResponse(io.BytesIO):
@@ -140,6 +141,21 @@ def test_open_help_exposes_three_argument_lake_service():
     result = CliRunner().invoke(main, ["open", "--help"])
     assert result.exit_code == 0
     assert "--lake-cache-service NAME ARTIFACT_URL REVISION_URL" in result.output
+
+
+def test_requested_lake_service_setup_fails_closed():
+    with pytest.raises(ClickException, match="requested Lake cache service setup failed"):
+        _require_explicit_lake_cache(False, ("tauceti-public",))
+    _require_explicit_lake_cache(False, ())
+    _require_explicit_lake_cache(True, ("tauceti-public",))
+
+
+def test_upstream_requests_disable_content_encoding():
+    client = artifact_cache._upstream_client()
+    try:
+        assert client.headers["Accept-Encoding"] == "identity"
+    finally:
+        artifact_cache._close_upstream_client()
 
 
 def test_capability_is_scoped_to_its_routes(cache_paths):
@@ -461,3 +477,22 @@ def test_endpoint_compatibility_requires_current_contract(monkeypatch):
     assert artifact_cache.endpoint_compatible({**endpoint, "bubble_version": "old"})
     assert not artifact_cache.endpoint_compatible({**endpoint, "version": 2})
     assert not artifact_cache.endpoint_compatible({**endpoint, "capabilities": ["get-only"]})
+
+
+def test_installed_daemon_health_is_retried_before_restart(monkeypatch):
+    endpoint = {
+        "version": 1,
+        "capabilities": ["get-only", "fallback-origins", "lake-services"],
+    }
+    probes = iter([None, endpoint])
+    monkeypatch.setattr(artifact_cache, "read_live_endpoint", lambda: next(probes))
+    monkeypatch.setattr(artifact_cache.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr("bubble.automation.is_artifact_cache_installed", lambda: True)
+    installs = []
+    monkeypatch.setattr(
+        "bubble.automation.install_artifact_cache_daemon",
+        lambda **_kwargs: installs.append(True),
+    )
+
+    assert artifact_cache.ensure_daemon_endpoint() == endpoint
+    assert installs == []
