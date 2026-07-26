@@ -68,6 +68,12 @@ from .vscode import (
     warn_if_remote_vscode_client,
 )
 
+__all__ = [
+    "maybe_rebuild_base_image",
+    "maybe_rebuild_customize",
+    "maybe_rebuild_tools",
+]
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1184,11 +1190,6 @@ def _open_single(
 
     # Local flow
     runtime = get_runtime(config)
-
-    if not machine_readable:
-        maybe_rebuild_base_image()
-        maybe_rebuild_tools(runtime, notices=notices)
-        maybe_rebuild_customize(notices=notices)
 
     # Check if target matches an existing container
     existing = find_existing_container(runtime, target)

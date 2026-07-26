@@ -140,6 +140,7 @@ class _FakeHook:
 @pytest.fixture
 def patch_hook(monkeypatch):
     monkeypatch.setattr(image_management, "select_hook", lambda ref_path, ref: _FakeHook())
+    monkeypatch.setattr(image_management, "desired_image_alias", lambda _runtime, name: name)
 
 
 class TestToolchainImageBuildPolicy:
@@ -160,7 +161,7 @@ class TestToolchainImageBuildPolicy:
         monkeypatch.setattr(
             image_management,
             "_background_build_lean_toolchain",
-            lambda version: bg.append(version),
+            lambda runtime, version: bg.append(version),
         )
 
         hook, image_name = image_management.detect_and_build_image(
@@ -185,7 +186,7 @@ class TestToolchainImageBuildPolicy:
         monkeypatch.setattr(
             image_management,
             "_background_build_lean_toolchain",
-            lambda version: bg.append(version),
+            lambda runtime, version: bg.append(version),
         )
         # plain lean image exists so no synchronous base build happens.
         mock_runtime._images.add("lean")
@@ -211,7 +212,7 @@ class TestToolchainImageBuildPolicy:
         monkeypatch.setattr(
             image_management,
             "_background_build_lean_toolchain",
-            lambda version: bg.append(version),
+            lambda runtime, version: bg.append(version),
         )
         mock_runtime._images.add("lean")
 

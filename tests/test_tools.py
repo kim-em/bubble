@@ -1,5 +1,6 @@
 """Tests for the pluggable tool installation system."""
 
+import pytest
 from click.testing import CliRunner
 
 from bubble.tools import (
@@ -11,6 +12,12 @@ from bubble.tools import (
     tool_script,
     tools_hash,
 )
+
+
+@pytest.fixture(autouse=True)
+def logical_aliases(monkeypatch):
+    monkeypatch.setattr("bubble.images.builder.desired_image_alias", lambda _runtime, name: name)
+    monkeypatch.setattr("bubble.image_management.desired_image_alias", lambda _runtime, name: name)
 
 
 def test_available_tools():
@@ -479,24 +486,8 @@ def test_build_nonbase_image_skips_tools(mock_runtime, monkeypatch, tmp_data_dir
     assert len(exec_calls) == 1
 
 
-def test_tools_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
-    """Verify that the tools hash file is written after building base."""
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
-    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
-
-    from bubble.images.builder import TOOLS_HASH_FILE, build_image
-
-    mock_runtime._images.discard("base")
-    build_image(mock_runtime, "base")
-
-    assert TOOLS_HASH_FILE.exists()
-    stored = TOOLS_HASH_FILE.read_text().strip()
-    assert len(stored) == 16
-
-
-def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_dir):
-    """Verify that building base with tools deletes all derived images recursively."""
+def test_build_base_preserves_derived_variants(mock_runtime, monkeypatch, tmp_data_dir):
+    """Build-keyed parents do not invalidate or delete older derived variants."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
@@ -509,14 +500,12 @@ def test_build_base_purges_derived_images(mock_runtime, monkeypatch, tmp_data_di
 
     build_image(mock_runtime, "base")
 
-    # Derived images should have been deleted
     delete_calls = [c for c in mock_runtime.calls if c[0] == "image_delete"]
-    deleted_names = {c[1] for c in delete_calls}
-    assert "lean" in deleted_names
+    assert delete_calls == []
 
 
-def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, tmp_data_dir):
-    """Verify that building base also purges dynamic toolchain images (lean-v4.x.y)."""
+def test_build_base_preserves_dynamic_toolchain_variants(mock_runtime, monkeypatch, tmp_data_dir):
+    """Existing toolchain variants remain available after another base build."""
     monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
     monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
@@ -531,108 +520,4 @@ def test_build_base_purges_dynamic_toolchain_images(mock_runtime, monkeypatch, t
     build_image(mock_runtime, "base")
 
     delete_calls = [c for c in mock_runtime.calls if c[0] == "image_delete"]
-    deleted_names = {c[1] for c in delete_calls}
-    # Dynamic toolchain images should also be purged
-    assert "lean-v4-16-0" in deleted_names
-
-
-def test_maybe_rebuild_tools_triggers_on_stale_hash(mock_runtime, monkeypatch, tmp_data_dir):
-    """A stale tools-hash (e.g. base.sh changed on upgrade) forces a base rebuild.
-
-    This is the path by which existing users with an already-built base image
-    pick up base.sh changes like the newly-added jq package.
-    """
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
-
-    from bubble.config import load_config, save_config
-
-    config = load_config()
-    config["editor"] = "shell"
-    save_config(config)
-
-    from bubble.images.builder import TOOLS_HASH_FILE
-
-    TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOOLS_HASH_FILE.write_text("stale-hash\n")
-
-    calls = []
-    monkeypatch.setattr(
-        "bubble.images.builder.build_image",
-        lambda runtime, name, **kw: calls.append((name, kw)),
-    )
-
-    from bubble.image_management import maybe_rebuild_tools
-
-    maybe_rebuild_tools(mock_runtime)
-
-    assert calls, "expected a base rebuild to be triggered"
-    name, kw = calls[0]
-    assert name == "base"
-    assert kw.get("force") is True
-
-
-def test_maybe_rebuild_tools_noop_when_hash_matches(mock_runtime, monkeypatch, tmp_data_dir):
-    """No rebuild when the stored tools-hash already matches the current one."""
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
-
-    from bubble.config import load_config, save_config
-
-    config = load_config()
-    config["editor"] = "shell"
-    save_config(config)
-
-    from bubble.images.builder import TOOLS_HASH_FILE
-    from bubble.tools import resolve_tools, tools_hash
-
-    TOOLS_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOOLS_HASH_FILE.write_text(tools_hash(resolve_tools(config)) + "\n")
-
-    calls = []
-    monkeypatch.setattr(
-        "bubble.images.builder.build_image",
-        lambda runtime, name, **kw: calls.append((name, kw)),
-    )
-
-    from bubble.image_management import maybe_rebuild_tools
-
-    maybe_rebuild_tools(mock_runtime)
-
-    assert calls == []
-
-
-def test_collect_derived_images_recursive():
-    """Verify _collect_derived_images walks the full dependency tree."""
-    from bubble.images.builder import _collect_derived_images
-
-    # "base" -> "lean" (only two images in simplified hierarchy)
-    derived = set(_collect_derived_images("base"))
-    assert "lean" in derived
-
-
-def test_collect_derived_images_leaf():
-    """Verify _collect_derived_images returns empty for leaf images."""
-    from bubble.images.builder import _collect_derived_images
-
-    assert _collect_derived_images("lean") == []
-
-
-def test_collect_dynamic_toolchain_aliases(mock_runtime):
-    """Verify dynamic toolchain images are found by alias pattern."""
-    from bubble.images.builder import _collect_dynamic_toolchain_aliases
-
-    mock_runtime._images.update(
-        {
-            "lean-v4-16-0",
-            "lean-v4-17-0",
-            "lean",
-        }
-    )
-
-    # Only lean-family images in purged set trigger scanning
-    aliases = set(_collect_dynamic_toolchain_aliases(mock_runtime, {"lean"}))
-    assert "lean-v4-16-0" in aliases
-    assert "lean-v4-17-0" in aliases
-    assert "lean" not in aliases
-
-    # No lean images in purged set -> no dynamic aliases
-    assert _collect_dynamic_toolchain_aliases(mock_runtime, {"base"}) == []
+    assert delete_calls == []

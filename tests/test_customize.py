@@ -1,6 +1,13 @@
 """Tests for user-defined image customization script."""
 
+import pytest
+
 import bubble.images.builder as builder
+
+
+@pytest.fixture(autouse=True)
+def logical_aliases(monkeypatch):
+    monkeypatch.setattr(builder, "desired_image_alias", lambda _runtime, name: name)
 
 
 def test_customize_hash_no_script(tmp_data_dir):
@@ -74,53 +81,6 @@ def test_build_image_skips_customize_when_absent(mock_runtime, monkeypatch, tmp_
     assert len(exec_calls) == 1
 
 
-def test_customize_hash_file_written(mock_runtime, monkeypatch, tmp_data_dir):
-    """Hash file is written after building with a customize script."""
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
-    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
-
-    from bubble.config import load_config, save_config
-
-    config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "elan": "no"}
-    config["editor"] = "shell"
-    save_config(config)
-
-    builder.CUSTOMIZE_SCRIPT.write_text("#!/bin/bash\necho hello\n")
-
-    mock_runtime._images.discard("base")
-    builder.build_image(mock_runtime, "base")
-
-    assert builder.CUSTOMIZE_HASH_FILE.exists()
-    stored = builder.CUSTOMIZE_HASH_FILE.read_text().strip()
-    assert len(stored) == 16
-    assert stored == builder.customize_hash()
-
-
-def test_customize_hash_file_removed_when_no_script(mock_runtime, monkeypatch, tmp_data_dir):
-    """Hash file is removed when customize script doesn't exist."""
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
-    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
-
-    from bubble.config import load_config, save_config
-
-    config = load_config()
-    config["tools"] = {"claude": "no", "codex": "no", "elan": "no"}
-    config["editor"] = "shell"
-    save_config(config)
-
-    # Pre-populate hash file as if a previous build had a customize script
-    builder.CUSTOMIZE_HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
-    builder.CUSTOMIZE_HASH_FILE.write_text("oldhash\n")
-
-    mock_runtime._images.discard("base")
-    builder.build_image(mock_runtime, "base")
-
-    assert not builder.CUSTOMIZE_HASH_FILE.exists()
-
-
 def test_build_lean_toolchain_runs_customize(mock_runtime, monkeypatch, tmp_data_dir):
     """Lean toolchain image build also runs the customize script."""
     monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
@@ -153,23 +113,3 @@ def test_nonbase_image_runs_customize(mock_runtime, monkeypatch, tmp_data_dir):
     # 2 exec calls: lean script + customize script
     assert len(exec_calls) == 2
     assert "custom" in exec_calls[-1][2][-1]
-
-
-def test_nonbase_image_does_not_write_hash(mock_runtime, monkeypatch, tmp_data_dir):
-    """Building a non-base image should not update the customize hash file.
-
-    Only the base build should record the hash — otherwise building a derived
-    image could falsely mark the system as current while base is still stale.
-    """
-    monkeypatch.setattr("bubble.tools._host_has_command", lambda cmd: False)
-    monkeypatch.setattr("bubble.images.builder.get_vscode_commit", lambda: None)
-    monkeypatch.setattr("bubble.images.builder.wait_for_container", lambda *a, **kw: None)
-
-    mock_runtime._images.add("base")
-
-    builder.CUSTOMIZE_SCRIPT.write_text("#!/bin/bash\necho custom\n")
-
-    builder.build_image(mock_runtime, "lean")
-
-    # Hash file should NOT exist — only base builds write it
-    assert not builder.CUSTOMIZE_HASH_FILE.exists()

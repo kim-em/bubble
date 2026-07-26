@@ -1,8 +1,16 @@
 """Tests for multi-target support in the open command."""
 
+import pytest
 from click.testing import CliRunner
 
+from bubble import cli
 from bubble.cli import main
+
+
+@pytest.fixture(autouse=True)
+def avoid_opening_real_bubbles(monkeypatch):
+    """These parser tests must not provision images or containers."""
+    monkeypatch.setattr(cli, "_open_single", lambda *_args, **_kwargs: None)
 
 
 def test_multi_target_rejects_name():

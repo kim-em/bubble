@@ -106,7 +106,7 @@ _LAUNCHD_JOBS = {
         "log": "/tmp/bubble-git-update.log",
     },
     "com.bubble.image-refresh": {
-        "args": ["images", "build", "base"],
+        "args": ["images", "build", "base", "--force"],
         "extra": {
             "StartCalendarInterval": {"Hour": 3, "Weekday": 0},
             "RunAtLoad": False,
@@ -290,7 +290,7 @@ def _install_systemd() -> list[str]:
 
         [Service]
         Type=oneshot
-        ExecStart={bubble} images build base
+        ExecStart={bubble} images build base --force
         {_systemd_path_env()}
     """)
     )

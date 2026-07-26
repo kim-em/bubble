@@ -15,6 +15,7 @@ class MockRuntime(ContainerRuntime):
         self.exec_responses: dict[str, str] = {}
         self._containers: dict[str, ContainerInfo] = {}
         self._images: set[str] = {"base"}
+        self._image_properties: dict[str, dict[str, str]] = {}
         self._devices: dict[str, set[str]] = {}
 
     def is_available(self) -> bool:
@@ -62,9 +63,10 @@ class MockRuntime(ContainerRuntime):
     def add_disk(self, name: str, device_name: str, source: str, path: str, readonly: bool = False):
         self.calls.append(("add_disk", name, device_name, source, path, readonly))
 
-    def publish(self, name: str, alias: str):
+    def publish(self, name: str, alias: str, *, properties=None):
         self.calls.append(("publish", name, alias))
         self._images.add(alias)
+        self._image_properties[alias] = dict(properties or {})
 
     def image_exists(self, alias: str) -> bool:
         self.calls.append(("image_exists", alias))
@@ -80,7 +82,15 @@ class MockRuntime(ContainerRuntime):
 
     def list_images(self) -> list[dict]:
         self.calls.append(("list_images",))
-        return [{"aliases": [{"name": a}]} for a in sorted(self._images)]
+        return [
+            {
+                "aliases": [{"name": a}],
+                "fingerprint": f"fp-{a}",
+                "created_at": "2026-01-01T00:00:00Z",
+                "properties": self._image_properties.get(a, {}),
+            }
+            for a in sorted(self._images)
+        ]
 
     def push_file(self, name: str, local_path: str, remote_path: str):
         self.calls.append(("push_file", name, local_path, remote_path))
@@ -136,10 +146,8 @@ def tmp_data_dir(tmp_path, monkeypatch):
     # Patch builder module constants that capture DATA_DIR at import time
     import bubble.images.builder as builder
 
-    monkeypatch.setattr(builder, "VSCODE_COMMIT_FILE", data_dir / "vscode-commit")
-    monkeypatch.setattr(builder, "TOOLS_HASH_FILE", data_dir / "tools-hash")
     monkeypatch.setattr(builder, "CUSTOMIZE_SCRIPT", data_dir / "customize.sh")
-    monkeypatch.setattr(builder, "CUSTOMIZE_HASH_FILE", data_dir / "customize-hash")
+    monkeypatch.setattr(builder, "BUILD_LOCK_DIR", data_dir / "locks" / "images")
 
     # Patch cloud module if imported
     try:
