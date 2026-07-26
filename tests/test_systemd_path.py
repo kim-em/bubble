@@ -9,6 +9,7 @@ import pytest
 from bubble.automation import (
     _AUTH_PROXY_JOB,
     _bubble_path,
+    _install_artifact_cache_systemd,
     _install_auth_proxy_systemd,
     _systemd_path_env,
     _write_launchd_plist,
@@ -132,6 +133,33 @@ def test_systemd_restarts_active_auth_proxy(tmp_path, monkeypatch):
         ["systemctl", "--user", "daemon-reload"],
         ["systemctl", "--user", "enable", "bubble-auth-proxy.service"],
         ["systemctl", "--user", "restart", "bubble-auth-proxy.service"],
+    ]
+
+
+def test_systemd_restarts_active_artifact_cache(tmp_path, monkeypatch):
+    import bubble.automation as automation
+
+    calls = []
+    monkeypatch.setattr(automation, "HOST_SYSTEMD_DIR", tmp_path)
+    monkeypatch.setattr(automation, "_bubble_path", lambda: "/stable/bin/bubble")
+    monkeypatch.setattr(
+        automation.subprocess,
+        "run",
+        lambda argv, **_kwargs: (
+            calls.append(argv) or SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    _install_artifact_cache_systemd()
+
+    assert (
+        "ExecStart=/stable/bin/bubble cache daemon"
+        in (tmp_path / "bubble-artifact-cache.service").read_text()
+    )
+    assert calls == [
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", "bubble-artifact-cache.service"],
+        ["systemctl", "--user", "restart", "bubble-artifact-cache.service"],
     ]
 
 

@@ -281,7 +281,10 @@ class LeanHook(Hook):
             )
         self._is_lean4 = False
         self._git_deps = []
-        self._needs_cache = False
+        # We do not choose one subproject for auto-build, but a user may cd
+        # into any of them and run `lake exe cache get`. The download proxy is
+        # safe and useful even when some candidates do not depend on Mathlib.
+        self._needs_cache = True
         return True
 
     def _configure_for_single_project(self, bare_repo_path: Path, ref: str, subdir: str) -> None:
@@ -318,6 +321,9 @@ class LeanHook(Hook):
                 ("lake-cache", "/shared/lake-cache", "LAKE_CACHE_DIR"),
             ]
         return []
+
+    def uses_mathlib_cache(self) -> bool:
+        return self._needs_cache
 
     def git_dependencies(self) -> list[GitDependency]:
         return self._git_deps

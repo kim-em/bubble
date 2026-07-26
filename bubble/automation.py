@@ -25,6 +25,7 @@ LAUNCHD_LABELS = {
 }
 RELAY_LABEL = "com.bubble.relay-daemon"
 AUTH_PROXY_LABEL = "com.bubble.auth-proxy"
+ARTIFACT_CACHE_LABEL = "com.bubble.artifact-cache"
 
 
 def install_automation() -> list[str]:
@@ -131,6 +132,15 @@ _AUTH_PROXY_JOB = {
         "RunAtLoad": True,
     },
     "log": "/tmp/bubble-auth-proxy.log",
+}
+
+_ARTIFACT_CACHE_JOB = {
+    "args": ["cache", "daemon"],
+    "extra": {
+        "KeepAlive": True,
+        "RunAtLoad": True,
+    },
+    "log": "/tmp/bubble-artifact-cache.log",
 }
 
 
@@ -538,3 +548,97 @@ def _remove_auth_proxy_systemd() -> str:
         return "systemd: bubble-auth-proxy.service"
 
     return ""
+
+
+# ---------------------------------------------------------------------------
+# Artifact cache daemon (host-global, started on demand by Lean bubbles)
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _artifact_cache_install_lock():
+    """Serialize changes to the one artifact-cache service owned by this user."""
+    import fcntl
+
+    HOST_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(HOST_DATA_DIR / "artifact-cache.install.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def install_artifact_cache_daemon(*, skip_if: Callable[[], bool] | None = None) -> str:
+    """Install and start the host-global artifact cache daemon."""
+    with _artifact_cache_install_lock():
+        if skip_if is not None and skip_if():
+            return "already running"
+        system = platform.system()
+        if system == "Darwin":
+            _write_launchd_plist(ARTIFACT_CACHE_LABEL, _ARTIFACT_CACHE_JOB, host_global=True)
+            return f"launchd: {ARTIFACT_CACHE_LABEL}"
+        if system == "Linux":
+            return _install_artifact_cache_systemd()
+        return ""
+
+
+def remove_artifact_cache_daemon() -> str:
+    """Stop and remove the host-global artifact cache daemon."""
+    with _artifact_cache_install_lock():
+        system = platform.system()
+        if system == "Darwin":
+            return _remove_launchd_job(ARTIFACT_CACHE_LABEL, host_global=True) or ""
+        if system == "Linux":
+            return _remove_artifact_cache_systemd()
+        return ""
+
+
+def is_artifact_cache_installed() -> bool:
+    """Whether the host-global artifact cache service definition exists."""
+    system = platform.system()
+    if system == "Darwin":
+        launch_agents = HOST_DATA_DIR.parent / "Library" / "LaunchAgents"
+        return (launch_agents / f"{ARTIFACT_CACHE_LABEL}.plist").exists()
+    if system == "Linux":
+        return (HOST_SYSTEMD_DIR / "bubble-artifact-cache.service").exists()
+    return False
+
+
+def _install_artifact_cache_systemd() -> str:
+    HOST_SYSTEMD_DIR.mkdir(parents=True, exist_ok=True)
+    bubble = _bubble_path()
+    service = HOST_SYSTEMD_DIR / "bubble-artifact-cache.service"
+    service.write_text(
+        textwrap.dedent(f"""\
+        [Unit]
+        Description=bubble GET-only artifact cache daemon
+
+        [Service]
+        Type=simple
+        ExecStart={bubble} cache daemon
+        Restart=always
+        RestartSec=5
+        {_systemd_path_env()}
+
+        [Install]
+        WantedBy=default.target
+    """)
+    )
+    _systemctl_checked(["daemon-reload"])
+    _systemctl_checked(["enable", "bubble-artifact-cache.service"])
+    _systemctl_checked(["restart", "bubble-artifact-cache.service"])
+    return "systemd: bubble-artifact-cache.service"
+
+
+def _remove_artifact_cache_systemd() -> str:
+    service = HOST_SYSTEMD_DIR / "bubble-artifact-cache.service"
+    if not service.exists():
+        return ""
+    subprocess.run(
+        ["systemctl", "--user", "disable", "--now", "bubble-artifact-cache.service"],
+        capture_output=True,
+    )
+    service.unlink()
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    return "systemd: bubble-artifact-cache.service"

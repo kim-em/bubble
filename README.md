@@ -111,6 +111,17 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 **Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the container includes elan, pre-installed VS Code extensions, and auto-downloads the mathlib cache when needed.
 
+**Host-global artifact cache**: Mathlib downloads are routed through a host daemon that accepts only `GET`/`HEAD`, caches successful public responses, and is shared across isolated `BUBBLE_HOME` stores. Mathlib's current and legacy stores are tried in order. Projects with their own anonymous Lake cache can opt in explicitly:
+
+```bash
+bubble TauCetiProject/TauCeti \
+  --lake-cache-service tauceti-public \
+  https://example.invalid/artifacts \
+  https://example.invalid/revisions
+```
+
+Bubble writes the matching Lake system configuration inside the container. The upstream URLs stay host-side; the container receives a per-bubble read capability and cannot upload or choose another origin.
+
 **Network allowlisting**: Containers can only reach allowed domains (language-specific domains like `releases.lean-lang.org` for Lean, plus any configured in `~/.bubble/config.toml`). Direct GitHub access is blocked by iptables — all GitHub traffic is forced through the auth proxy, which enforces repo-scoping and rate limits. IPv6 is blocked, DNS is restricted to the container resolver, and outbound SSH is blocked.
 
 ## Requirements
@@ -129,6 +140,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 | `bubble pop <name>` | Pop a bubble (delete permanently) |
 | `bubble cleanup` | Pop all clean bubbles (no unsaved work) |
 | `bubble images list\|build\|delete\|prune` | Manage base images |
+| `bubble cache status\|start\|stop\|prune\|clear` | Manage the host-global artifact cache |
 | `bubble git update` | Refresh shared git mirrors |
 | `bubble network apply\|remove <name>` | Manage network restrictions |
 | `bubble automation install\|remove\|status` | Manage periodic jobs |
@@ -154,6 +166,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 - **Bubble-in-bubble relay**: Containers can open new bubbles on the host, but only for repos already cloned in `~/.bubble/git/`. Disable with `bubble security set relay off`
 - **GitHub auth proxy**: Host token never enters containers. Git and REST API are repo-scoped. **GraphQL queries are read-only but account-wide** — can read any data the host token can access. API access can be set to `off`, `on` (read-only, the default), or `read-write` (enables mutations) via `bubble security set github-api`
 - **Shared Lean caches**: Mathlib's `lake exe cache` cache at `~/.bubble/mathlib-cache/` and Lake's built-in artifact cache at `~/.bubble/lake-cache/` are shared across Lean containers. Modes: `on` (default) = read-write (a compromised container could poison cached artifacts), `off` = read-only (prevents poisoning), `overlay` = per-container writable views with isolated writes (overlayfs on Linux; clonefile-seeded writable copies on macOS/Colima, where overlayfs can't run over virtiofs). These caches are *not* shared with cache commands run outside a bubble. Configure with `bubble security set shared-cache`. If you suspect poisoning, delete the corresponding cache directory.
+- **GET-only upstream cache**: Public Mathlib and explicitly configured Lake downloads also pass through the host-global cache at `~/.bubble/artifact-cache/`. Supported routes are revision- or content-addressed and therefore immutable. The cache is bounded to 50 GiB by default, validates per-container route grants, follows no redirects, accepts no query-selected origins, and rejects every upload method. Manage it with `bubble cache`; customize it with `[artifact_cache] max_size = "100GiB"`, or disable proxy setup with `[artifact_cache] enabled = false` (direct public downloads remain available).
 
 ## Images
 
@@ -181,7 +194,7 @@ Set `BUBBLE_HOME` to override the data directory (default: `~/.bubble`):
 export BUBBLE_HOME=/data/bubble
 ```
 
-This isolates configuration and per-bubble state. Incus images, trusted Git mirrors, host daemons, and their coordination locks remain host-global and are safely shared by build or repository identity.
+This isolates configuration and per-bubble state. Incus images, trusted Git mirrors, the GET-only artifact cache, host daemons, and their coordination locks remain host-global and are safely shared by build, repository, or upstream-response identity. Configure the host-global cache's `max_size` and `port` in the real login home's `~/.bubble/config.toml`, not an isolated `BUBBLE_HOME`.
 
 ```toml
 [runtime]

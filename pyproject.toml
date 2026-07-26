@@ -26,6 +26,7 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.0",
+    "httpx[http2]>=0.28,<1",
     "tomli>=2.0; python_version < '3.11'",
     "tomli-w>=1.0",
 ]

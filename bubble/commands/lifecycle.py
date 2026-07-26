@@ -105,11 +105,13 @@ def _cleanup_tokens(name: str, remote_host_spec: str = ""):
     If remote_host_spec is provided, also stops the SSH tunnel to
     that host if no other bubbles are using it.
     """
+    from ..artifact_cache import remove_cache_tokens
     from ..auth_proxy import remove_auth_tokens
     from ..relay import remove_relay_token
 
     remove_relay_token(name)
     remove_auth_tokens(name)
+    remove_cache_tokens(name)
 
     if remote_host_spec:
         from ..tunnel import stop_tunnel_if_unused

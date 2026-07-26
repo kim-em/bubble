@@ -99,6 +99,31 @@ class TestReapplyNetworkAfterRestart:
         info = get_bubble_info("py-bubble")
         assert info["extra_domains"] == []  # explicit empty list, not missing
 
+    def test_restores_artifact_cache_bridge_hole(self, tmp_data_dir, monkeypatch):
+        from bubble.artifact_cache import generate_cache_token
+
+        register_bubble("cached", "org/repo", network_enabled=True, extra_domains=[])
+        generate_cache_token(
+            "cached",
+            {"mathlib": ["https://cache.example"]},
+            mathlib=True,
+        )
+        runtime = _RecordingRuntime("cached", state="running")
+        monkeypatch.setattr("bubble.config.load_config", lambda: {})
+        endpoint = {"tcp": {"host": "10.156.104.1", "port": 7655}}
+        monkeypatch.setattr(
+            "bubble.artifact_cache.read_live_endpoint",
+            lambda: endpoint,
+        )
+        monkeypatch.setattr("bubble.artifact_cache.ensure_daemon_endpoint", lambda: endpoint)
+        monkeypatch.setattr("bubble.github_token._allow_bridge_egress", lambda *_args: True)
+
+        reapply_network_after_restart(runtime, "cached")
+
+        joined = "\n".join(_iptables_scripts(runtime))
+        assert "iptables -A OUTPUT -d 10.156.104.1 -p tcp --dport 7655 -j ACCEPT" in joined
+        assert any("MATHLIB_CACHE_GET_URL" in " ".join(call) for call in runtime.exec_calls)
+
 
 class TestRecoverExtraDomains:
     def test_returns_none_without_org_repo(self, tmp_data_dir):

@@ -27,6 +27,7 @@ def apply_allowlist(
     domains: list[str],
     *,
     auth_proxy_endpoint: tuple[str, int] | None = None,
+    proxy_endpoints: list[tuple[str, int]] | None = None,
 ):
     """Apply network allowlist to a container using iptables.
 
@@ -43,15 +44,17 @@ def apply_allowlist(
     for domain in domains:
         if not _DOMAIN_RE.match(domain):
             raise ValueError(f"Invalid domain in allowlist: {domain!r}")
-    if auth_proxy_endpoint is not None:
-        ip, port = auth_proxy_endpoint
+    endpoints = list(proxy_endpoints or [])
+    if auth_proxy_endpoint is not None and auth_proxy_endpoint not in endpoints:
+        endpoints.append(auth_proxy_endpoint)
+    for ip, port in endpoints:
         if not _IPV4_RE.match(ip):
             raise ValueError(f"Invalid auth proxy IP: {ip!r}")
         if not isinstance(port, int) or not (0 < port < 65536):
             raise ValueError(f"Invalid auth proxy port: {port!r}")
 
     # Build the allowlist script
-    script = _build_allowlist_script(domains, auth_proxy_endpoint=auth_proxy_endpoint)
+    script = _build_allowlist_script(domains, proxy_endpoints=endpoints)
     runtime.exec(container, ["bash", "-c", script])
 
 
@@ -72,6 +75,7 @@ def _build_allowlist_script(
     domains: list[str],
     *,
     auth_proxy_endpoint: tuple[str, int] | None = None,
+    proxy_endpoints: list[tuple[str, int]] | None = None,
 ) -> str:
     """Build a shell script that sets up iptables allowlist rules."""
     lines = [
@@ -102,8 +106,10 @@ def _build_allowlist_script(
         "fi",
         "",
     ]
-    if auth_proxy_endpoint is not None:
-        ip, port = auth_proxy_endpoint
+    endpoints = list(proxy_endpoints or [])
+    if auth_proxy_endpoint is not None and auth_proxy_endpoint not in endpoints:
+        endpoints.append(auth_proxy_endpoint)
+    for ip, port in endpoints:
         lines.extend(
             [
                 "",

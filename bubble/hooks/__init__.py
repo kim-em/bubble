@@ -57,6 +57,10 @@ class Hook(ABC):
         """
         return []
 
+    def uses_mathlib_cache(self) -> bool:
+        """Whether Bubble should configure the host-global Mathlib download cache."""
+        return False
+
     def git_dependencies(self) -> list[GitDependency]:
         """Git repos this project depends on, for pre-population via alternates.
 
