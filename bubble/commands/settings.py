@@ -246,7 +246,7 @@ def register_settings_commands(main):
     def codex_credentials_cmd(setting):
         """Set whether Codex credentials are mounted into bubbles.
 
-        When on, ~/.codex credentials (auth.json) are mounted
+        When on, Codex credentials (auth.json, from $CODEX_HOME or ~/.codex) are mounted
         read-only into containers by default. Override per-bubble with
         --no-codex-credentials.
 

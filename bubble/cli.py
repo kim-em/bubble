@@ -751,7 +751,8 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
 @click.option(
     "--codex-credentials/--no-codex-credentials",
     default=None,
-    help="Mount ~/.codex credentials into container (default: from config or enabled)",
+    help="Mount Codex credentials ($CODEX_HOME, default ~/.codex) into container "
+    "(default: from config or enabled)",
 )
 @click.option(
     "--vibe-credentials/--no-vibe-credentials",
@@ -771,7 +772,7 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
     "--codex-config/--no-codex-config",
     default=None,
     help=(
-        "Mount ~/.codex config items into container, independent of"
+        "Mount Codex config items ($CODEX_HOME, default ~/.codex) into container, independent of"
         " --codex-credentials (default: from config or enabled)."
     ),
 )

@@ -122,7 +122,7 @@ SETTINGS: dict[str, SecuritySettingDef] = {
         category="Authentication",
     ),
     "codex_credentials": SecuritySettingDef(
-        description="Mount ~/.codex credentials into containers",
+        description="Mount Codex credentials ($CODEX_HOME, default ~/.codex) into containers",
         auto_default="on",
         warning="credentials give containers access to OpenAI/Codex API auth",
         category="Authentication",
