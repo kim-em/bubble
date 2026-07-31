@@ -1,6 +1,11 @@
 """Tests for user-specified mount support."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -396,6 +401,97 @@ class TestClaudeConfigDirEnvVar:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/work-claude")
         # Not expanded — Path keeps the literal leading "~" segment.
         assert claude_config_dir() == Path("~/work-claude")
+
+
+class TestCodexHomeEnvVar:
+    """Test that codex_config_dir() honors the $CODEX_HOME env var."""
+
+    def test_env_var_overrides_default(self, tmp_path, monkeypatch):
+        """When $CODEX_HOME is set, the host-side dir resolves from it."""
+        from bubble.config import codex_config_dir
+
+        work_dir = tmp_path / "work-codex"
+        monkeypatch.setenv("CODEX_HOME", str(work_dir))
+        assert codex_config_dir() == work_dir
+
+    def test_falls_back_to_home_codex(self, monkeypatch):
+        """Without the env var, the dir falls back to ~/.codex."""
+        from bubble.config import codex_config_dir
+
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        assert codex_config_dir() == Path.home() / ".codex"
+
+    def test_empty_env_var_falls_back(self, monkeypatch):
+        """An empty $CODEX_HOME falls back to ~/.codex (not an empty path)."""
+        from bubble.config import codex_config_dir
+
+        monkeypatch.setenv("CODEX_HOME", "")
+        assert codex_config_dir() == Path.home() / ".codex"
+
+    def test_value_taken_verbatim(self, monkeypatch):
+        """The value is used verbatim (mirroring Codex; no ~ expansion)."""
+        from bubble.config import codex_config_dir
+
+        monkeypatch.setenv("CODEX_HOME", "~/work-codex")
+        # Not expanded — Path keeps the literal leading "~" segment.
+        assert codex_config_dir() == Path("~/work-codex")
+
+    def test_module_wires_the_resolver_into_the_mount_source(self):
+        """CODEX_CONFIG's base is whatever the resolver returned, not a hardcoded ~/.codex.
+
+        The mount source is CODEX_CONFIG.base_dir, so the resolver only matters if the module is
+        actually built from it. Without this, reverting the constant to `Path.home() / ".codex"`
+        would leave every other test in this class passing.
+        """
+        from bubble import config
+
+        assert config.CODEX_CONFIG.base_dir == config.CODEX_CONFIG_DIR
+        assert config.CODEX_CONFIG_DIR == config.codex_config_dir()
+
+    def test_credentials_mount_follows_the_env_var(self, tmp_path):
+        """The auth.json actually mounted comes from $CODEX_HOME, not ~/.codex.
+
+        This is the behaviour the resolver exists for: a caller whose Codex login lives in a
+        custom $CODEX_HOME would otherwise have the container seeded from a different account,
+        or from none at all (kim-em/TauCetiWorker#148).
+
+        Run in a subprocess because CODEX_CONFIG_DIR is resolved at import, as CLAUDE_CONFIG_DIR
+        is. Monkeypatching the module's own constants here would only assert that the test rebuilt
+        them correctly; this exercises the real import path a bubble invocation takes.
+        """
+        work_dir = tmp_path / "work-codex"
+        work_dir.mkdir()
+        (work_dir / "auth.json").write_text('{"tokens": {"access_token": "from-codex-home"}}')
+
+        script = (
+            "import json\n"
+            "from bubble.config import codex_config_mounts\n"
+            "print(json.dumps([[str(m.source), m.target] for m in codex_config_mounts()]))\n"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", script],
+            env={**os.environ, "CODEX_HOME": str(work_dir)},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        mounts = json.loads(out.stdout)
+        assert [str(work_dir / "auth.json"), "/home/user/.codex/auth.json"] in mounts
+
+    def test_unusable_env_var_warns_rather_than_mounting_nothing(self, tmp_path, capsys):
+        """A mistyped $CODEX_HOME must not silently produce an unauthenticated container."""
+        from bubble import config
+
+        missing = tmp_path / "typo"
+        with (
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(missing)}),
+            mock.patch.object(config, "CODEX_CONFIG_DIR", missing),
+            mock.patch.object(config.CODEX_CONFIG, "base_dir", missing),
+        ):
+            mounts = config.codex_config_mounts()
+
+        assert mounts == []
+        assert "not a directory" in capsys.readouterr().err
 
     def test_mounts_use_env_dir_as_source(self, tmp_path, monkeypatch):
         """claude_config_mounts() mounts files from the $CLAUDE_CONFIG_DIR dir.

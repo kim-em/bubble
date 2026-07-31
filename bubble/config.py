@@ -494,7 +494,26 @@ def parse_mounts(config: dict, cli_mounts: tuple[str, ...] = ()) -> list[MountSp
     return mounts
 
 
-CODEX_CONFIG_DIR = Path.home() / ".codex"
+def codex_config_dir() -> Path:
+    """Resolve Codex's host-side config directory.
+
+    Codex honors $CODEX_HOME for a non-default location, and unlike Claude's
+    config dir that variable covers all of Codex's state — config.toml,
+    auth.json, sessions and logs — so a host whose Codex login lives there has
+    nothing at ~/.codex at all. We mirror it here so the mount source tracks
+    the directory Codex itself uses; reading ~/.codex regardless would silently
+    seed the container from a different account than the caller is logged in
+    as, or from no account.
+
+    The path is taken verbatim, matching Codex and matching claude_config_dir()
+    above. The container side stays /home/user/.codex, since in-container codex
+    reads ~/.codex by default ($CODEX_HOME is not set inside the container).
+    """
+    value = os.environ.get("CODEX_HOME")
+    return Path(value) if value else Path.home() / ".codex"
+
+
+CODEX_CONFIG_DIR = codex_config_dir()
 
 CODEX_CONFIG = SafeConfigDir(
     base_dir=CODEX_CONFIG_DIR,
@@ -509,6 +528,18 @@ def codex_config_mounts(
     include_config_items: bool = True,
 ) -> list[MountSpec]:
     """Return read-only mounts for Codex config files that exist on the host."""
+    # config_mounts() returns nothing at all for a base that is not a directory, so a mistyped or
+    # stale $CODEX_HOME would hand the container no credentials and say nothing -- the same silent
+    # failure this resolver exists to remove, just moved. Codex itself treats an invalid CODEX_HOME
+    # as fatal; warn rather than raise, since a bubble with no Codex credential is still useful.
+    if os.environ.get("CODEX_HOME") and not CODEX_CONFIG_DIR.is_dir():
+        import click
+
+        click.echo(
+            f"Warning: $CODEX_HOME is {CODEX_CONFIG_DIR}, which is not a directory; "
+            "no Codex credentials or config will be mounted.",
+            err=True,
+        )
     return CODEX_CONFIG.config_mounts(
         include_credentials=include_credentials,
         include_config_items=include_config_items,
