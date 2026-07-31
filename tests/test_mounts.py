@@ -397,6 +397,70 @@ class TestClaudeConfigDirEnvVar:
         # Not expanded — Path keeps the literal leading "~" segment.
         assert claude_config_dir() == Path("~/work-claude")
 
+
+class TestCodexHomeEnvVar:
+    """Test that codex_config_dir() honors the $CODEX_HOME env var."""
+
+    def test_env_var_overrides_default(self, tmp_path, monkeypatch):
+        """When $CODEX_HOME is set, the host-side dir resolves from it."""
+        from bubble.config import codex_config_dir
+
+        work_dir = tmp_path / "work-codex"
+        monkeypatch.setenv("CODEX_HOME", str(work_dir))
+        assert codex_config_dir() == work_dir
+
+    def test_falls_back_to_home_codex(self, monkeypatch):
+        """Without the env var, the dir falls back to ~/.codex."""
+        from bubble.config import codex_config_dir
+
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        assert codex_config_dir() == Path.home() / ".codex"
+
+    def test_empty_env_var_falls_back(self, monkeypatch):
+        """An empty $CODEX_HOME falls back to ~/.codex (not an empty path)."""
+        from bubble.config import codex_config_dir
+
+        monkeypatch.setenv("CODEX_HOME", "")
+        assert codex_config_dir() == Path.home() / ".codex"
+
+    def test_value_taken_verbatim(self, monkeypatch):
+        """The value is used verbatim (mirroring Codex; no ~ expansion)."""
+        from bubble.config import codex_config_dir
+
+        monkeypatch.setenv("CODEX_HOME", "~/work-codex")
+        # Not expanded — Path keeps the literal leading "~" segment.
+        assert codex_config_dir() == Path("~/work-codex")
+
+    def test_credentials_mount_follows_the_env_var(self, tmp_path, monkeypatch):
+        """The auth.json actually mounted comes from $CODEX_HOME, not ~/.codex.
+
+        This is the behaviour the resolver exists for: a caller whose Codex login lives in a
+        custom $CODEX_HOME would otherwise have the container seeded from a different account,
+        or from none at all (TauCetiWorker#148).
+        """
+        from bubble import config as config_module
+
+        work_dir = tmp_path / "work-codex"
+        work_dir.mkdir()
+        (work_dir / "auth.json").write_text('{"tokens": {"access_token": "from-codex-home"}}')
+        monkeypatch.setenv("CODEX_HOME", str(work_dir))
+        monkeypatch.setattr(config_module, "CODEX_CONFIG_DIR", config_module.codex_config_dir())
+        monkeypatch.setattr(
+            config_module,
+            "CODEX_CONFIG",
+            config_module.SafeConfigDir(
+                base_dir=config_module.CODEX_CONFIG_DIR,
+                container_dir="/home/user/.codex",
+                config_items=["config.toml"],
+                credential_items=["auth.json"],
+            ),
+        )
+
+        mounts = config_module.codex_config_mounts()
+        sources = [str(m.source) for m in mounts]
+        assert str(work_dir / "auth.json") in sources
+        assert "/home/user/.codex/auth.json" in [m.target for m in mounts]
+
     def test_mounts_use_env_dir_as_source(self, tmp_path, monkeypatch):
         """claude_config_mounts() mounts files from the $CLAUDE_CONFIG_DIR dir.
 
