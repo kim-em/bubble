@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.31 — 2026-08-06
+- Add Kiro CLI as a checksum-pinned, auto-detected coding-agent tool
+  - Kiro 2.16.1 ships for x86_64 and arm64, with the portable musl arm64 build
+  - Runtime egress follows Kiro's published CLI firewall allowlist
+
 ## 0.7.25 — 2026-07-04
 - Add `vibe` (Mistral Vibe) as an installable coding-agent tool
   - Mistral Vibe is the home of Leanstral, Mistral's open-source Lean 4 agent (`vibe --agent lean`, after a one-time `/leanstall` inside the bubble)

@@ -42,6 +42,31 @@ TOOLS = {
         ],
         "priority": 50,
     },
+    "kiro": {
+        # Kiro is distributed as native binaries rather than an npm package. Keep the
+        # runtime allowlist in step with Kiro's published CLI firewall table: model,
+        # management/usage, auth refresh, telemetry, and regional Q endpoints only.
+        "script": "kiro.sh",
+        "host_cmd": "kiro-cli",
+        "network_domains": ["prod.download.cli.kiro.dev"],
+        "runtime_domains": [
+            "cli.kiro.dev",
+            "prod.us-east-1.auth.desktop.kiro.dev",
+            "prod.us-east-1.telemetry.desktop.kiro.dev",
+            "prod.download.desktop.kiro.dev",
+            "prod.download.cli.kiro.dev",
+            "q.us-east-1.amazonaws.com",
+            "q.eu-central-1.amazonaws.com",
+            "runtime.us-east-1.kiro.dev",
+            "runtime.eu-central-1.kiro.dev",
+            "management.us-east-1.kiro.dev",
+            "management.eu-central-1.kiro.dev",
+            "telemetry.us-east-1.kiro.dev",
+            "telemetry.eu-central-1.kiro.dev",
+            "cognito-identity.us-east-1.amazonaws.com",
+        ],
+        "priority": 50,
+    },
     "pi": {
         # Pi coding agent (badlogic/pi-mono): an agentic loop over arbitrary
         # models, typically via OpenRouter — so its runtime egress is openrouter.ai.
@@ -304,6 +329,19 @@ def fetch_latest_pins() -> dict:
     )
     pins["CODEX_VERSION"] = data["version"]
 
+    # Kiro CLI: the manifest is the authoritative version/checksum pair. x86_64
+    # uses the GNU build (glibc >=2.34); arm64 uses the musl build so Bubble also
+    # works on images older than the GNU arm64 build's glibc 2.39 requirement.
+    data = json.loads(
+        urllib.request.urlopen(
+            "https://prod.download.cli.kiro.dev/stable/latest/manifest.json"
+        ).read()
+    )
+    pins["KIRO_CLI_VERSION"] = data["version"]
+    packages = {p["download"].rsplit("/", 1)[-1]: p for p in data["packages"]}
+    pins["KIRO_CLI_SHA256_X64"] = packages["kirocli-x86_64-linux.tar.xz"]["sha256"]
+    pins["KIRO_CLI_SHA256_ARM64"] = packages["kirocli-aarch64-linux-musl.tar.xz"]["sha256"]
+
     # Pi coding agent: latest npm version
     data = json.loads(
         urllib.request.urlopen(
@@ -323,6 +361,9 @@ def fetch_latest_pins() -> dict:
         "NODE_SHA256_ARM64",
         "CLAUDE_CODE_VERSION",
         "CODEX_VERSION",
+        "KIRO_CLI_VERSION",
+        "KIRO_CLI_SHA256_X64",
+        "KIRO_CLI_SHA256_ARM64",
         "PI_VERSION",
         "VIBE_VERSION",
     }
