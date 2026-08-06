@@ -24,6 +24,7 @@ def test_available_tools():
     tools = available_tools()
     assert "claude" in tools
     assert "codex" in tools
+    assert "kiro" in tools
     assert "pi" in tools
     assert "vibe" in tools
     assert "elan" in tools
@@ -46,6 +47,7 @@ def test_resolve_tools_no():
         "tools": {
             "claude": "no",
             "codex": "no",
+            "kiro": "no",
             "pi": "no",
             "vibe": "no",
             "elan": "no",
@@ -153,6 +155,13 @@ def test_tool_runtime_domains_pi():
     assert "openrouter.ai" in tool_runtime_domains(["pi"])
 
 
+def test_tool_runtime_domains_kiro():
+    domains = tool_runtime_domains(["kiro"])
+    assert "runtime.us-east-1.kiro.dev" in domains
+    assert "management.us-east-1.kiro.dev" in domains
+    assert "q.us-east-1.amazonaws.com" in domains
+
+
 def test_tool_runtime_domains_vibe():
     # Mistral Vibe (and Leanstral) talk to the Mistral API.
     assert "api.mistral.ai" in tool_runtime_domains(["vibe"])
@@ -190,6 +199,9 @@ def test_load_pins():
     assert "NODE_SHA256_ARM64" in pins
     assert "CLAUDE_CODE_VERSION" in pins
     assert "CODEX_VERSION" in pins
+    assert "KIRO_CLI_VERSION" in pins
+    assert "KIRO_CLI_SHA256_X64" in pins
+    assert "KIRO_CLI_SHA256_ARM64" in pins
     assert "PI_VERSION" in pins
     assert "VIBE_VERSION" in pins
 
@@ -210,6 +222,10 @@ def test_tool_script_injects_pins():
     script = tool_script("codex")
     assert "CODEX_VERSION=" in script
 
+    script = tool_script("kiro")
+    assert "KIRO_CLI_VERSION=" in script
+    assert "KIRO_CLI_SHA256_X64=" in script
+
 
 def test_tool_script_uses_pinned_npm_versions():
     """Verify scripts install specific npm package versions, not unpinned."""
@@ -221,6 +237,10 @@ def test_tool_script_uses_pinned_npm_versions():
 
     script = tool_script("pi")
     assert "@mariozechner/pi-coding-agent@${PI_VERSION}" in script
+
+    script = tool_script("kiro")
+    assert "prod.download.cli.kiro.dev/stable/${KIRO_CLI_VERSION}" in script
+    assert "sha256sum -c" in script
 
     # vibe is Python, installed via uv rather than npm, but still pinned.
     script = tool_script("vibe")
