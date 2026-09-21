@@ -7,6 +7,7 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 from click import ClickException
@@ -496,3 +497,173 @@ def test_installed_daemon_health_is_retried_before_restart(monkeypatch):
 
     assert artifact_cache.ensure_daemon_endpoint() == endpoint
     assert installs == []
+
+
+SCENARIO = Path(__file__).resolve().parent / "bounded_server_scenario.py"
+SCENARIO_DEADLINE = 20  # seconds; a healthy run takes well under one
+
+
+def _run_scenario(base: str, mode: str, slots: int, n: int) -> dict:
+    """Run one ``_BoundedServerMixin`` network scenario in a child process with a hard deadline.
+
+    The regression this guards is an accept loop blocked forever on a leaked permit; against the
+    old mixin the child hangs at the (slots+1)th connection and the parent kills and reaps it at
+    the deadline instead of leaving a wedged server thread in the pytest process. The child imports
+    the checkout, not an installed bubble (the scenario file puts the repository root first on
+    sys.path and the process runs from that directory)."""
+    import subprocess
+    import sys
+
+    argv = [sys.executable, str(SCENARIO), base, mode, str(slots), str(n)]
+    tag = f"scenario {base}/{mode} slots={slots} n={n}"
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=str(SCENARIO.parent.parent),
+            capture_output=True,
+            text=True,
+            timeout=SCENARIO_DEADLINE,
+        )
+    except subprocess.TimeoutExpired as exc:  # subprocess.run has killed and reaped the child
+        out = (
+            (exc.stdout or b"").decode(errors="replace")
+            if isinstance(exc.stdout, bytes)
+            else (exc.stdout or "")
+        )
+        err = (
+            (exc.stderr or b"").decode(errors="replace")
+            if isinstance(exc.stderr, bytes)
+            else (exc.stderr or "")
+        )
+        pytest.fail(
+            f"{tag} hung past {SCENARIO_DEADLINE}s (accept loop wedged?)\nstdout: {out}\nstderr: {err}"
+        )
+    assert proc.returncode == 0, (
+        f"{tag} failed (rc={proc.returncode})\nstdout: {proc.stdout}\nstderr: {proc.stderr}"
+    )
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert result.get("ok") is True, f"{tag}: {result}"
+    return result
+
+
+@pytest.mark.parametrize("base", ["threaded", "stdlib"])
+def test_bounded_mixin_releases_slots_across_separate_connections(base):
+    """Every accepted connection hands its permit back, whichever base server the mixin sits on.
+
+    Regression: over ``auth_proxy.ThreadedHTTPServer`` (the Linux daemon's base through
+    ``BridgeBoundHTTPServer``) the permit was released only from ``process_request_thread``, which
+    that base never calls, so the accept loop wedged after 256 connections. Four slots and twelve
+    SEPARATE TCP connections: the old mixin blocks at the fifth. ``stdlib`` covers the
+    ``ThreadingHTTPServer`` dispatch used elsewhere (not a stand-in for the macOS environment)."""
+    result = _run_scenario(base, "sequential", slots=4, n=12)
+    assert result["answered"] == 12
+    assert result["permits_recovered"] == 4
+
+
+@pytest.mark.parametrize("base", ["threaded", "stdlib"])
+def test_bounded_mixin_bounds_active_handlers(base):
+    """The permit bound is the ACTIVE-handler bound: with every permit held, a further connection
+    is accepted by the kernel but not admitted to a handler until a permit is released, and the
+    peak never exceeds the limit. A limit of 10 over ``ThreadedHTTPServer`` also shows the cache is
+    not constrained by that base's own eight-handler semaphore, which the mixin bypasses."""
+    slots = 10
+    result = _run_scenario(base, "concurrency", slots=slots, n=slots)
+    assert result["active_at_capacity"] == slots
+    assert result["active_with_extra_pending"] == slots  # the extra connection waited
+    assert result["peak_before_release"] == slots
+    assert result["peak"] == slots
+    assert result["permits_recovered"] == slots
+
+
+class _RecordingServer(artifact_cache._BoundedServerMixin):
+    """Just enough server for ``_bounded_request_thread`` / ``process_request``: a one-permit bound
+    and recording stand-ins for the three socketserver hooks the worker calls."""
+
+    def __init__(self, *, finish=None, error=None, shutdown=None):
+        self._request_slots = threading.BoundedSemaphore(1)
+        self.calls: list[str] = []
+        self._finish, self._error, self._shutdown = finish, error, shutdown
+
+    def finish_request(self, request, client_address):
+        self.calls.append("finish_request")
+        if self._finish:
+            raise self._finish
+
+    def handle_error(self, request, client_address):
+        self.calls.append("handle_error")
+        if self._error:
+            raise self._error
+
+    def shutdown_request(self, request):
+        self.calls.append("shutdown_request")
+        if self._shutdown:
+            raise self._shutdown
+
+    def permit_free(self) -> bool:
+        """One non-blocking acquisition succeeds and a second fails: exactly one permit, returned."""
+        if not self._request_slots.acquire(blocking=False):
+            return False
+        second = self._request_slots.acquire(blocking=False)
+        if second:
+            self._request_slots.release()
+        self._request_slots.release()
+        return not second
+
+
+class TestBoundedRequestThreadPermits:
+    """The permit comes back exactly once on every path out of the worker, and on a failed spawn."""
+
+    def _run(self, **faults):
+        srv = _RecordingServer(**faults)
+        assert srv._request_slots.acquire(timeout=1)  # as process_request does before spawning
+        return srv
+
+    def test_normal_completion(self):
+        srv = self._run()
+        srv._bounded_request_thread("req", ("127.0.0.1", 1))
+        assert srv.calls == ["finish_request", "shutdown_request"]
+        assert srv.permit_free()
+
+    def test_handler_failure_is_reported_and_permit_returned(self):
+        srv = self._run(finish=RuntimeError("handler blew up"))
+        srv._bounded_request_thread("req", ("127.0.0.1", 1))
+        assert srv.calls == ["finish_request", "handle_error", "shutdown_request"]
+        assert srv.permit_free()
+
+    def test_error_reporting_failure_still_cleans_up_and_returns_permit(self):
+        srv = self._run(finish=RuntimeError("handler"), error=RuntimeError("reporting broke too"))
+        with pytest.raises(RuntimeError, match="reporting broke too"):
+            srv._bounded_request_thread("req", ("127.0.0.1", 1))
+        assert srv.calls == ["finish_request", "handle_error", "shutdown_request"]
+        assert srv.permit_free()
+
+    def test_socket_cleanup_failure_propagates_but_permit_returned(self):
+        srv = self._run(shutdown=OSError("close failed"))
+        with pytest.raises(OSError, match="close failed"):
+            srv._bounded_request_thread("req", ("127.0.0.1", 1))
+        assert srv.calls == ["finish_request", "shutdown_request"]
+        assert srv.permit_free()
+
+    @pytest.mark.parametrize(
+        "failure", [RuntimeError("can't start new thread"), KeyboardInterrupt()]
+    )
+    def test_failed_spawn_returns_permit_and_propagates(self, monkeypatch, failure):
+        srv = _RecordingServer()
+        started = []
+
+        class BrokenThread:
+            def __init__(self, *a, **k):
+                pass
+
+            def start(self):
+                started.append(True)
+                raise failure
+
+        monkeypatch.setattr(artifact_cache.threading, "Thread", BrokenThread)
+        with pytest.raises(type(failure)):
+            srv.process_request("req", ("127.0.0.1", 1))
+        assert started == [True]
+        assert srv.permit_free()
+        assert (
+            srv.calls == []
+        )  # the spawn failed before any hook; socket cleanup stays with socketserver
