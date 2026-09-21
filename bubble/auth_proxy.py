@@ -143,6 +143,25 @@ _ALLOWED_QUERIES = {
 # REST API path pattern: /repos/{owner}/{repo}/...
 _API_PATH_RE = re.compile(r"^/repos/" + _VALID_OWNER_REPO + r"/" + _VALID_OWNER_REPO + r"(/.*)?$")
 
+# GitHub's own pagination links name the repository by its numeric database id, not by
+# owner/name: the Link header of `/repos/{owner}/{repo}/pulls/N/comments?per_page=100`
+# points page 2 at `/repositories/{id}/pulls/N/comments?per_page=100&page=2` (likewise for
+# issue comments). A client that follows Link headers (`gh api --paginate`, Octokit's
+# paginate) therefore reaches the proxy with a path the owner/name allowlist cannot match,
+# and every list longer than one page fails from page 2 on. The proxy resolves the scoped
+# repository's id once and rewrites such a path to the `/repos/{owner}/{repo}/...` form
+# before the ordinary validation, so the allowlist stays exactly as strict.
+_REPOSITORY_ID_PATH_RE = re.compile(r"^/repositories/(\d+)(/.*)?$")
+
+
+def rewrite_repository_id_path(path: str, repo_id: str | None, owner: str, repo: str) -> str | None:
+    """`/repositories/{id}/rest` -> `/repos/{owner}/{repo}/rest` when `id` is the scoped
+    repository's database id; None for any other path or id (caller refuses it)."""
+    m = _REPOSITORY_ID_PATH_RE.match(path)
+    if not m or not repo_id or m.group(1) != str(repo_id):
+        return None
+    return f"/repos/{owner}/{repo}{m.group(2) or ''}"
+
 # GitHub hosts
 GITHUB_HOST = "github.com"
 GITHUB_URL = f"https://{GITHUB_HOST}"
@@ -729,6 +748,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
     # Thread-safe caches for pre-flight queries (shared across handler instances)
     _repo_node_id_cache: dict[tuple[str, str], str] = {}
     _repo_node_id_lock = threading.Lock()
+    _repo_database_id_cache: dict[tuple[str, str], str] = {}
 
     # Pre-flight node-id resolution cache. Stores both positive and negative
     # results with TTLs to avoid re-querying GitHub for repeated probes.
@@ -843,6 +863,22 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         # Route: REST API (/repos/{owner}/{repo}/...)
         if path.startswith("/repos/"):
             self._handle_api_request(method, path, query, body, container, owner, repo, rest_api)
+            return
+
+        # Route: REST API by repository id (/repositories/{id}/...): what GitHub's Link
+        # headers hand a paginating client. Only the scoped repository's id is accepted;
+        # the path is rewritten to the owner/name form and validated like any other.
+        if _REPOSITORY_ID_PATH_RE.match(path):
+            repo_id = self._get_repo_database_id(owner, repo, container)
+            rewritten = rewrite_repository_id_path(path, repo_id, owner, repo)
+            if rewritten is None:
+                self._send_error(403, "Path not recognized")
+                logger.info(
+                    "BLOCKED %s %s container=%s reason=foreign_repository_id", method, path, container
+                )
+                return
+            logger.info("REWRITE %s -> %s container=%s", path, rewritten, container)
+            self._handle_api_request(method, rewritten, query, body, container, owner, repo, rest_api)
             return
 
         self._send_error(403, "Path not recognized")
@@ -1085,6 +1121,37 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             logger.info("PREFLIGHT repo_node_id failed for %s/%s", owner, repo)
             return None
 
+
+    def _get_repo_database_id(self, owner: str, repo: str, container: str) -> str | None:
+        """The scoped repository's numeric REST id (the `/repositories/{id}/` form in GitHub's
+        Link headers). Cached for the daemon's lifetime; the one uncached lookup is charged to
+        the originating container's rate window, like the node-id preflight."""
+        key = (owner.lower(), repo.lower())
+        with self._repo_node_id_lock:
+            cached = self._repo_database_id_cache.get(key)
+            if cached is not None:
+                return cached
+        if not self.rate_limiter.check(container):
+            logger.info(
+                "PREFLIGHT rate-limited container=%s repo_database_id_lookup=%s/%s",
+                container,
+                owner,
+                repo,
+            )
+            return None
+        from .graphql_validator import REPO_DATABASE_ID_QUERY
+
+        try:
+            data = self._github_graphql_query(REPO_DATABASE_ID_QUERY, {"owner": owner, "name": repo})
+            database_id = (data.get("data", {}).get("repository") or {}).get("databaseId")
+            if database_id is not None:
+                with self._repo_node_id_lock:
+                    self._repo_database_id_cache[key] = str(database_id)
+                return str(database_id)
+            return None
+        except Exception:
+            logger.info("PREFLIGHT repo_database_id failed for %s/%s", owner, repo)
+            return None
     def _preflight_cache_get(self, node_id: str) -> tuple[bool, str | None]:
         """Look up a preflight result in the cache. Returns (hit, value)."""
         now = time.time()

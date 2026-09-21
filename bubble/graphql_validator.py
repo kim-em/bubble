@@ -145,6 +145,13 @@ REPO_ID_QUERY = (
     "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id } }"
 )
 
+# The REST database id of the scoped repository: what GitHub's own Link headers use
+# (`/repositories/<id>/...`) on paginated list endpoints.
+REPO_DATABASE_ID_QUERY = (
+    "query($owner: String!, $name: String!) "
+    "{ repository(owner: $owner, name: $name) { databaseId } }"
+)
+
 # Comprehensive pre-flight query covering all object types that allowed
 # mutations reference.  Resolves the owning repository's nameWithOwner.
 PREFLIGHT_QUERY = """\

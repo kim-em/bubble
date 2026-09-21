@@ -1921,3 +1921,68 @@ def auth_proxy_env(tmp_path, monkeypatch):
     monkeypatch.setattr(bubble.auth_proxy, "AUTH_PROXY_LOG", tmp_path / "auth-proxy.log")
     monkeypatch.setattr(bubble.auth_proxy, "AUTH_PROXY_TOKENS", tmp_path / "auth-tokens.json")
     return tmp_path
+
+
+class TestRepositoryIdPaths:
+    """GitHub's Link headers name the repository by numeric id (`/repositories/{id}/...`), so a
+    client that follows them (`gh api --paginate`) reaches the proxy with a path the owner/name
+    allowlist cannot match: page 2 of any long comment list was a 403 "Path not recognized"
+    (seen 2026-09-20 on a PR with 114 review comments). The scoped repository's id is accepted
+    and rewritten to the owner/name form; any other id is refused."""
+
+    def test_rewrite_scoped_id(self):
+        from bubble.auth_proxy import rewrite_repository_id_path as rw
+
+        assert rw("/repositories/1256881326/pulls/7473/comments", "1256881326", "o", "r") == (
+            "/repos/o/r/pulls/7473/comments"
+        )
+        assert rw("/repositories/1256881326", "1256881326", "o", "r") == "/repos/o/r"
+
+    def test_rewrite_refuses_other_ids_and_shapes(self):
+        from bubble.auth_proxy import rewrite_repository_id_path as rw
+
+        assert rw("/repositories/999/pulls/1/comments", "1256881326", "o", "r") is None
+        assert rw("/repositories/1256881326/pulls", None, "o", "r") is None
+        assert rw("/repositories/abc/pulls", "abc", "o", "r") is None
+        assert rw("/repos/o/r/pulls", "1256881326", "o", "r") is None
+
+    @pytest.fixture
+    def id_proxy_server(self, auth_proxy_env, monkeypatch):
+        import bubble.auth_proxy
+
+        monkeypatch.setattr(
+            AuthProxyHandler, "_get_repo_database_id", lambda self, owner, repo, container: "1256881326"
+        )
+        token = bubble.auth_proxy.generate_auth_token("test-container", "owner", "repo", rest_api=True)
+        AuthProxyHandler.token_registry = bubble.auth_proxy.AuthTokenRegistry()
+        AuthProxyHandler.rate_limiter = bubble.auth_proxy.ProxyRateLimiter()
+        AuthProxyHandler.token_refresher = GitHubTokenRefresher("ghp_test_token")
+        server = ThreadedHTTPServer(("127.0.0.1", 0), AuthProxyHandler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        yield {"port": port, "token": token}
+        server.shutdown()
+
+    def _get(self, srv, path):
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(f"http://127.0.0.1:{srv['port']}{path}")
+        req.add_header("Authorization", f"token {srv['token']}")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            return 200, ""
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode(errors="replace")
+        except urllib.error.URLError:
+            return None, ""  # no network: the request got past the proxy's own checks
+
+    def test_scoped_repository_id_is_routed(self, id_proxy_server):
+        code, body = self._get(id_proxy_server, "/repositories/1256881326/pulls/7473/comments?per_page=100&page=2")
+        # Past the proxy's own validation: whatever upstream (or the lack of network) says, it
+        # is not the proxy's 403 "Path not recognized".
+        assert not (code == 403 and "Path not recognized" in body), (code, body)
+
+    def test_foreign_repository_id_is_refused(self, id_proxy_server):
+        code, body = self._get(id_proxy_server, "/repositories/999/pulls/1/comments")
+        assert code == 403 and "Path not recognized" in body
