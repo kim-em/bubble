@@ -297,12 +297,18 @@ def _read_endpoint_file(path) -> dict | None:
 
 
 def _endpoint_alive(endpoint: dict) -> bool:
-    """Confirm that the daemon which published the endpoint is still alive.
+    """Confirm that the daemon which published the endpoint is alive and listening.
 
     Guards against a stale ``auth-proxy.endpoint`` file from a daemon
     that crashed/was killed: without this we'd configure containers to
     talk to a dead listener and report success. New daemons publish their
-    pid; fall back to the legacy TCP probe for older endpoint files.
+    pid, which must be alive; the TCP probe is required as well, because a
+    live daemon is not necessarily a reachable one. When incus rebuilds its
+    bridge the listener stays bound to the old interface: the pid lives on,
+    nothing reaches the socket, and every container's git traffic fails
+    until the daemon restarts (the artifact cache's ``endpoint_alive`` makes
+    the same two checks). A failed probe here is what makes
+    ``_ensure_auth_proxy_endpoint`` restart it.
     """
     import os as _os
 
@@ -323,7 +329,6 @@ def _endpoint_alive(endpoint: dict) -> bool:
     if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
         try:
             _os.kill(pid, 0)
-            return True
         except OSError:
             return False
 
