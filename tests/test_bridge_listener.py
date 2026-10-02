@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from bubble.incus_bridge import BridgeDiscoveryError, bridge_gateway_ipv4
+from bubble.incus_bridge import BridgeDiscoveryError, bridge_gateway_ipv4, bridge_interface
 from bubble.network import _build_allowlist_script
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ def test_bridge_gateway_agrees():
             _ip_addr_show_result(ipv4="10.156.104.1"),
             _incus_network_show_result(ipv4="10.156.104.1"),
         ]
-        assert bridge_gateway_ipv4() == "10.156.104.1"
+        assert bridge_gateway_ipv4("incusbr0") == "10.156.104.1"
 
 
 def test_bridge_gateway_kernel_only():
@@ -66,7 +66,7 @@ def test_bridge_gateway_kernel_only():
             _ip_addr_show_result(ipv4="10.156.104.1"),
             _incus_network_show_result(returncode=1),
         ]
-        assert bridge_gateway_ipv4() == "10.156.104.1"
+        assert bridge_gateway_ipv4("incusbr0") == "10.156.104.1"
 
 
 def test_bridge_gateway_disagree_fails_closed():
@@ -77,7 +77,7 @@ def test_bridge_gateway_disagree_fails_closed():
             _incus_network_show_result(ipv4="192.168.100.1"),
         ]
         with pytest.raises(BridgeDiscoveryError):
-            bridge_gateway_ipv4()
+            bridge_gateway_ipv4("incusbr0")
 
 
 def test_bridge_gateway_no_interface_fails():
@@ -85,7 +85,87 @@ def test_bridge_gateway_no_interface_fails():
     with patch("bubble.incus_bridge.subprocess.run") as mock_run:
         mock_run.return_value = _ip_addr_show_result(ipv4=None, returncode=0)
         with pytest.raises(BridgeDiscoveryError):
-            bridge_gateway_ipv4()
+            bridge_gateway_ipv4("incusbr0")
+
+
+def _profile_network_result(stdout: str, returncode: int = 0):
+    """Build a mock subprocess.run result for `incus profile device get default eth0 network`."""
+
+    class Result:
+        pass
+
+    result = Result()
+    result.returncode = returncode
+    result.stdout = stdout
+    result.stderr = ""
+    return result
+
+
+def test_bridge_interface_follows_the_project_profile(monkeypatch):
+    """A user confined by incus-user gets a project whose only network is its own bridge; the
+    proxies must listen there, not on incusbr0."""
+    monkeypatch.delenv("BUBBLE_INCUS_BRIDGE", raising=False)
+    with patch("bubble.incus_bridge.subprocess.run") as mock_run:
+        mock_run.return_value = _profile_network_result("incusbr-1007\n")
+        assert bridge_interface() == "incusbr-1007"
+        assert mock_run.call_args[0][0] == [
+            "incus",
+            "profile",
+            "device",
+            "get",
+            "default",
+            "eth0",
+            "network",
+        ]
+
+
+def test_bridge_interface_default_project(monkeypatch):
+    monkeypatch.delenv("BUBBLE_INCUS_BRIDGE", raising=False)
+    with patch("bubble.incus_bridge.subprocess.run") as mock_run:
+        mock_run.return_value = _profile_network_result("incusbr0\n")
+        assert bridge_interface() == "incusbr0"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        _profile_network_result("", returncode=1),  # no eth0 device, or no access
+        _profile_network_result("\n"),  # a NIC with `parent:` rather than `network:`
+        _profile_network_result("not a/valid name\n"),
+        _profile_network_result("a-name-longer-than-fifteen\n"),
+    ],
+)
+def test_bridge_interface_falls_back_to_incusbr0(monkeypatch, result):
+    monkeypatch.delenv("BUBBLE_INCUS_BRIDGE", raising=False)
+    with patch("bubble.incus_bridge.subprocess.run") as mock_run:
+        mock_run.return_value = result
+        assert bridge_interface() == "incusbr0"
+
+
+def test_bridge_interface_without_incus(monkeypatch):
+    monkeypatch.delenv("BUBBLE_INCUS_BRIDGE", raising=False)
+    with patch("bubble.incus_bridge.subprocess.run", side_effect=FileNotFoundError):
+        assert bridge_interface() == "incusbr0"
+
+
+def test_bridge_interface_override(monkeypatch):
+    monkeypatch.setenv("BUBBLE_INCUS_BRIDGE", "br-custom")
+    with patch("bubble.incus_bridge.subprocess.run") as mock_run:
+        assert bridge_interface() == "br-custom"
+        mock_run.assert_not_called()
+
+
+def test_bridge_gateway_uses_the_detected_bridge(monkeypatch):
+    """With no interface named, discovery looks at the project's bridge."""
+    monkeypatch.delenv("BUBBLE_INCUS_BRIDGE", raising=False)
+    with patch("bubble.incus_bridge.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            _profile_network_result("incusbr-1007\n"),
+            _ip_addr_show_result(ipv4="10.212.132.1"),
+            _incus_network_show_result(ipv4="10.212.132.1"),
+        ]
+        assert bridge_gateway_ipv4() == "10.212.132.1"
+        assert mock_run.call_args_list[1][0][0][-1] == "incusbr-1007"
 
 
 # ---------------------------------------------------------------------------

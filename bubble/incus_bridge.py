@@ -22,9 +22,44 @@ the legacy proxy-device path.
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 
 BRIDGE_INTERFACE = "incusbr0"
+
+# A Linux interface name: at most 15 characters, none of them a slash or whitespace.
+_INTERFACE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}")
+
+
+def bridge_interface() -> str:
+    """The bridge this user's containers attach to, which the auth proxy and the artifact cache
+    must listen on: the network of the default profile's ``eth0`` in the current Incus project.
+
+    An administrator works in the ``default`` project, whose containers attach to ``incusbr0``.
+    A user who reaches Incus through ``incus-user`` (group ``incus`` rather than ``incus-admin``)
+    is confined to a restricted project ``user-<uid>`` whose only network is its own bridge,
+    ``incusbr-<uid>``. A listener bound to ``incusbr0`` is unreachable from there, since it is
+    restricted to that interface (``SO_BINDTODEVICE``). ``BUBBLE_INCUS_BRIDGE`` overrides the
+    lookup; ``incusbr0`` is the answer whenever the profile cannot be read.
+    """
+    override = os.environ.get("BUBBLE_INCUS_BRIDGE", "").strip()
+    if override:
+        return override
+    try:
+        result = subprocess.run(
+            ["incus", "profile", "device", "get", "default", "eth0", "network"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return BRIDGE_INTERFACE
+    name = result.stdout.strip()
+    if result.returncode == 0 and _INTERFACE_NAME.fullmatch(name):
+        return name
+    return BRIDGE_INTERFACE
 
 
 class BridgeDiscoveryError(RuntimeError):
@@ -80,7 +115,7 @@ def _incus_network_ipv4_gateway(interface: str) -> str | None:
     return None
 
 
-def bridge_gateway_ipv4(interface: str = BRIDGE_INTERFACE) -> str:
+def bridge_gateway_ipv4(interface: str | None = None) -> str:
     """Return the validated IPv4 gateway address of the incus bridge.
 
     Cross-checks the kernel-bound address against incus's configured
@@ -88,6 +123,7 @@ def bridge_gateway_ipv4(interface: str = BRIDGE_INTERFACE) -> str:
     interface isn't present, lacks an IPv4 address, or the two
     sources disagree.
     """
+    interface = interface or bridge_interface()
     kernel_ip = _ip_addr_show_ipv4(interface)
     if kernel_ip is None:
         raise BridgeDiscoveryError(
