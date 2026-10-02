@@ -269,14 +269,43 @@ class IncusRuntime(ContainerRuntime):
     @staticmethod
     def _merge_idmap(existing: str, lines: str) -> str:
         """Add our lines to an instance's effective raw.idmap (its own or a profile's) instead of
-        replacing it: an operator's policy survives, and a line already covering one of our host
-        ids is left alone."""
-        kept = [ln.strip() for ln in (existing or "").splitlines() if ln.strip()]
-        covered = {(ln.split()[0], ln.split()[1]) for ln in kept if len(ln.split()) >= 2}
+        replacing it. Every line about other ids survives, and so does a line that already maps one
+        of our host ids onto the container id we want.
+
+        A line mapping one of our host ids onto a DIFFERENT container id is replaced, on this
+        instance only (the profile is not touched): the container's `user` must own what bubble
+        mounts in, and a map elsewhere leaves every mount unusable while the container counts as
+        mapped. incus-user's restricted projects carry exactly such a line in their default
+        profile, `uid <uid> <uid>`, for the user who owns the project. A `both` line for that host
+        id keeps the half we do not map."""
+        ours = {}
         for ln in lines.splitlines():
             parts = ln.split()
-            if len(parts) >= 2 and (parts[0], parts[1]) not in covered:
-                kept.append(ln)
+            if len(parts) >= 3:
+                ours[(parts[0], parts[1])] = parts[2]
+        kept = []
+        for ln in (existing or "").splitlines():
+            parts = ln.split()
+            if not parts:
+                continue
+            if len(parts) >= 3 and parts[0] == "both":
+                clash = [k for k in ("uid", "gid") if ours.get((k, parts[1]), parts[2]) != parts[2]]
+                if clash:
+                    kept += [f"{k} {parts[1]} {parts[2]}" for k in ("uid", "gid") if k not in clash]
+                    continue
+            elif len(parts) >= 3 and ours.get((parts[0], parts[1]), parts[2]) != parts[2]:
+                continue  # our host id mapped elsewhere: replaced by our line below
+            kept.append(ln.strip())
+        covered = set()
+        for ln in kept:
+            parts = ln.split()
+            if len(parts) >= 2:
+                covered |= (
+                    {("uid", parts[1]), ("gid", parts[1])}
+                    if parts[0] == "both"
+                    else {(parts[0], parts[1])}
+                )
+        kept += [f"{k} {h} {c}" for (k, h), c in ours.items() if (k, h) not in covered]
         return "\n".join(kept)
 
     # What Incus says when it will not apply a raw.idmap: the id is outside root's subordinate

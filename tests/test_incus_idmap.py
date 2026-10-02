@@ -203,7 +203,32 @@ def test_merge_idmap_keeps_unrelated_lines():
     m = I.IncusRuntime._merge_idmap
     assert m("", "uid 1 2\ngid 1 2") == "uid 1 2\ngid 1 2"
     assert m("both 9 9\n", "uid 1 2") == "both 9 9\nuid 1 2"
-    assert m("uid 1 7", "uid 1 2\ngid 1 2") == "uid 1 7\ngid 1 2"  # an operator's uid line wins
+    assert m("uid 1 2", "uid 1 2\ngid 1 2") == "uid 1 2\ngid 1 2"  # already ours: kept once
+    assert m("both 4000 4000\nuid 1 2", "uid 1 2") == "both 4000 4000\nuid 1 2"
+
+
+def test_merge_idmap_replaces_a_line_mapping_our_host_id_elsewhere():
+    """incus-user's restricted project maps its user onto the same id inside (`uid 1007 1007`).
+    Kept, it would leave bubble's mounts owned by 1007 in a container whose `user` is 1001, and
+    git would call every Lake mirror "dubious" while bubble counted the container as mapped."""
+    m = I.IncusRuntime._merge_idmap
+    assert (
+        m("uid 1007 1007\ngid 1007 1007", "uid 1007 1001\ngid 1007 1001")
+        == "uid 1007 1001\ngid 1007 1001"
+    )
+    assert m("uid 1 7\nboth 9 9", "uid 1 2") == "both 9 9\nuid 1 2"
+    # A `both` line for our host id keeps the half we do not map.
+    assert m("both 1007 1007", "uid 1007 1001") == "gid 1007 1007\nuid 1007 1001"
+    assert m("both 1007 1001", "uid 1007 1001\ngid 1007 1001") == "both 1007 1001"
+
+
+def test_incus_user_profile_idmap_is_overridden_on_the_instance(monkeypatch, tmp_path):
+    _subid(monkeypatch, tmp_path, True, True, uid=1007, gid=1007)
+    rt = FakeRuntime(existing_idmap="uid 1007 1007\ngid 1007 1007")  # incus-user's default profile
+    rt.launch("c", "img")
+    assert _idmap_set(rt) == ["uid 1007 1001\ngid 1007 1001"]
+    rt.add_disk("c", "d", "/host/x", "/opt/x")
+    assert _disk_adds(rt)[-1][-1] == "path=/opt/x"  # mapped, so mounted plainly
 
 
 # ---- server scope
