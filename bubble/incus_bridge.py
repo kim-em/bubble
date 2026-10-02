@@ -33,15 +33,15 @@ _INTERFACE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}")
 
 
 def bridge_interface() -> str:
-    """The bridge this user's containers attach to, which the auth proxy and the artifact cache must
-    listen on: the network of the default profile's ``eth0`` in the current Incus project.
+    """The bridge this user's containers attach to, which the auth proxy and the artifact cache
+    must listen on: the network of the default profile's ``eth0`` in the current Incus project.
 
-    An administrator works in the ``default`` project, whose containers attach to ``incusbr0``. A user
-    who reaches Incus through ``incus-user`` (group ``incus`` rather than ``incus-admin``) is confined
-    to a restricted project ``user-<uid>`` whose only network is its own bridge, ``incusbr-<uid>``.
-    A listener bound to ``incusbr0`` is unreachable from there, since it is restricted to that
-    interface (``SO_BINDTODEVICE``). ``BUBBLE_INCUS_BRIDGE`` overrides the lookup; ``incusbr0`` is the
-    answer whenever the profile cannot be read.
+    An administrator works in the ``default`` project, whose containers attach to ``incusbr0``.
+    A user who reaches Incus through ``incus-user`` (group ``incus`` rather than ``incus-admin``)
+    is confined to a restricted project ``user-<uid>`` whose only network is its own bridge,
+    ``incusbr-<uid>``. A listener bound to ``incusbr0`` is unreachable from there, since it is
+    restricted to that interface (``SO_BINDTODEVICE``). ``BUBBLE_INCUS_BRIDGE`` overrides the
+    lookup; ``incusbr0`` is the answer whenever the profile cannot be read.
     """
     override = os.environ.get("BUBBLE_INCUS_BRIDGE", "").strip()
     if override:

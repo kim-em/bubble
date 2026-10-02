@@ -108,7 +108,15 @@ def test_bridge_interface_follows_the_project_profile(monkeypatch):
     with patch("bubble.incus_bridge.subprocess.run") as mock_run:
         mock_run.return_value = _profile_network_result("incusbr-1007\n")
         assert bridge_interface() == "incusbr-1007"
-        assert mock_run.call_args[0][0] == ["incus", "profile", "device", "get", "default", "eth0", "network"]
+        assert mock_run.call_args[0][0] == [
+            "incus",
+            "profile",
+            "device",
+            "get",
+            "default",
+            "eth0",
+            "network",
+        ]
 
 
 def test_bridge_interface_default_project(monkeypatch):
