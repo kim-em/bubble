@@ -36,6 +36,8 @@ GitHub settings (each a strict superset of the one above):
 """
 
 import json
+import os
+import re
 import shlex
 import subprocess
 
@@ -168,6 +170,47 @@ def _gh_proxy_profile_payload(owner: str, repo: str) -> str:
         gh_repo_line=gh_repo_line,
         repo_file_block=repo_file_block,
     )
+
+
+def select_github_account(account: str) -> str:
+    """Resolve and verify a named credential without changing gh's active account.
+
+    The selected token stays on the host. An explicit GH_TOKEN/GITHUB_TOKEN is accepted only if
+    its identity matches; otherwise the named credential is read from gh's stored accounts.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", account):
+        raise RuntimeError("GitHub account must be a login of 1–39 letters, digits, or hyphens")
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    try:
+        if not token:
+            result = subprocess.run(
+                ["gh", "auth", "token", "--hostname", "github.com", "--user", account],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            token = result.stdout.strip() if result.returncode == 0 else None
+        if not token:
+            raise RuntimeError(f"No GitHub credential for {account}; run gh auth login")
+        env = {**os.environ, "GH_TOKEN": token, "GH_HOST": "github.com"}
+        env.pop("GITHUB_TOKEN", None)
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise RuntimeError(f"Could not authenticate GitHub account {account}") from None
+    login = result.stdout.strip()
+    if result.returncode != 0 or login.lower() != account.lower():
+        raise RuntimeError(f"GitHub credential does not authenticate as {account}")
+    os.environ["GH_TOKEN"] = token
+    os.environ.pop("GITHUB_TOKEN", None)
+    os.environ["GH_HOST"] = "github.com"
+    os.environ["BUBBLE_GITHUB_ACCOUNT"] = account
+    return token
 
 
 def get_host_gh_token() -> str | None:
@@ -306,6 +349,10 @@ def _endpoint_alive(endpoint: dict) -> bool:
     """
     import os as _os
 
+    if os.environ.get("BUBBLE_GITHUB_ACCOUNT") and "github-account" not in endpoint.get(
+        "capabilities", []
+    ):
+        return False
     tcp = endpoint.get("tcp")
     if not isinstance(tcp, dict):
         return False
@@ -499,15 +546,20 @@ def _setup_auth_proxy_bridge(
             detail("network allowlist would block it. No GitHub auth configured.")
         return False
 
-    token = generate_auth_token(
-        container,
-        owner,
-        repo,
-        rest_api=rest_api,
-        graphql_read=graphql_read,
-        graphql_write=graphql_write,
-        push_repos=push_repos,
-    )
+    try:
+        token = generate_auth_token(
+            container,
+            owner,
+            repo,
+            rest_api=rest_api,
+            graphql_read=graphql_read,
+            graphql_write=graphql_write,
+            push_repos=push_repos,
+        )
+    except RuntimeError:
+        if not machine_readable:
+            detail("Warning: selected GitHub credential could not be verified; no auth configured.")
+        return False
 
     # Configure git: talk to the bridge TCP endpoint directly.
     endpoint_str = f"{host_ip}:{port}"
@@ -649,6 +701,16 @@ def setup_auth_proxy_remote(
             detail("Run 'bubble gh proxy start' to diagnose.")
         return False
 
+    if os.environ.get("BUBBLE_GITHUB_ACCOUNT"):
+        endpoint = _wait_for_auth_proxy_endpoint(attempts=1, delay=0)
+        if not endpoint or "github-account" not in endpoint.get("capabilities", []):
+            if not machine_readable:
+                detail("Warning: selected GitHub account requires an account-aware auth proxy.")
+                detail(
+                    "Run 'bubble gh proxy start' from the account-aware installation, then retry."
+                )
+            return False
+
     # Start SSH reverse tunnel (per-remote-host, shared across containers)
     if not start_tunnel(remote_host, local_port=port):
         if not machine_readable:
@@ -656,15 +718,20 @@ def setup_auth_proxy_remote(
         return False
 
     # Generate per-container token with appropriate access policy
-    token = generate_auth_token(
-        container,
-        owner,
-        repo,
-        rest_api=rest_api,
-        graphql_read=graphql_read,
-        graphql_write=graphql_write,
-        push_repos=push_repos,
-    )
+    try:
+        token = generate_auth_token(
+            container,
+            owner,
+            repo,
+            rest_api=rest_api,
+            graphql_read=graphql_read,
+            graphql_write=graphql_write,
+            push_repos=push_repos,
+        )
+    except RuntimeError:
+        if not machine_readable:
+            detail("Warning: selected GitHub credential could not be verified; no auth configured.")
+        return False
 
     # Add Incus proxy device on the remote: tunneled port → container
     from .tunnel import TUNNEL_REMOTE_PORT

@@ -250,7 +250,14 @@ def generate_auth_token(
 
     Uses file locking to prevent read-modify-write races.
     """
-    return TokenStore(AUTH_PROXY_TOKENS).generate(
+    account = os.environ.get("BUBBLE_GITHUB_ACCOUNT")
+    credential = {}
+    if account:
+        from .github_token import select_github_account
+
+        credential = {"github_account": account, "github_token": select_github_account(account)}
+    store = _account_token_store() if account else TokenStore(AUTH_PROXY_TOKENS)
+    return store.generate(
         {
             "container": container_name,
             "owner": owner,
@@ -259,18 +266,76 @@ def generate_auth_token(
             "graphql_read": graphql_read,
             "graphql_write": graphql_write,
             "push_repos": normalize_push_repos(push_repos),
+            **credential,
         }
     )
 
 
+def _account_token_store() -> TokenStore:
+    # Old daemons read only auth-tokens.json. Account-bound tokens must be invisible to them:
+    # a daemon downgrade should reject these containers, never authenticate with the default.
+    return TokenStore(AUTH_PROXY_TOKENS.with_name("github-account-tokens.json"))
+
+
+def prune_account_tokens(existing_containers: set[str], candidates: set[str] | None = None) -> None:
+    """Remove credentials for deleted local containers after a successful runtime inventory."""
+    from .lifecycle import get_bubble_info
+
+    def stale(info):
+        container = info.get("container")
+        if candidates is not None and container not in candidates:
+            return False
+        registered = get_bubble_info(container) or {}
+        return container not in existing_containers and not registered.get("remote_host")
+
+    _account_token_store().remove(stale)
+
+
+def _prune_stale_account_tokens() -> None:
+    import platform
+    import shutil
+    import subprocess
+
+    candidates = {
+        info["container"]
+        for info in _account_token_store().values()
+        if isinstance(info, dict) and isinstance(info.get("container"), str)
+    }
+    if not candidates:
+        return
+    incus = shutil.which("incus")
+    if not incus:
+        logger.warning("Cannot inventory containers; retaining account token records")
+        return
+    command = [incus, "list"]
+    if platform.system() == "Darwin":
+        from .runtime.colima import BUBBLE_INCUS_REMOTE
+
+        command.append(f"{BUBBLE_INCUS_REMOTE}:")
+    command += ["--fast", "--format=json"]
+    try:
+        # Raw bounded inventory: never trigger dependency installation or runtime initialization.
+        result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=10)
+        containers = json.loads(result.stdout)
+        if not isinstance(containers, list):
+            return
+        existing = {container["name"] for container in containers}
+    except Exception:
+        # An unavailable runtime is not evidence that any container was deleted.
+        logger.warning("Cannot inventory containers; retaining account token records")
+        return
+    prune_account_tokens(existing, candidates)
+
+
 def remove_auth_tokens(container_name: str):
     """Remove all auth proxy tokens for a container (e.g. on pop)."""
-    TokenStore(AUTH_PROXY_TOKENS).remove(lambda v: v.get("container") == container_name)
+    for store in (TokenStore(AUTH_PROXY_TOKENS), _account_token_store()):
+        store.remove(lambda v: v.get("container") == container_name)
 
 
 def _load_tokens() -> dict:
     """Load token registry from disk."""
-    return TokenStore(AUTH_PROXY_TOKENS)._load()
+    return {**TokenStore(AUTH_PROXY_TOKENS)._load(), **_account_token_store()._load()}
 
 
 class AuthTokenRegistry:
@@ -281,10 +346,11 @@ class AuthTokenRegistry:
 
     def __init__(self):
         self._store = TokenStore(AUTH_PROXY_TOKENS)
+        self._account_store = _account_token_store()
 
     def lookup(self, token: str) -> dict | None:
         """Look up a token. Returns {container, owner, repo} or None."""
-        return self._store.lookup(token)
+        return self._account_store.lookup(token) or self._store.lookup(token)
 
 
 class ProxyRateLimiter(_RateLimiter):
@@ -715,6 +781,19 @@ class GitHubTokenRefresher:
         return new_token
 
 
+class PinnedGitHubTokenRefresher:
+    """A container's selected credential, never refreshed through the daemon's active account.
+
+    Re-open a container to obtain a replacement credential after revocation/rotation.
+    """
+
+    def __init__(self, token: str):
+        self.token = token
+
+    def refresh(self) -> str:
+        return self.token
+
+
 class AuthProxyHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the git auth proxy."""
 
@@ -786,6 +865,24 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             self._send_error(403, "Invalid auth proxy token")
             return None
 
+        # Assign to this handler instance only. Mutating the class-level refresher would switch
+        # concurrent containers to whichever account authenticated most recently.
+        account = info.get("github_account")
+        self._credential_scope = ""
+        if account:
+            credential = info.get("github_token")
+            if not isinstance(credential, str) or not credential:
+                self._send_error(403, "Selected GitHub account has no credential")
+                return None
+            self.token_refresher = PinnedGitHubTokenRefresher(credential)
+            import hashlib
+
+            self._credential_scope = hashlib.sha256(credential.encode()).hexdigest()
+        elif hasattr(type(self), "token_refresher"):
+            self.token_refresher = type(self).token_refresher
+            if not self.token_refresher.token and not self.token_refresher.refresh():
+                self._send_error(403, "No default GitHub credential; select a GitHub account")
+                return None
         return info
 
     def _send_error(self, code: int, message: str):
@@ -1058,6 +1155,8 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         quota through preflight traffic.
         """
         key = (owner.lower(), repo.lower())
+        if scope := getattr(self, "_credential_scope", ""):
+            key = (scope, *key)
         with self._repo_node_id_lock:
             cached = self._repo_node_id_cache.get(key)
             if cached is not None:
@@ -1085,8 +1184,13 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             logger.info("PREFLIGHT repo_node_id failed for %s/%s", owner, repo)
             return None
 
+    def _preflight_key(self, node_id: str):
+        scope = getattr(self, "_credential_scope", "")
+        return (scope, node_id) if scope else node_id
+
     def _preflight_cache_get(self, node_id: str) -> tuple[bool, str | None]:
         """Look up a preflight result in the cache. Returns (hit, value)."""
+        node_id = self._preflight_key(node_id)
         now = time.time()
         with self._preflight_cache_lock:
             cached = self._preflight_cache.get(node_id)
@@ -1101,6 +1205,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
     def _preflight_cache_put(self, node_id: str, value: str | None) -> None:
         """Cache a preflight result with TTL based on positive/negative."""
+        node_id = self._preflight_key(node_id)
         ttl = PREFLIGHT_POSITIVE_CACHE_TTL if value else PREFLIGHT_NEGATIVE_CACHE_TTL
         expiry = time.time() + ttl
         with self._preflight_cache_lock:
@@ -1139,12 +1244,13 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         # re-check the cache. If the cache still misses (transient failure
         # — those aren't cached), fall through and try again ourselves,
         # subject to the rate limiter.
+        inflight_key = self._preflight_key(node_id)
         while True:
             with self._preflight_inflight_lock:
-                event = self._preflight_inflight.get(node_id)
+                event = self._preflight_inflight.get(inflight_key)
                 if event is None:
                     event = threading.Event()
-                    self._preflight_inflight[node_id] = event
+                    self._preflight_inflight[inflight_key] = event
                     is_leader = True
                 else:
                     is_leader = False
@@ -1191,7 +1297,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             return result
         finally:
             with self._preflight_inflight_lock:
-                self._preflight_inflight.pop(node_id, None)
+                self._preflight_inflight.pop(inflight_key, None)
             event.set()
 
     def _forward_to_github(
@@ -1605,7 +1711,7 @@ def _write_endpoint_file(tcp_host: str, tcp_port: int):
         "tcp": {"host": tcp_host, "port": tcp_port},
         "version": 3,
         "bubble_version": __version__,
-        "capabilities": ["allow-push"],
+        "capabilities": ["allow-push", "github-account"],
         "pid": os.getpid(),
     }
     endpoint_tmp = AUTH_PROXY_ENDPOINT_FILE.with_name(
@@ -1645,9 +1751,12 @@ def run_daemon(port: int = 0):
         port = config.get("auth_proxy", {}).get("port", DEFAULT_PORT)
 
     # Get GitHub token (refreshed automatically on 401)
-    github_token = _get_github_token()
+    try:
+        github_token = _get_github_token()
+    except RuntimeError:
+        logger.info("No default GitHub credential; serving account-bound containers only")
+        github_token = ""
     token_refresher = GitHubTokenRefresher(github_token)
-
     token_registry = AuthTokenRegistry()
     rate_limiter = ProxyRateLimiter()
 
@@ -1665,6 +1774,9 @@ def run_daemon(port: int = 0):
         tcp_server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
 
     _write_endpoint_file(bind_addr, port)
+    threading.Thread(
+        target=_prune_stale_account_tokens, name="account-token-cleanup", daemon=True
+    ).start()
 
     logger.info(
         "Auth proxy daemon started: tcp=%s:%d (device=%s)",

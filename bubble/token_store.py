@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import secrets
+import tempfile
 import threading
 import time
 from collections import deque
@@ -68,10 +69,14 @@ class TokenStore:
     def _save(self, tokens: dict):
         """Atomically save tokens to disk with owner-only permissions."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(tokens))
-        tmp.replace(self._path)
-        os.chmod(str(self._path), 0o600)
+        fd, name = tempfile.mkstemp(prefix=f".{self._path.name}.", dir=self._path.parent)
+        tmp = Path(name)
+        try:
+            with os.fdopen(fd, "w") as out:
+                json.dump(tokens, out)
+            tmp.replace(self._path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def generate(self, value: Any) -> str:
         """Generate a new token mapped to value, with file locking.

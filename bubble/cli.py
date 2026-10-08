@@ -319,6 +319,17 @@ def _resolve_ai_prompt_locally(target: str, new_branch: str | None = None) -> st
     return prompt
 
 
+def _select_github_account_option(ctx, value):
+    if value is None or ctx.resilient_parsing:
+        return
+    from .github_token import select_github_account
+
+    try:
+        select_github_account(value)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from None
+
+
 def _resolve_push_repos(t, allow_push, pr_meta=None) -> list[str]:
     """Resolve the set of fork repos the bubble may git fetch/push to.
 
@@ -447,10 +458,10 @@ def _open_remote(
             remote_host=remote_host,
             token_inject=True,
         )
-        if not auth_ok and network:
+        if not auth_ok and (network or os.environ.get("BUBBLE_GITHUB_ACCOUNT")):
             click.echo(
-                "Error: GitHub token injection failed and network allowlisting is active "
-                "(github.com is blocked).\n"
+                "Error: GitHub token injection failed; selected accounts and network allowlisting "
+                "require working GitHub authentication.\n"
                 "Run `gh auth login` to configure GitHub authentication, "
                 "or use `--no-network` to skip network allowlisting.",
                 err=True,
@@ -475,10 +486,10 @@ def _open_remote(
             config=config,
             push_repos=push_repos,
         )
-        if not auth_ok and network:
+        if not auth_ok and (network or os.environ.get("BUBBLE_GITHUB_ACCOUNT")):
             click.echo(
-                "Error: GitHub auth proxy setup failed and network allowlisting is active "
-                "(github.com is blocked).\n"
+                "Error: GitHub auth proxy setup failed; selected accounts and network allowlisting "
+                "require working GitHub authentication.\n"
                 "Run `gh auth login` to configure GitHub authentication, "
                 "or use `--no-network` to skip network allowlisting.",
                 err=True,
@@ -722,6 +733,13 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
 )
 @click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
+)
+@click.option(
+    "--github-account",
+    envvar="BUBBLE_GITHUB_ACCOUNT",
+    expose_value=False,
+    callback=lambda ctx, param, value: _select_github_account_option(ctx, value),
+    help="Use this GitHub login for host operations and the container's scoped auth proxy.",
 )
 @click.option("--git-name", type=str, default=None, hidden=True, help="Git user.name for container")
 @click.option(
@@ -1438,10 +1456,10 @@ def _open_single(
                     machine_readable=machine_readable,
                     token_inject=True,
                 )
-                if not auth_ok and network:
+                if not auth_ok and (network or os.environ.get("BUBBLE_GITHUB_ACCOUNT")):
                     raise click.ClickException(
-                        "GitHub token injection failed and network allowlisting is active "
-                        "(github.com is blocked).\n"
+                        "GitHub token injection failed; selected accounts and network allowlisting "
+                        "require working GitHub authentication.\n"
                         "Run `gh auth login` to configure GitHub authentication, "
                         "or use `--no-network` to skip network allowlisting."
                     )
@@ -1466,10 +1484,11 @@ def _open_single(
                     config=config,
                     push_repos=push_repos,
                 )
-                if not auth_ok and network:
+                if not auth_ok and (network or os.environ.get("BUBBLE_GITHUB_ACCOUNT")):
                     raise click.ClickException(
-                        "GitHub auth proxy setup failed and network allowlisting is active "
-                        "(github.com is blocked).\n"
+                        "GitHub auth proxy setup failed; selected accounts and network "
+                        "allowlisting "
+                        "require working GitHub authentication.\n"
                         "Run `gh auth login` to configure GitHub authentication, "
                         "or use `--no-network` to skip network allowlisting."
                     )
