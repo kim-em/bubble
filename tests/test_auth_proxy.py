@@ -35,7 +35,7 @@ def test_endpoint_advertises_fork_push_capability(auth_proxy_env):
     auth_proxy._write_endpoint_file("127.0.0.1", 7654)
     payload = json.loads((auth_proxy_env / "auth-proxy.endpoint").read_text())
     assert payload["bubble_version"] == auth_proxy.__version__
-    assert payload["capabilities"] == ["allow-push"]
+    assert payload["capabilities"] == ["allow-push", "github-account"]
     assert payload["pid"] == __import__("os").getpid()
     assert not list(auth_proxy_env.glob(".auth-proxy.endpoint.*.tmp"))
 

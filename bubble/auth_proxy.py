@@ -250,6 +250,12 @@ def generate_auth_token(
 
     Uses file locking to prevent read-modify-write races.
     """
+    account = os.environ.get("BUBBLE_GITHUB_ACCOUNT")
+    credential = {}
+    if account:
+        from .github_token import select_github_account
+
+        credential = {"github_account": account, "github_token": select_github_account(account)}
     return TokenStore(AUTH_PROXY_TOKENS).generate(
         {
             "container": container_name,
@@ -259,6 +265,7 @@ def generate_auth_token(
             "graphql_read": graphql_read,
             "graphql_write": graphql_write,
             "push_repos": normalize_push_repos(push_repos),
+            **credential,
         }
     )
 
@@ -715,6 +722,19 @@ class GitHubTokenRefresher:
         return new_token
 
 
+class PinnedGitHubTokenRefresher:
+    """A container's selected credential, never refreshed through the daemon's active account.
+
+    Re-open a container to obtain a replacement credential after revocation/rotation.
+    """
+
+    def __init__(self, token: str):
+        self.token = token
+
+    def refresh(self) -> str:
+        return self.token
+
+
 class AuthProxyHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the git auth proxy."""
 
@@ -786,6 +806,21 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             self._send_error(403, "Invalid auth proxy token")
             return None
 
+        # Assign to this handler instance only. Mutating the class-level refresher would switch
+        # concurrent containers to whichever account authenticated most recently.
+        account = info.get("github_account")
+        self._credential_scope = ""
+        if account:
+            credential = info.get("github_token")
+            if not isinstance(credential, str) or not credential:
+                self._send_error(403, "Selected GitHub account has no credential")
+                return None
+            self.token_refresher = PinnedGitHubTokenRefresher(credential)
+            import hashlib
+
+            self._credential_scope = hashlib.sha256(credential.encode()).hexdigest()
+        elif hasattr(type(self), "token_refresher"):
+            self.token_refresher = type(self).token_refresher
         return info
 
     def _send_error(self, code: int, message: str):
@@ -1058,6 +1093,8 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         quota through preflight traffic.
         """
         key = (owner.lower(), repo.lower())
+        if scope := getattr(self, "_credential_scope", ""):
+            key = (scope, *key)
         with self._repo_node_id_lock:
             cached = self._repo_node_id_cache.get(key)
             if cached is not None:
@@ -1085,8 +1122,13 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             logger.info("PREFLIGHT repo_node_id failed for %s/%s", owner, repo)
             return None
 
+    def _preflight_key(self, node_id: str):
+        scope = getattr(self, "_credential_scope", "")
+        return (scope, node_id) if scope else node_id
+
     def _preflight_cache_get(self, node_id: str) -> tuple[bool, str | None]:
         """Look up a preflight result in the cache. Returns (hit, value)."""
+        node_id = self._preflight_key(node_id)
         now = time.time()
         with self._preflight_cache_lock:
             cached = self._preflight_cache.get(node_id)
@@ -1101,6 +1143,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
     def _preflight_cache_put(self, node_id: str, value: str | None) -> None:
         """Cache a preflight result with TTL based on positive/negative."""
+        node_id = self._preflight_key(node_id)
         ttl = PREFLIGHT_POSITIVE_CACHE_TTL if value else PREFLIGHT_NEGATIVE_CACHE_TTL
         expiry = time.time() + ttl
         with self._preflight_cache_lock:
@@ -1139,12 +1182,13 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         # re-check the cache. If the cache still misses (transient failure
         # — those aren't cached), fall through and try again ourselves,
         # subject to the rate limiter.
+        inflight_key = self._preflight_key(node_id)
         while True:
             with self._preflight_inflight_lock:
-                event = self._preflight_inflight.get(node_id)
+                event = self._preflight_inflight.get(inflight_key)
                 if event is None:
                     event = threading.Event()
-                    self._preflight_inflight[node_id] = event
+                    self._preflight_inflight[inflight_key] = event
                     is_leader = True
                 else:
                     is_leader = False
@@ -1191,7 +1235,7 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             return result
         finally:
             with self._preflight_inflight_lock:
-                self._preflight_inflight.pop(node_id, None)
+                self._preflight_inflight.pop(inflight_key, None)
             event.set()
 
     def _forward_to_github(
@@ -1605,7 +1649,7 @@ def _write_endpoint_file(tcp_host: str, tcp_port: int):
         "tcp": {"host": tcp_host, "port": tcp_port},
         "version": 3,
         "bubble_version": __version__,
-        "capabilities": ["allow-push"],
+        "capabilities": ["allow-push", "github-account"],
         "pid": os.getpid(),
     }
     endpoint_tmp = AUTH_PROXY_ENDPOINT_FILE.with_name(

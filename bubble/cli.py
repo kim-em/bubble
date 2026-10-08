@@ -319,6 +319,17 @@ def _resolve_ai_prompt_locally(target: str, new_branch: str | None = None) -> st
     return prompt
 
 
+def _select_github_account_option(ctx, value):
+    if value is None or ctx.resilient_parsing:
+        return
+    from .github_token import select_github_account
+
+    try:
+        select_github_account(value)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from None
+
+
 def _resolve_push_repos(t, allow_push, pr_meta=None) -> list[str]:
     """Resolve the set of fork repos the bubble may git fetch/push to.
 
@@ -722,6 +733,13 @@ def _reattach(runtime, name, editor, no_interactive, command=None, ephemeral=Fal
 )
 @click.option(
     "--no-clone", is_flag=True, hidden=True, help="Fail if bare repo doesn't exist (used by relay)"
+)
+@click.option(
+    "--github-account",
+    envvar="BUBBLE_GITHUB_ACCOUNT",
+    expose_value=False,
+    callback=lambda ctx, param, value: _select_github_account_option(ctx, value),
+    help="Use this GitHub login for host operations and the container's scoped auth proxy.",
 )
 @click.option("--git-name", type=str, default=None, hidden=True, help="Git user.name for container")
 @click.option(
