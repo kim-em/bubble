@@ -28,13 +28,18 @@ The explicit `direct` GitHub security setting retains its existing raw-token
 injection behavior.
 
 The daemon advertises the `github-account` capability. An old daemon is rejected
-for account-selected bubbles and refreshed through the normal proxy lifecycle.
+for account-selected bubbles. Local setup refreshes it through the normal proxy
+lifecycle; remote setup reports an error and requires `bubble gh proxy start`
+from the account-aware installation.
 Account-bound tokens use a separate registry, so even a downgrade of a running
 daemon fails closed for existing selected-account containers. A daemon can serve
 selected accounts without any default gh login; unselected containers receive
 403 until a default credential is available.
-After replacing or revoking a selected credential, close and reopen the bubble;
-a selected container never refreshes through gh's active account.
+After replacing or revoking a selected credential, pop and recreate the bubble;
+a selected container never refreshes through gh's active account. Reattaching an
+existing bubble keeps its original credential; passing `--github-account` on a
+reattach does not switch that container's account. TauCeti pops and recreates its
+worker bubble before each round.
 
 For TauCeti, use a stable installation of this checkout or point
 `TAUCETI_BUBBLE` at its `.venv/bin/bubble` executable, then run
