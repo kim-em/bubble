@@ -77,8 +77,12 @@ def test_registry_keeps_selected_token_only_on_host(tmp_path, monkeypatch):
     assert "raw-host-secret" not in proxy_token
     entry = ap._load_tokens()[proxy_token]
     assert entry["github_account"] == "alice" and entry["github_token"] == "raw-host-secret"
-    assert (tmp_path / "auth-tokens.json").stat().st_mode & 0o777 == 0o600
-    assert not list(tmp_path.glob(".auth-tokens.json.*"))
+    assert (tmp_path / "github-account-tokens.json").stat().st_mode & 0o777 == 0o600
+    assert not list(tmp_path.glob(".github-account-tokens.json.*"))
+    # A legacy daemon knows only the original registry. Downgrading rejects this token.
+    legacy_registry = ap.TokenStore(ap.AUTH_PROXY_TOKENS)
+    assert legacy_registry.lookup(proxy_token) is None
+    assert ap.AuthTokenRegistry().lookup(proxy_token) == entry
     ap.remove_auth_tokens("alice-container")
     assert ap._load_tokens() == {}
 
@@ -195,3 +199,62 @@ def test_old_daemon_is_rejected_for_a_selected_account(monkeypatch):
     assert not gt._endpoint_alive(endpoint)
     endpoint["capabilities"].append("github-account")
     assert gt._endpoint_alive(endpoint)
+
+
+def test_account_credential_pruning_retains_live_containers(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap, "AUTH_PROXY_TOKENS", tmp_path / "auth-tokens.json")
+    monkeypatch.setenv("BUBBLE_GITHUB_ACCOUNT", "alice")
+    monkeypatch.setattr(gt, "select_github_account", lambda _: "raw-host-secret")
+    live = ap.generate_auth_token("live", "owner", "repo")
+    deleted = ap.generate_auth_token("deleted", "owner", "repo")
+    remote = ap.generate_auth_token("remote", "owner", "repo")
+    monkeypatch.setattr(
+        "bubble.lifecycle.get_bubble_info",
+        lambda name: {"remote_host": "host"} if name == "remote" else None,
+    )
+    ap.prune_account_tokens({"live"})
+    registry = ap.AuthTokenRegistry()
+    assert registry.lookup(live) is not None
+    assert registry.lookup(deleted) is None
+    assert registry.lookup(remote) is not None
+
+
+def test_account_only_daemon_starts_and_unselected_requests_fail_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap, "AUTH_PROXY_DIR", tmp_path)
+    monkeypatch.setattr(ap, "_setup_logging", lambda: None)
+    monkeypatch.setattr(ap, "_get_github_token", MagicMock(side_effect=RuntimeError("no login")))
+    monkeypatch.setattr(ap, "_prune_stale_account_tokens", lambda: None)
+    monkeypatch.setattr(ap, "_resolve_tcp_bind", lambda: ("127.0.0.1", None))
+    monkeypatch.setattr(ap, "_write_endpoint_file", lambda *args: None)
+    server = MagicMock()
+    monkeypatch.setattr(ap, "ThreadedHTTPServer", lambda *args: server)
+    monkeypatch.setattr(ap.AuthProxyHandler, "token_refresher", None, raising=False)
+    monkeypatch.setattr(ap.AuthProxyHandler, "token_registry", None, raising=False)
+    monkeypatch.setattr(ap.AuthProxyHandler, "rate_limiter", None, raising=False)
+    ap.run_daemon(port=7654)
+    server.serve_forever.assert_called_once()
+    assert handler_for("alice", "alice-secret").token_refresher.token == "alice-secret"
+    unselected = handler_for(None, None)
+    unselected.send_response.assert_called_with(403)
+    assert b"No default GitHub credential" in unselected.wfile.getvalue()
+
+
+def test_credential_failure_during_proxy_setup_configures_no_auth(monkeypatch):
+    monkeypatch.setattr(
+        ap, "generate_auth_token", MagicMock(side_effect=RuntimeError("verification failed"))
+    )
+    monkeypatch.setattr(gt, "_allow_bridge_egress", lambda *args: True)
+    runtime = MagicMock()
+    assert not gt._setup_auth_proxy_bridge(
+        runtime,
+        "alice",
+        "owner",
+        "repo",
+        {"tcp": {"host": "10.0.0.1", "port": 7654}},
+        False,
+        "none",
+        "none",
+        True,
+        False,
+    )
+    runtime.exec.assert_not_called()

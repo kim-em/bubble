@@ -256,7 +256,8 @@ def generate_auth_token(
         from .github_token import select_github_account
 
         credential = {"github_account": account, "github_token": select_github_account(account)}
-    return TokenStore(AUTH_PROXY_TOKENS).generate(
+    store = _account_token_store() if account else TokenStore(AUTH_PROXY_TOKENS)
+    return store.generate(
         {
             "container": container_name,
             "owner": owner,
@@ -270,14 +271,50 @@ def generate_auth_token(
     )
 
 
+def _account_token_store() -> TokenStore:
+    # Old daemons read only auth-tokens.json. Account-bound tokens must be invisible to them:
+    # a daemon downgrade should reject these containers, never authenticate with the default.
+    return TokenStore(AUTH_PROXY_TOKENS.with_name("github-account-tokens.json"))
+
+
+def prune_account_tokens(existing_containers: set[str], candidates: set[str] | None = None) -> None:
+    """Remove credentials for deleted local containers after a successful runtime inventory."""
+    from .lifecycle import get_bubble_info
+
+    def stale(info):
+        container = info.get("container")
+        if candidates is not None and container not in candidates:
+            return False
+        registered = get_bubble_info(container) or {}
+        return container not in existing_containers and not registered.get("remote_host")
+
+    _account_token_store().remove(stale)
+
+
+def _prune_stale_account_tokens() -> None:
+    from .config import load_config
+    from .setup import get_runtime
+
+    candidates = {info["container"] for info in _account_token_store().values()}
+    try:
+        runtime = get_runtime(load_config(), ensure_ready=False)
+        containers = runtime.list_containers(fast=True)
+    except Exception:
+        # An unavailable runtime is not evidence that any container was deleted.
+        logger.warning("Cannot inventory containers; retaining account token records")
+        return
+    prune_account_tokens({container.name for container in containers}, candidates)
+
+
 def remove_auth_tokens(container_name: str):
     """Remove all auth proxy tokens for a container (e.g. on pop)."""
-    TokenStore(AUTH_PROXY_TOKENS).remove(lambda v: v.get("container") == container_name)
+    for store in (TokenStore(AUTH_PROXY_TOKENS), _account_token_store()):
+        store.remove(lambda v: v.get("container") == container_name)
 
 
 def _load_tokens() -> dict:
     """Load token registry from disk."""
-    return TokenStore(AUTH_PROXY_TOKENS)._load()
+    return {**TokenStore(AUTH_PROXY_TOKENS)._load(), **_account_token_store()._load()}
 
 
 class AuthTokenRegistry:
@@ -288,10 +325,11 @@ class AuthTokenRegistry:
 
     def __init__(self):
         self._store = TokenStore(AUTH_PROXY_TOKENS)
+        self._account_store = _account_token_store()
 
     def lookup(self, token: str) -> dict | None:
         """Look up a token. Returns {container, owner, repo} or None."""
-        return self._store.lookup(token)
+        return self._account_store.lookup(token) or self._store.lookup(token)
 
 
 class ProxyRateLimiter(_RateLimiter):
@@ -821,6 +859,9 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             self._credential_scope = hashlib.sha256(credential.encode()).hexdigest()
         elif hasattr(type(self), "token_refresher"):
             self.token_refresher = type(self).token_refresher
+            if not self.token_refresher.token and not self.token_refresher.refresh():
+                self._send_error(403, "No default GitHub credential; select a GitHub account")
+                return None
         return info
 
     def _send_error(self, code: int, message: str):
@@ -1689,8 +1730,13 @@ def run_daemon(port: int = 0):
         port = config.get("auth_proxy", {}).get("port", DEFAULT_PORT)
 
     # Get GitHub token (refreshed automatically on 401)
-    github_token = _get_github_token()
+    try:
+        github_token = _get_github_token()
+    except RuntimeError:
+        logger.info("No default GitHub credential; serving account-bound containers only")
+        github_token = ""
     token_refresher = GitHubTokenRefresher(github_token)
+    _prune_stale_account_tokens()
 
     token_registry = AuthTokenRegistry()
     rate_limiter = ProxyRateLimiter()

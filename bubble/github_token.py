@@ -546,15 +546,20 @@ def _setup_auth_proxy_bridge(
             detail("network allowlist would block it. No GitHub auth configured.")
         return False
 
-    token = generate_auth_token(
-        container,
-        owner,
-        repo,
-        rest_api=rest_api,
-        graphql_read=graphql_read,
-        graphql_write=graphql_write,
-        push_repos=push_repos,
-    )
+    try:
+        token = generate_auth_token(
+            container,
+            owner,
+            repo,
+            rest_api=rest_api,
+            graphql_read=graphql_read,
+            graphql_write=graphql_write,
+            push_repos=push_repos,
+        )
+    except RuntimeError:
+        if not machine_readable:
+            detail("Warning: selected GitHub credential could not be verified; no auth configured.")
+        return False
 
     # Configure git: talk to the bridge TCP endpoint directly.
     endpoint_str = f"{host_ip}:{port}"
@@ -699,6 +704,11 @@ def setup_auth_proxy_remote(
     if os.environ.get("BUBBLE_GITHUB_ACCOUNT"):
         endpoint = _wait_for_auth_proxy_endpoint(attempts=1, delay=0)
         if not endpoint or "github-account" not in endpoint.get("capabilities", []):
+            if not machine_readable:
+                detail("Warning: selected GitHub account requires an account-aware auth proxy.")
+                detail(
+                    "Run 'bubble gh proxy start' from the account-aware installation, then retry."
+                )
             return False
 
     # Start SSH reverse tunnel (per-remote-host, shared across containers)
@@ -708,15 +718,20 @@ def setup_auth_proxy_remote(
         return False
 
     # Generate per-container token with appropriate access policy
-    token = generate_auth_token(
-        container,
-        owner,
-        repo,
-        rest_api=rest_api,
-        graphql_read=graphql_read,
-        graphql_write=graphql_write,
-        push_repos=push_repos,
-    )
+    try:
+        token = generate_auth_token(
+            container,
+            owner,
+            repo,
+            rest_api=rest_api,
+            graphql_read=graphql_read,
+            graphql_write=graphql_write,
+            push_repos=push_repos,
+        )
+    except RuntimeError:
+        if not machine_readable:
+            detail("Warning: selected GitHub credential could not be verified; no auth configured.")
+        return False
 
     # Add Incus proxy device on the remote: tunneled port → container
     from .tunnel import TUNNEL_REMOTE_PORT
