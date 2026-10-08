@@ -1,7 +1,10 @@
 """Named accounts remain isolated across a shared proxy; no real GitHub credentials/network."""
 
 import base64
+import json
 import os
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from types import SimpleNamespace
@@ -258,3 +261,23 @@ def test_credential_failure_during_proxy_setup_configures_no_auth(monkeypatch):
         False,
     )
     runtime.exec.assert_not_called()
+
+
+def test_cleanup_skips_empty_registry_and_bounds_inventory(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap, "AUTH_PROXY_TOKENS", tmp_path / "auth-tokens.json")
+    inventory = MagicMock()
+    monkeypatch.setattr(subprocess, "run", inventory)
+    ap._prune_stale_account_tokens()
+    inventory.assert_not_called()
+    monkeypatch.setenv("BUBBLE_GITHUB_ACCOUNT", "alice")
+    monkeypatch.setattr(gt, "select_github_account", lambda _: "raw-host-secret")
+    token = ap.generate_auth_token("retained", "owner", "repo")
+    monkeypatch.setattr(shutil, "which", lambda _: "/test/incus")
+    inventory.side_effect = subprocess.TimeoutExpired("incus", 10)
+    ap._prune_stale_account_tokens()
+    assert inventory.call_args.kwargs["timeout"] == 10
+    assert ap.AuthTokenRegistry().lookup(token) is not None
+    inventory.side_effect = None
+    inventory.return_value = SimpleNamespace(stdout=json.dumps([{"name": "retained"}]))
+    ap._prune_stale_account_tokens()
+    assert ap.AuthTokenRegistry().lookup(token) is not None

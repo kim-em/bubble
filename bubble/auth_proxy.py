@@ -292,18 +292,39 @@ def prune_account_tokens(existing_containers: set[str], candidates: set[str] | N
 
 
 def _prune_stale_account_tokens() -> None:
-    from .config import load_config
-    from .setup import get_runtime
+    import platform
+    import shutil
+    import subprocess
 
-    candidates = {info["container"] for info in _account_token_store().values()}
+    candidates = {
+        info["container"]
+        for info in _account_token_store().values()
+        if isinstance(info, dict) and isinstance(info.get("container"), str)
+    }
+    if not candidates:
+        return
+    incus = shutil.which("incus")
+    if not incus:
+        logger.warning("Cannot inventory containers; retaining account token records")
+        return
+    command = [incus, "list"]
+    if platform.system() == "Darwin":
+        from .runtime.colima import BUBBLE_INCUS_REMOTE
+
+        command.append(f"{BUBBLE_INCUS_REMOTE}:")
+    command += ["--fast", "--format=json"]
     try:
-        runtime = get_runtime(load_config(), ensure_ready=False)
-        containers = runtime.list_containers(fast=True)
+        # Raw bounded inventory: never trigger dependency installation or runtime initialization.
+        result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=10)
+        containers = json.loads(result.stdout)
+        if not isinstance(containers, list):
+            return
+        existing = {container["name"] for container in containers}
     except Exception:
         # An unavailable runtime is not evidence that any container was deleted.
         logger.warning("Cannot inventory containers; retaining account token records")
         return
-    prune_account_tokens({container.name for container in containers}, candidates)
+    prune_account_tokens(existing, candidates)
 
 
 def remove_auth_tokens(container_name: str):
@@ -1736,8 +1757,6 @@ def run_daemon(port: int = 0):
         logger.info("No default GitHub credential; serving account-bound containers only")
         github_token = ""
     token_refresher = GitHubTokenRefresher(github_token)
-    _prune_stale_account_tokens()
-
     token_registry = AuthTokenRegistry()
     rate_limiter = ProxyRateLimiter()
 
@@ -1755,6 +1774,9 @@ def run_daemon(port: int = 0):
         tcp_server = ThreadedHTTPServer((bind_addr, port), AuthProxyHandler)
 
     _write_endpoint_file(bind_addr, port)
+    threading.Thread(
+        target=_prune_stale_account_tokens, name="account-token-cleanup", daemon=True
+    ).start()
 
     logger.info(
         "Auth proxy daemon started: tcp=%s:%d (device=%s)",

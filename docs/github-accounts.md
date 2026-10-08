@@ -18,6 +18,8 @@ it is never included in argv or injected into the container in proxy mode.
 This file contains raw GitHub credentials and must be excluded from shared backups.
 Popping the container removes the credential record, and daemon startup prunes
 records for containers that no longer exist when runtime inventory succeeds.
+Cleanup runs after the listener is published, with a bounded inventory call;
+unavailable runtimes retain records and never trigger dependency installation.
 Credentials for retained containers remain until those containers are popped. Requests use
 an instance-local credential, so a concurrent container cannot switch another
 container's account. GraphQL ownership caches and in-flight queries are scoped to
