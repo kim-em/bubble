@@ -680,9 +680,10 @@ def _resolve_bind() -> tuple[str, str | None]:
         if address.startswith("127."):
             raise RuntimeError("could not determine a container-reachable Colima bridge address")
         return address, None
-    from .incus_bridge import BRIDGE_INTERFACE, bridge_gateway_ipv4
+    from .incus_bridge import bridge_gateway_ipv4, bridge_interface
 
-    return bridge_gateway_ipv4(), BRIDGE_INTERFACE
+    interface = bridge_interface()
+    return bridge_gateway_ipv4(interface), interface
 
 
 def _write_endpoint(host: str, port: int) -> None:
