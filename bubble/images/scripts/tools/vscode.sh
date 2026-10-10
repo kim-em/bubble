@@ -3,6 +3,12 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+# The extension installer uses Python and unzip. Install these dependencies
+# explicitly: the optional elan tool may be disabled, and derived-image
+# setup runs only after the base image's tools have been installed.
+apt-get update -qq
+apt-get install -y -qq python3 unzip < /dev/null
+
 # Pre-install VS Code Server if commit hash was provided at build time
 if [ -n "${VSCODE_COMMIT:-}" ]; then
     echo "Installing VS Code Server (commit: $VSCODE_COMMIT)..."
