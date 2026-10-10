@@ -94,13 +94,16 @@ def _setup_overlay(runtime, container: str, lower_path: str, mount_path: str):
         [
             "bash",
             "-c",
-            # Create directories, mount overlayfs, fix upper ownership.
-            # workdir stays root-owned (overlayfs internal use only).
+            # Create directories, give `user` the upper, THEN mount. The order matters: overlayfs
+            # fixes the merged root's identity from the upper at mount time, and a chown done
+            # afterwards is visible in `ls` but not honoured for writes, so `user` gets EACCES on
+            # every create (reproduced on native Incus with raw.idmap; kernel 7.1). workdir stays
+            # root-owned (overlayfs internal use only).
             f"mkdir -p {q_upper} {q_work} {q_mount}"
+            f" && chown user:user {q_upper}"
             f" && mount -t overlay overlay"
             f" -o lowerdir={q_lower},upperdir={q_upper},workdir={q_work}"
-            f" {q_mount}"
-            f" && chown user:user {q_upper}",
+            f" {q_mount}",
         ],
     )
 
