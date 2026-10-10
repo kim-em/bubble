@@ -646,7 +646,21 @@ class ArtifactCacheHandler(BaseHTTPRequestHandler):
 
 
 class _BoundedServerMixin:
-    """Queue accepted sockets before spawning at most 256 request threads."""
+    """Queue accepted sockets before spawning at most 256 request threads.
+
+    The mixin spawns the handler thread itself and releases the slot when that
+    thread finishes, whatever server class it is mixed into. It used to defer to
+    the base class's ``process_request`` and release the slot from
+    ``process_request_thread``; that only holds for ``socketserver.ThreadingMixIn``
+    (the macOS server). The Linux server is ``BridgeBoundHTTPServer``, whose
+    ``ThreadedHTTPServer`` base runs handlers through its own
+    ``_handle_request_thread`` and never calls ``process_request_thread``, so every
+    accepted connection leaked one of the 256 slots and, once they were gone, the
+    accept loop blocked forever in ``acquire()`` with the listen backlog full of
+    connections no one would ever answer (seen twice on 2026-09-20 during
+    parallel Lake restores from three containers: ~150 connections plus
+    reconnects after idle timeouts exhaust 256 slots in about three minutes).
+    """
 
     _request_slots = threading.BoundedSemaphore(256)
     request_queue_size = 256
@@ -654,16 +668,27 @@ class _BoundedServerMixin:
     def process_request(self, request, client_address):
         self._request_slots.acquire()
         try:
-            super().process_request(request, client_address)
-        except Exception:
+            thread = threading.Thread(
+                target=self._bounded_request_thread,
+                args=(request, client_address),
+                name="bubble-cache-request",
+                daemon=True,
+            )
+            thread.start()
+        except BaseException:
             self._request_slots.release()
             raise
 
-    def process_request_thread(self, request, client_address):
+    def _bounded_request_thread(self, request, client_address):
         try:
-            super().process_request_thread(request, client_address)
+            self.finish_request(request, client_address)
+        except Exception:
+            self.handle_error(request, client_address)
         finally:
-            self._request_slots.release()
+            try:
+                self.shutdown_request(request)
+            finally:
+                self._request_slots.release()
 
 
 class ArtifactCacheServer(_BoundedServerMixin, ThreadingHTTPServer):
