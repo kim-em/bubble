@@ -191,13 +191,13 @@ def test_mathlib_route_falls_back_on_404(cache_server, monkeypatch):
     client = FakeClient([FakeResponse(b"missing", status=404), FakeResponse(b"legacy")])
     monkeypatch.setattr(artifact_cache, "_UPSTREAM_CLIENT", client)
     token = artifact_cache.generate_cache_token(
-        "one", {"mathlib": artifact_cache.MATHLIB_CACHE_ENDPOINTS}
+        "one", {"mathlib": ["https://new.example", "https://legacy.example"]}
     )
     _, _, body = _http(f"{cache_server}/cache/{token}/mathlib/f/hash.tar.gz")
     assert body == b"legacy"
     assert client.urls == [
-        "https://cache.mathlib.org/mathlib4-master/f/hash.tar.gz",
-        "https://lakecache.blob.core.windows.net/mathlib4-master/f/hash.tar.gz",
+        "https://new.example/f/hash.tar.gz",
+        "https://legacy.example/f/hash.tar.gz",
     ]
 
 
