@@ -111,7 +111,7 @@ Each "bubble" is a lightweight Linux container (via Incus) with:
 
 **Language hooks**: bubble automatically detects the project's language and selects the right image. For Lean 4 projects (detected via `lean-toolchain`), the container includes elan, pre-installed VS Code extensions, and auto-downloads the mathlib cache when needed.
 
-**Host-global artifact cache**: Mathlib downloads are routed through a host daemon that accepts only `GET`/`HEAD`, caches successful public responses, and is shared across isolated `BUBBLE_HOME` stores. Mathlib's current and legacy stores are tried in order. Projects with their own anonymous Lake cache can opt in explicitly:
+**Host-global artifact cache**: Mathlib downloads are routed through a host daemon that accepts only `GET`/`HEAD`, caches successful public responses, and is shared across isolated `BUBBLE_HOME` stores. The Mathlib cache resolver is tried first, followed by the legacy Azure stores. Projects with their own anonymous Lake cache can opt in explicitly:
 
 ```bash
 bubble TauCetiProject/TauCeti \

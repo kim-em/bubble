@@ -44,9 +44,10 @@ ARTIFACT_CACHE_ENDPOINT_FILE = HOST_DATA_DIR / "artifact-cache.endpoint"
 ARTIFACT_CACHE_LOG = HOST_DATA_DIR / "artifact-cache.log"
 ARTIFACT_CACHE_LOCK = HOST_DATA_DIR / "locks" / "artifact-cache.lock"
 
-# Mathlib's Cache/Requests.lean gives MATHLIB_CACHE_GET_URL precedence, and
-# Cache/Infra.lean defines this current-primary then legacy Azure chain.
+# Mathlib's Cache/Requests.lean gives MATHLIB_CACHE_GET_URL precedence.
+# Try the current resolver before the legacy Azure stores.
 MATHLIB_CACHE_ENDPOINTS = (
+    "https://cache.mathlib.org/mathlib4-master",
     "https://lakecache.blob.core.windows.net/mathlib4-master",
     "https://lakecache.blob.core.windows.net/mathlib4",
 )
