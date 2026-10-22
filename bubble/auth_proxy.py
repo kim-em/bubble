@@ -1582,10 +1582,24 @@ class BridgeBoundHTTPServer(ThreadedHTTPServer):
     LAN side, docker0, etc. cannot reach this listener. We also verify
     the option round-trips via ``getsockopt`` and fail closed if it
     didn't take effect (older kernels, namespaces, etc.).
+
+    The kernel holds the binding by interface *index*, not by name. When
+    incus rebuilds its bridge (a restart of ``incusd``, which an unattended
+    security upgrade of a library it links can trigger), ``incusbr0`` comes
+    back under a new index and this socket stays attached to the old one: it
+    keeps listening, its pid stays alive, and no container can reach it. So
+    the server checks, every ``DEVICE_CHECK_INTERVAL`` seconds, that the
+    interface is still the one it bound, and exits when it is not; the
+    service manager (``Restart=always``) starts a listener on the bridge as
+    it is now.
     """
+
+    DEVICE_CHECK_INTERVAL = 5.0
 
     def __init__(self, server_address, RequestHandlerClass, *, bind_device: str):
         self._bind_device = bind_device
+        self._bound_ifindex: int | None = None
+        self._next_device_check = 0.0
         super().__init__(server_address, RequestHandlerClass)
 
     def server_bind(self):
@@ -1603,8 +1617,38 @@ class BridgeBoundHTTPServer(ThreadedHTTPServer):
                 f"SO_BINDTODEVICE did not bind to {self._bind_device!r}; "
                 f"getsockopt returned {bound!r}. Refusing to start."
             )
+        self._bound_ifindex = socket.if_nametoindex(self._bind_device)
         # Now do the actual bind.
         super().server_bind()
+
+    def device_changed(self) -> str | None:
+        """Why the bound interface no longer carries this listener, or None."""
+        try:
+            index = socket.if_nametoindex(self._bind_device)
+        except OSError:
+            return f"{self._bind_device} no longer exists"
+        if self._bound_ifindex is not None and index != self._bound_ifindex:
+            return (
+                f"{self._bind_device} was recreated (interface index "
+                f"{self._bound_ifindex} -> {index})"
+            )
+        return None
+
+    def service_actions(self):
+        """Called by ``serve_forever`` on every pass; checks the interface at most every
+        ``DEVICE_CHECK_INTERVAL`` seconds and exits the daemon when it has changed."""
+        super().service_actions()
+        now = time.monotonic()
+        if now < self._next_device_check:
+            return
+        self._next_device_check = now + self.DEVICE_CHECK_INTERVAL
+        reason = self.device_changed()
+        if reason:
+            logger.warning(
+                "%s; exiting so the service manager restarts the listener on the current interface",
+                reason,
+            )
+            raise SystemExit(f"bubble: {reason}; exiting to rebind")
 
 
 # ---------------------------------------------------------------------------

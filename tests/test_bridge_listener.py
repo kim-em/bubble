@@ -271,25 +271,49 @@ def test_endpoint_alive_health_check(monkeypatch):
     assert len(installs) == 1
 
 
-def test_endpoint_alive_uses_publishing_daemon_pid(monkeypatch):
+def test_endpoint_alive_needs_a_live_pid_and_a_listener(monkeypatch):
+    """A live pid is not enough: after incus rebuilds its bridge the daemon
+    keeps running while its socket stays bound to the old interface, so the
+    endpoint must also answer a TCP connect."""
     import bubble.github_token as gt
 
-    checked = []
+    checked, probed = [], []
     endpoint = {
         "tcp": {"host": "10.156.104.1", "port": 7654},
         "version": 3,
         "pid": 4242,
     }
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def answering(addr, timeout=None):
+        probed.append(addr)
+        return _Conn()
+
+    def refused(addr, timeout=None):
+        probed.append(addr)
+        raise ConnectionRefusedError(111, "Connection refused")
+
     monkeypatch.setattr("os.kill", lambda pid, sig: checked.append((pid, sig)))
-    monkeypatch.setattr(
-        "socket.create_connection",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not TCP probe")),
-    )
+    monkeypatch.setattr("socket.create_connection", answering)
     assert gt._endpoint_alive(endpoint) is True
     assert checked == [(4242, 0)]
+    assert probed == [("10.156.104.1", 7654)]
 
+    # The bridge was rebuilt: the pid is alive, nothing answers.
+    monkeypatch.setattr("socket.create_connection", refused)
+    assert gt._endpoint_alive(endpoint) is False
+
+    # A dead pid is enough to say no; there is nothing to probe.
+    probed.clear()
     monkeypatch.setattr("os.kill", lambda _pid, _sig: (_ for _ in ()).throw(ProcessLookupError()))
     assert gt._endpoint_alive(endpoint) is False
+    assert probed == []
 
     for malformed in (
         {"tcp": None, "pid": 4242},
@@ -298,6 +322,60 @@ def test_endpoint_alive_uses_publishing_daemon_pid(monkeypatch):
         {"tcp": {"host": "127.0.0.1", "port": 0}, "pid": 4242},
     ):
         assert gt._endpoint_alive(malformed) is False
+
+
+def _bound_server(bound_ifindex=4, device="incusbr0"):
+    """A BridgeBoundHTTPServer as it stands after binding, without a real socket."""
+    from bubble.auth_proxy import BridgeBoundHTTPServer
+
+    server = BridgeBoundHTTPServer.__new__(BridgeBoundHTTPServer)
+    server._bind_device = device
+    server._bound_ifindex = bound_ifindex
+    server._next_device_check = 0.0
+    return server
+
+
+def test_bridge_listener_keeps_serving_while_its_interface_is_unchanged(monkeypatch):
+    server = _bound_server()
+    monkeypatch.setattr("socket.if_nametoindex", lambda name: 4)
+    assert server.device_changed() is None
+    server.service_actions()  # does not raise
+
+
+def test_bridge_listener_exits_when_its_interface_is_recreated(monkeypatch):
+    """incusd restarts, the bridge comes back under a new index, and the
+    socket bound to the old one hears nothing: exit, so Restart=always
+    brings up a listener on the bridge as it is now."""
+    server = _bound_server(bound_ifindex=4)
+    monkeypatch.setattr("socket.if_nametoindex", lambda name: 6831)
+    assert "recreated" in server.device_changed()
+    with pytest.raises(SystemExit, match="incusbr0 was recreated"):
+        server.service_actions()
+
+
+def test_bridge_listener_exits_when_its_interface_is_gone(monkeypatch):
+    server = _bound_server()
+
+    def gone(name):
+        raise OSError(19, "No such device")
+
+    monkeypatch.setattr("socket.if_nametoindex", gone)
+    with pytest.raises(SystemExit, match="no longer exists"):
+        server.service_actions()
+
+
+def test_bridge_listener_checks_its_interface_at_most_every_interval(monkeypatch):
+    server = _bound_server()
+    calls = []
+    monkeypatch.setattr("socket.if_nametoindex", lambda name: calls.append(name) or 4)
+    clock = [100.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    server.service_actions()
+    server.service_actions()
+    assert calls == ["incusbr0"]
+    clock[0] += server.DEVICE_CHECK_INTERVAL
+    server.service_actions()
+    assert calls == ["incusbr0", "incusbr0"]
 
 
 def test_allow_bridge_egress_no_iptables_is_ok(mock_runtime):
