@@ -1700,9 +1700,10 @@ def _resolve_tcp_bind() -> tuple[str, str | None]:
 
     # Linux: bind to the incus bridge gateway IP and restrict the
     # listener to incusbr0 so it's unreachable from any other interface.
-    from .incus_bridge import BRIDGE_INTERFACE, bridge_gateway_ipv4
+    from .incus_bridge import bridge_gateway_ipv4, bridge_interface
 
-    return bridge_gateway_ipv4(), BRIDGE_INTERFACE
+    interface = bridge_interface()
+    return bridge_gateway_ipv4(interface), interface
 
 
 def _write_endpoint_file(tcp_host: str, tcp_port: int):

@@ -95,7 +95,9 @@ def _get_bridge_dns_ip(runtime: ContainerRuntime) -> str | None:
 def _get_bridge_cidr(runtime: ContainerRuntime) -> str | None:
     """Get the full CIDR of the incus bridge (e.g. '10.228.152.1/24')."""
     try:
-        cidr = runtime.network_get("incusbr0", "ipv4.address").strip()
+        from ..incus_bridge import bridge_interface
+
+        cidr = runtime.network_get(bridge_interface(), "ipv4.address").strip()
         if "/" in cidr:
             return cidr
     except (subprocess.TimeoutExpired, FileNotFoundError, RuntimeError):
